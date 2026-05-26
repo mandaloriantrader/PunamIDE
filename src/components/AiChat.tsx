@@ -126,7 +126,7 @@ function ParsedActionsView({
   return (
     <div className="chat-changes">
       {parsed.fileChanges.map((fc, j) => (
-        <details key={`file-${j}`} className="chat-file-preview" open>
+        <details key={`file-${j}`} className="chat-file-preview">
           <summary>
             <span className={`change-item file-change ${fc.isNew ? "new" : "edit"}`}>
               {fc.isNew ? "+ NEW" : "~ EDIT"}
@@ -138,7 +138,7 @@ function ParsedActionsView({
         </details>
       ))}
       {parsed.editOperations.map((edit, j) => (
-        <details key={`edit-${j}`} className="chat-file-preview" open>
+        <details key={`edit-${j}`} className="chat-file-preview">
           <summary>
             <span className="change-item file-change edit">~ PATCH</span>
             <span className="chat-file-preview-path">{edit.path}</span>
@@ -1927,7 +1927,7 @@ export default function AiChat({
                       {msg.parsed && (
                         <div className="chat-changes">
                           {msg.parsed.fileChanges.map((fc, j) => (
-                            <details key={j} className="chat-file-preview" open>
+                            <details key={j} className="chat-file-preview">
                               <summary>
                                 <span className={`change-item file-change ${fc.isNew ? "new" : "edit"}`}>
                                   {fc.isNew ? "+ NEW" : "~ EDIT"}
@@ -1939,7 +1939,7 @@ export default function AiChat({
                             </details>
                           ))}
                           {msg.parsed.editOperations.map((edit, j) => (
-                            <details key={`edit-${j}`} className="chat-file-preview" open>
+                            <details key={`edit-${j}`} className="chat-file-preview">
                               <summary>
                                 <span className="change-item file-change edit">~ PATCH</span>
                                 <span className="chat-file-preview-path">{edit.path}</span>

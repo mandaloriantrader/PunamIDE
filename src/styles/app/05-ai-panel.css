@@ -408,6 +408,66 @@
   font-size: 12px;
 }
 
+.chat-file-preview {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-secondary);
+  margin-bottom: 6px;
+  overflow: hidden;
+}
+
+.chat-file-preview summary {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 30px;
+  padding: 5px 8px;
+  cursor: pointer;
+  user-select: none;
+  color: var(--text-secondary);
+}
+
+.chat-file-preview summary:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.chat-file-preview-path {
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-primary);
+}
+
+.chat-file-preview-label {
+  flex-shrink: 0;
+  color: var(--accent);
+  font-family: var(--font-sans);
+  font-size: 11px;
+}
+
+.chat-file-code-scroll {
+  max-height: 260px;
+  margin: 0;
+  padding: 10px 12px;
+  overflow: auto;
+  border-top: 1px solid var(--border);
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.55;
+  white-space: pre;
+}
+
+.chat-file-code-scroll code {
+  background: transparent;
+  padding: 0;
+  color: inherit;
+}
+
 .change-item {
   padding: 4px 8px;
   border-radius: 3px;
