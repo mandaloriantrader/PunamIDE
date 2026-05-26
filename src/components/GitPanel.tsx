@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
-import { GitBranch, RefreshCw, X, Sparkles, Copy, Plus, Minus, Check, Upload, Undo2 } from "lucide-react";
-import { runTerminalCommand } from "../utils/tauri";
+import { GitBranch, RefreshCw, X, Sparkles, Copy, Plus, Minus, Check, Upload, Undo2, Save } from "lucide-react";
+import { pathExists, readFile, runTerminalCommand, writeFile } from "../utils/tauri";
 import { sendToProviderStreaming } from "../utils/providers";
 import type { AIProviderConfig } from "../utils/providers";
 import { showToast } from "../utils/toast";
@@ -32,6 +32,27 @@ const STATUS_LABELS: Record<GitChangeStatus, string> = {
   untracked: "U",
   conflict: "!",
 };
+
+const CHECKPOINT_IGNORE_PATTERNS = [
+  "node_modules/",
+  "dist/",
+  "dist-ssr/",
+  "src-tauri/target/",
+  "recovery-backups/",
+  "recovered-build-css/",
+  "test-debug/",
+  "*.log",
+  "*.local",
+];
+
+function joinProjectPath(projectPath: string, name: string) {
+  const separator = projectPath.includes("\\") ? "\\" : "/";
+  return `${projectPath.replace(/[\\/]+$/, "")}${separator}${name}`;
+}
+
+function escapeCommitMessage(message: string) {
+  return message.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+}
 
 function classifyStatus(rawStatus: string): GitChangeStatus {
   if (rawStatus.includes("U") || rawStatus === "AA" || rawStatus === "DD") return "conflict";
@@ -79,6 +100,7 @@ export default function GitPanel({ projectPath, refreshKey, onOpenFile, onViewDi
   const [commitMsg, setCommitMsg] = useState("");
   const [generatingMsg, setGeneratingMsg] = useState(false);
   const [committing, setCommitting] = useState(false);
+  const [checkpointing, setCheckpointing] = useState(false);
   const [pushing, setPushing] = useState(false);
   const [branch, setBranch] = useState("");
 
@@ -177,6 +199,72 @@ export default function GitPanel({ projectPath, refreshKey, onOpenFile, onViewDi
       showToast("All files unstaged", "success");
     } catch (err) {
       showToast(`Failed to unstage all: ${err}`, "error");
+    }
+  };
+
+  const ensureCheckpointGitignore = async () => {
+    const gitignorePath = joinProjectPath(projectPath, ".gitignore");
+    const section =
+      "\n# PunamIDE project checkpoints\n" +
+      CHECKPOINT_IGNORE_PATTERNS.join("\n") +
+      "\n";
+
+    const exists = await pathExists(gitignorePath);
+    const current = exists ? await readFile(gitignorePath) : "";
+    const missing = CHECKPOINT_IGNORE_PATTERNS.filter((pattern) => !current.includes(pattern));
+    if (!exists || missing.length > 0) {
+      await writeFile(gitignorePath, `${current.trimEnd()}${section}`);
+    }
+  };
+
+  const handleProjectCheckpoint = async () => {
+    if (!projectPath) {
+      showToast("Open a project folder before creating a checkpoint", "warning");
+      return;
+    }
+
+    setCheckpointing(true);
+    try {
+      const repoCheck = await runTerminalCommand("git rev-parse --is-inside-work-tree", projectPath);
+      if (repoCheck.exit_code !== 0) {
+        const initResult = await runTerminalCommand("git init", projectPath);
+        if (initResult.exit_code !== 0) {
+          showToast(`Could not initialize Git: ${initResult.stderr || initResult.stdout}`, "error");
+          return;
+        }
+      }
+
+      await ensureCheckpointGitignore();
+
+      const addResult = await runTerminalCommand("git add -A", projectPath);
+      if (addResult.exit_code !== 0) {
+        showToast(`Checkpoint stage failed: ${addResult.stderr || addResult.stdout}`, "error");
+        return;
+      }
+
+      const stagedCheck = await runTerminalCommand("git diff --cached --quiet", projectPath);
+      if (stagedCheck.exit_code === 0) {
+        showToast("No project changes to checkpoint", "info");
+        await loadChanges();
+        return;
+      }
+
+      const timestamp = new Date().toLocaleString();
+      const result = await runTerminalCommand(
+        `git commit -m "${escapeCommitMessage(`Checkpoint: ${timestamp}`)}"`,
+        projectPath
+      );
+      if (result.exit_code !== 0) {
+        showToast(`Checkpoint failed: ${result.stderr || result.stdout}`, "error");
+        return;
+      }
+
+      showToast("Project checkpoint created", "success");
+      await loadChanges();
+    } catch (err) {
+      showToast(`Checkpoint failed: ${err}`, "error");
+    } finally {
+      setCheckpointing(false);
     }
   };
 
@@ -308,6 +396,20 @@ export default function GitPanel({ projectPath, refreshKey, onOpenFile, onViewDi
         <span className="git-summary-count">
           {loading ? "..." : `${changes.length} change${changes.length === 1 ? "" : "s"}`}
         </span>
+      </div>
+
+      <div className="git-checkpoint-section">
+        <button
+          type="button"
+          className="git-action-btn git-checkpoint-btn"
+          onClick={handleProjectCheckpoint}
+          disabled={checkpointing}
+          title="Create a Git checkpoint for project files only"
+        >
+          <Save size={12} />
+          {checkpointing ? "Saving checkpoint..." : "Checkpoint Project"}
+        </button>
+        <span>Backs up source files and skips dependencies/build output.</span>
       </div>
 
       {/* ── Commit input section ── */}

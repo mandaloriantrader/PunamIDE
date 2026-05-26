@@ -32,6 +32,33 @@
   border-bottom: 1px solid var(--border);
 }
 
+.git-checkpoint-section {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-secondary);
+}
+
+.git-checkpoint-section > span {
+  min-width: 0;
+  color: var(--text-muted);
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+.git-checkpoint-btn {
+  flex-shrink: 0;
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+.git-checkpoint-btn:hover:not(:disabled) {
+  background: var(--active-soft);
+  color: var(--accent);
+}
+
 .git-commit-header {
   display: flex;
   align-items: center;
