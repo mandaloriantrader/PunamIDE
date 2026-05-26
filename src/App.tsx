@@ -402,18 +402,26 @@ export default function App() {
       (debugSequencingRef.current as any)._initTimeout = initTimeout;
 
       // Send DAP initialize request (first step of handshake)
-      sendDapRequestRaw("initialize", {
-        adapterID: config.type || "punam",
-        clientID: "punam-ide",
-        clientName: "PunamIDE",
-        pathFormat: "path",
-        linesStartAt1: true,
-        columnsStartAt1: true,
-        supportsVariableType: true,
-        supportsVariablePaging: false,
-        supportsRunInTerminalRequest: false,
-        locale: "en-US",
-      });
+      // Note: We use dapSendRequest directly with newSessionId because
+      // setDebugSessionId hasn't flushed to state yet at this point.
+      const initRequest: DapRequest = {
+        seq: dapRequestSeq.current++,
+        type: "request",
+        command: "initialize",
+        arguments: {
+          adapterID: config.type || "punam",
+          clientID: "punam-ide",
+          clientName: "PunamIDE",
+          pathFormat: "path",
+          linesStartAt1: true,
+          columnsStartAt1: true,
+          supportsVariableType: true,
+          supportsVariablePaging: false,
+          supportsRunInTerminalRequest: false,
+          locale: "en-US",
+        },
+      };
+      await dapSendRequest(newSessionId, initRequest);
 
       showToast(`Debugger starting: ${config.name}`, "success");
     } catch (err: any) {
