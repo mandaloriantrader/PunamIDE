@@ -1,0 +1,348 @@
+﻿/* â”€â”€â”€ Debugger: Breakpoint & Current Line Decorations â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
+
+.debug-breakpoint {
+  background: #e51400 !important;
+  border-radius: 50%;
+  width: 10px !important;
+  height: 10px !important;
+  margin-left: 4px;
+  margin-top: 4px;
+  min-width: 10px;
+}
+
+.debug-current-line {
+  background: rgba(255, 255, 0, 0.15) !important;
+  border-left: 2px solid #ffcc00 !important;
+}
+
+/* â”€â”€â”€ Debugger Panel Styles â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
+
+.debugger-panel {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  overflow: hidden;
+  font-size: 12px;
+}
+
+.debugger-controls {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 4px 8px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-secondary);
+}
+
+.debugger-controls .icon-btn {
+  padding: 3px 5px;
+  border-radius: 4px;
+  cursor: pointer;
+  background: transparent;
+  border: none;
+  color: var(--text-primary);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.debugger-controls .icon-btn:hover:not(:disabled) {
+  background: var(--bg-hover);
+}
+
+.debugger-controls .icon-btn:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+
+.debugger-tabs {
+  display: flex;
+  gap: 0;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-secondary);
+}
+
+.debugger-tab {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 5px 12px;
+  border: none;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  font-size: 11px;
+  border-bottom: 2px solid transparent;
+  transition: all 0.15s;
+}
+
+.debugger-tab:hover {
+  color: var(--text-primary);
+  background: var(--bg-hover);
+}
+
+.debugger-tab.active {
+  color: var(--accent);
+  border-bottom-color: var(--accent);
+}
+
+.debugger-content {
+  flex: 1;
+  overflow-y: auto;
+  padding: 6px 8px;
+}
+
+.debug-section .empty-message {
+  color: var(--text-secondary);
+  font-style: italic;
+  padding: 8px 0;
+}
+
+.stack-frames-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+
+.stack-frames-list li {
+  padding: 3px 6px;
+  cursor: pointer;
+  border-radius: 3px;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.stack-frames-list li:hover {
+  background: var(--bg-hover);
+}
+
+.stack-frames-list .frame-name {
+  font-weight: 500;
+  color: var(--text-primary);
+}
+
+.stack-frames-list .frame-location {
+  font-size: 10px;
+  color: var(--text-secondary);
+}
+
+.variables-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+
+.variables-list li {
+  padding: 2px 6px;
+  display: flex;
+  gap: 8px;
+  border-radius: 3px;
+}
+
+.variables-list li:hover {
+  background: var(--bg-hover);
+}
+
+.variables-list .var-name {
+  color: var(--accent);
+  font-weight: 500;
+  min-width: 80px;
+}
+
+.variables-list .var-value {
+  color: var(--text-primary);
+  word-break: break-all;
+}
+
+.variables-list .var-type {
+  color: var(--text-secondary);
+  font-size: 10px;
+  margin-left: auto;
+}
+
+.debug-console {
+  font-family: "JetBrains Mono", "Fira Code", monospace;
+  font-size: 11px;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+.debug-console-line {
+  padding: 1px 0;
+  color: var(--text-primary);
+  border-bottom: 1px solid var(--border);
+}
+
+.debug-console-input {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 0;
+  border-top: 1px solid var(--border);
+  margin-top: 4px;
+}
+
+.debug-console-input input {
+  flex: 1;
+  background: var(--bg-primary);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  padding: 3px 6px;
+  color: var(--text-primary);
+  font-family: inherit;
+  font-size: 11px;
+}
+
+.debug-console-input input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+
+/* â”€â”€â”€ Debug Config Picker â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
+
+.debug-config-picker {
+  position: relative;
+  display: inline-flex;
+  margin-left: 8px;
+}
+
+.debug-config-picker-btn {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  font-size: 11px;
+  cursor: pointer;
+  max-width: 180px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.debug-config-picker-btn:hover:not(:disabled) {
+  background: var(--bg-hover);
+  border-color: var(--accent);
+}
+
+.debug-config-picker-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.debug-config-picker-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.debug-config-picker-dropdown {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  margin-top: 4px;
+  min-width: 220px;
+  max-width: 300px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+  z-index: 1000;
+  padding: 4px;
+  max-height: 300px;
+  overflow-y: auto;
+}
+
+.debug-config-picker-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  padding: 5px 8px;
+  border: none;
+  background: transparent;
+  color: var(--text-primary);
+  font-size: 11px;
+  cursor: pointer;
+  border-radius: 4px;
+  text-align: left;
+}
+
+.debug-config-picker-item:hover {
+  background: var(--bg-hover);
+}
+
+.debug-config-picker-item.active {
+  background: var(--accent);
+  color: #fff;
+}
+
+.debug-config-picker-item .config-type-badge {
+  font-size: 9px;
+  padding: 1px 4px;
+  border-radius: 3px;
+  background: var(--bg-primary);
+  color: var(--text-secondary);
+  font-weight: 600;
+  text-transform: uppercase;
+}
+
+.debug-config-picker-item.active .config-type-badge {
+  background: rgba(255, 255, 255, 0.2);
+  color: #fff;
+}
+
+.debug-config-picker-item .config-name {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.debug-config-picker-item .config-request {
+  font-size: 9px;
+  color: var(--text-secondary);
+}
+
+.debug-config-picker-item.active .config-request {
+  color: rgba(255, 255, 255, 0.7);
+}
+
+.debug-config-picker-divider {
+  height: 1px;
+  background: var(--border);
+  margin: 4px 0;
+}
+
+.debug-config-picker-action {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  padding: 5px 8px;
+  border: none;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 11px;
+  cursor: pointer;
+  border-radius: 4px;
+  text-align: left;
+}
+
+.debug-config-picker-action:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.debug-config-picker-empty {
+  padding: 8px;
+  font-size: 11px;
+  color: var(--text-secondary);
+  text-align: center;
+  line-height: 1.5;
+}
+

@@ -1,0 +1,11 @@
+{
+  "$schema": "https://app.kilo.ai/config.json",
+  "model": "google/gemini-2.5-flash",
+  "provider": {
+    "google": {
+      "options": {
+        "apiKey": "AIzaSyCnTsIuiO_uGRqbOUPyzON1Rb0ccyREyxw"
+      }
+    }
+  }
+}
