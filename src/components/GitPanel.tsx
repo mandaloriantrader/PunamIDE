@@ -50,8 +50,8 @@ function joinProjectPath(projectPath: string, name: string) {
   return `${projectPath.replace(/[\\/]+$/, "")}${separator}${name}`;
 }
 
-function escapeCommitMessage(message: string) {
-  return message.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+function getCheckpointCommitMessage() {
+  return `checkpoint-${new Date().toISOString().replace(/\.\d{3}Z$/, "Z").replace(/[:.]/g, "-")}`;
 }
 
 function classifyStatus(rawStatus: string): GitChangeStatus {
@@ -249,9 +249,9 @@ export default function GitPanel({ projectPath, refreshKey, onOpenFile, onViewDi
         return;
       }
 
-      const timestamp = new Date().toLocaleString();
+      const message = getCheckpointCommitMessage();
       const result = await runTerminalCommand(
-        `git commit -m "${escapeCommitMessage(`Checkpoint: ${timestamp}`)}"`,
+        `git commit -m ${message}`,
         projectPath
       );
       if (result.exit_code !== 0) {
