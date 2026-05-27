@@ -2502,6 +2502,27 @@ pub fn run() {
             github::sync::github_switch_branch,
             github::sync::github_delete_branch,
             github::sync::github_merge_abort,
+            // GitHub Phase 4: Pull Requests
+            github::pull_requests::github_create_pr,
+            github::pull_requests::github_list_prs,
+            github::pull_requests::github_get_pr,
+            github::pull_requests::github_merge_pr,
+            github::pull_requests::github_close_pr,
+            github::pull_requests::github_pr_list_comments,
+            github::pull_requests::github_pr_add_comment,
+            // GitHub Phase 5: Issues
+            github::issues::github_list_issues,
+            github::issues::github_create_issue,
+            github::issues::github_close_issue,
+            github::issues::github_issue_list_comments,
+            github::issues::github_issue_add_comment,
+            // GitHub Phase 5: Actions
+            github::actions::github_list_workflow_runs,
+            github::actions::github_get_workflow_run,
+            github::actions::github_rerun_workflow,
+            // GitHub Phase 5: Gists
+            github::gists::github_create_gist,
+            github::gists::github_create_multi_gist,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

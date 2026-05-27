@@ -335,3 +335,100 @@ export const githubDeleteBranch = (name: string, remote: boolean = false, force:
 /** Abort a merge in progress. */
 export const githubMergeAbort = () =>
   invoke<void>("github_merge_abort");
+
+// ─── Phase 4: Pull Requests ──────────────────────────────────────────────────
+
+export interface Comment {
+  id: number;
+  body: string;
+  user_login: string;
+  created_at: string;
+}
+
+export interface MergeResult {
+  merged: boolean;
+  message: string;
+  sha: string | null;
+}
+
+/** Create a new pull request. */
+export const githubCreatePr = (owner: string, repo: string, title: string, body: string | null, head: string, base: string, draft: boolean = false) =>
+  invoke<PullRequest>("github_create_pr", { owner, repo, title, body, head, base, draft });
+
+/** List pull requests. */
+export const githubListPrs = (owner: string, repo: string, state: string = "open", page: number = 1, perPage: number = 30) =>
+  invoke<PullRequest[]>("github_list_prs", { owner, repo, state, page, perPage });
+
+/** Get a single pull request. */
+export const githubGetPr = (owner: string, repo: string, number: number) =>
+  invoke<PullRequest>("github_get_pr", { owner, repo, number });
+
+/** Merge a pull request. Method: "merge" | "squash" | "rebase". */
+export const githubMergePr = (owner: string, repo: string, number: number, method: string = "merge") =>
+  invoke<MergeResult>("github_merge_pr", { owner, repo, number, method });
+
+/** Close a pull request without merging. */
+export const githubClosePr = (owner: string, repo: string, number: number) =>
+  invoke<PullRequest>("github_close_pr", { owner, repo, number });
+
+/** List comments on a PR. */
+export const githubPrListComments = (owner: string, repo: string, number: number) =>
+  invoke<Comment[]>("github_pr_list_comments", { owner, repo, number });
+
+/** Add a comment to a PR. */
+export const githubPrAddComment = (owner: string, repo: string, number: number, body: string) =>
+  invoke<Comment>("github_pr_add_comment", { owner, repo, number, body });
+
+// ─── Phase 5: Issues ─────────────────────────────────────────────────────────
+
+/** List issues (excludes PRs). */
+export const githubListIssues = (owner: string, repo: string, state: string = "open", labels?: string, page: number = 1, perPage: number = 30) =>
+  invoke<Issue[]>("github_list_issues", { owner, repo, state, labels: labels || null, page, perPage });
+
+/** Create a new issue. */
+export const githubCreateIssue = (owner: string, repo: string, title: string, body?: string, labels: string[] = []) =>
+  invoke<Issue>("github_create_issue", { owner, repo, title, body: body || null, labels });
+
+/** Close an issue. */
+export const githubCloseIssue = (owner: string, repo: string, number: number) =>
+  invoke<Issue>("github_close_issue", { owner, repo, number });
+
+/** List comments on an issue. */
+export const githubIssueListComments = (owner: string, repo: string, number: number) =>
+  invoke<Comment[]>("github_issue_list_comments", { owner, repo, number });
+
+/** Add a comment to an issue. */
+export const githubIssueAddComment = (owner: string, repo: string, number: number, body: string) =>
+  invoke<Comment>("github_issue_add_comment", { owner, repo, number, body });
+
+// ─── Phase 5: Actions ────────────────────────────────────────────────────────
+
+/** List recent workflow runs. */
+export const githubListWorkflowRuns = (owner: string, repo: string, branch?: string, perPage: number = 10) =>
+  invoke<WorkflowRun[]>("github_list_workflow_runs", { owner, repo, branch: branch || null, perPage });
+
+/** Get a specific workflow run. */
+export const githubGetWorkflowRun = (owner: string, repo: string, runId: number) =>
+  invoke<WorkflowRun>("github_get_workflow_run", { owner, repo, runId });
+
+/** Re-run a failed workflow. */
+export const githubRerunWorkflow = (owner: string, repo: string, runId: number) =>
+  invoke<void>("github_rerun_workflow", { owner, repo, runId });
+
+// ─── Phase 5: Gists ──────────────────────────────────────────────────────────
+
+export interface GistInfo {
+  id: string;
+  html_url: string;
+  description: string | null;
+  public: boolean;
+  created_at: string;
+}
+
+/** Create a gist from a single file. */
+export const githubCreateGist = (filename: string, content: string, isPublic: boolean = false, description?: string) =>
+  invoke<GistInfo>("github_create_gist", { filename, content, public: isPublic, description: description || null });
+
+/** Create a gist with multiple files. */
+export const githubCreateMultiGist = (files: Record<string, string>, isPublic: boolean = false, description?: string) =>
+  invoke<GistInfo>("github_create_multi_gist", { files, public: isPublic, description: description || null });

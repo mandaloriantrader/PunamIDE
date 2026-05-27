@@ -30,11 +30,14 @@ import {
   persistGitHubToken,
   restoreGitHubAuth,
   clearPersistedGitHubToken,
+  githubGetRepoSlug,
 } from "../../services/githubService";
 import type { GitCoreStatus, GitHubUser, BranchInfo } from "../../services/githubService";
 import { showToast } from "../../utils/toast";
 import RepoManager from "./RepoManager";
 import SyncPanel from "./SyncPanel";
+import PullRequestPanel from "./PullRequestPanel";
+import IssuesPanel from "./IssuesPanel";
 
 interface Props {
   projectPath: string;
@@ -55,6 +58,8 @@ export default function GitHubPanel({ projectPath, onClose }: Props) {
   const [tokenInput, setTokenInput] = useState("");
   const [showToken, setShowToken] = useState(false);
   const [authError, setAuthError] = useState<string | null>(null);
+  const [repoSlug, setRepoSlug] = useState<[string, string] | null>(null);
+  const [activeTab, setActiveTab] = useState<"overview" | "prs" | "issues">("overview");
 
   // ── Load git core status ────────────────────────────────────────────────────
 
@@ -68,6 +73,10 @@ export default function GitHubPanel({ projectPath, onClose }: Props) {
       if (status.is_git_repo) {
         const branchList = await githubListBranches(true);
         setBranches(branchList);
+        // Try to get repo slug for PR/Issues panels
+        if (status.remote_origin) {
+          githubGetRepoSlug().then(setRepoSlug).catch(() => setRepoSlug(null));
+        }
       }
     } catch (err) {
       setCoreError(String(err));
@@ -382,16 +391,48 @@ export default function GitHubPanel({ projectPath, onClose }: Props) {
         </div>
       )}
 
-      {/* Coming Soon placeholder for future phases */}
-      {isAuthenticated && (
-        <div className="github-section github-coming-soon">
-          <div className="github-section-title">Coming Soon</div>
-          <div className="github-coming-list">
-            <span>• Pull requests</span>
-            <span>• Issues</span>
-            <span>• GitHub Actions status</span>
-            <span>• Create gists</span>
+      {/* Tabs for PRs / Issues — Phase 4+5 */}
+      {isAuthenticated && repoSlug && coreStatus?.is_git_repo && (
+        <div className="github-section github-tabs-section">
+          <div className="github-tabs">
+            <button
+              type="button"
+              className={`github-tab ${activeTab === "overview" ? "active" : ""}`}
+              onClick={() => setActiveTab("overview")}
+            >
+              Overview
+            </button>
+            <button
+              type="button"
+              className={`github-tab ${activeTab === "prs" ? "active" : ""}`}
+              onClick={() => setActiveTab("prs")}
+            >
+              PRs
+            </button>
+            <button
+              type="button"
+              className={`github-tab ${activeTab === "issues" ? "active" : ""}`}
+              onClick={() => setActiveTab("issues")}
+            >
+              Issues
+            </button>
           </div>
+
+          {activeTab === "prs" && (
+            <PullRequestPanel
+              owner={repoSlug[0]}
+              repo={repoSlug[1]}
+              currentBranch={coreStatus.branch}
+              defaultBranch="main"
+            />
+          )}
+
+          {activeTab === "issues" && (
+            <IssuesPanel
+              owner={repoSlug[0]}
+              repo={repoSlug[1]}
+            />
+          )}
         </div>
       )}
     </div>
