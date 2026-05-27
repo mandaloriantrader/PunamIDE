@@ -265,7 +265,7 @@ pub async fn create_snapshot(
         name: name.clone(),
         created_at: now_iso(),
         files: file_count,
-        size_mb: (size_mb * 10.0).round() / 10.0,
+        size_mb: (size_mb * 1000.0).round() / 1000.0,
         punam_version: PUNAM_VERSION.to_string(),
         reason,
     };
@@ -281,7 +281,7 @@ pub async fn create_snapshot(
         success: true,
         snapshot_id: snap_id,
         files: file_count,
-        size_mb: (size_mb * 10.0).round() / 10.0,
+        size_mb: (size_mb * 1000.0).round() / 1000.0,
     })
 }
 

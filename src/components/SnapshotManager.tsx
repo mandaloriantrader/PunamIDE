@@ -75,7 +75,7 @@ export default function SnapshotManager({ projectPath, onClose, showToast }: Pro
       });
       setShowCreate(false);
       await loadSnapshots();
-      showToast(`Snapshot "${name}" created — ${result.files} files, ${result.sizeMB} MB`, "success");
+      showToast(`Snapshot "${name}" created — ${result.files} files, ${result.sizeMB < 0.1 ? `${Math.round(result.sizeMB * 1024)} KB` : `${result.sizeMB} MB`}`, "success");
     } catch (err) {
       showToast(`Failed to create snapshot: ${err}`, "error");
     } finally {
@@ -239,7 +239,7 @@ export default function SnapshotManager({ projectPath, onClose, showToast }: Pro
               </div>
               <div className="snapshot-card-meta">
                 <span>📁 {snap.files} files</span>
-                <span>💾 {snap.sizeMB} MB</span>
+                <span>💾 {snap.sizeMB < 0.1 ? `${Math.round(snap.sizeMB * 1024)} KB` : `${snap.sizeMB} MB`}</span>
               </div>
               <div className="snapshot-card-actions">
                 <button onClick={() => handlePreview(snap)} title="Preview & Restore">
