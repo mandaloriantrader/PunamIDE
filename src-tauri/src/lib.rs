@@ -2476,6 +2476,14 @@ pub fn run() {
             github::auth::github_get_user,
             github::auth::github_check_auth,
             github::auth::github_logout,
+            // GitHub Phase 2: Repos
+            github::repos::github_create_repo,
+            github::repos::github_list_repos,
+            github::repos::github_get_repo_info,
+            github::repos::github_link_remote,
+            github::repos::github_remove_remote,
+            github::repos::github_init_repo,
+            github::repos::github_get_repo_slug,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

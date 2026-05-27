@@ -185,3 +185,33 @@ export async function clearPersistedGitHubToken(): Promise<void> {
   await store.delete(GITHUB_TOKEN_KEY);
   await store.save();
 }
+
+// ─── Phase 2: Repository Management ──────────────────────────────────────────
+
+/** Create a new GitHub repository. */
+export const githubCreateRepo = (name: string, isPrivate: boolean, description?: string, autoInit: boolean = false) =>
+  invoke<RepoInfo>("github_create_repo", { name, private: isPrivate, description: description || null, autoInit });
+
+/** List authenticated user's repositories. */
+export const githubListRepos = (page: number = 1, perPage: number = 30, sort?: string) =>
+  invoke<RepoInfo[]>("github_list_repos", { page, perPage, sort: sort || null });
+
+/** Get info about a specific repository. */
+export const githubGetRepoInfo = (owner: string, repo: string) =>
+  invoke<RepoInfo>("github_get_repo_info", { owner, repo });
+
+/** Add or update a remote on the current git repo. */
+export const githubLinkRemote = (repoUrl: string, remoteName?: string) =>
+  invoke<void>("github_link_remote", { repoUrl, remoteName: remoteName || null });
+
+/** Remove a remote from the current git repo. */
+export const githubRemoveRemote = (remoteName: string) =>
+  invoke<void>("github_remove_remote", { remoteName });
+
+/** Initialize a new git repository in the current project. */
+export const githubInitRepo = () =>
+  invoke<void>("github_init_repo");
+
+/** Get the owner/repo slug from the current remote origin. */
+export const githubGetRepoSlug = () =>
+  invoke<[string, string]>("github_get_repo_slug");

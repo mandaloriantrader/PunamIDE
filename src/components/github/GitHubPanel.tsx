@@ -33,6 +33,7 @@ import {
 } from "../../services/githubService";
 import type { GitCoreStatus, GitHubUser, BranchInfo } from "../../services/githubService";
 import { showToast } from "../../utils/toast";
+import RepoManager from "./RepoManager";
 
 interface Props {
   projectPath: string;
@@ -354,12 +355,24 @@ export default function GitHubPanel({ projectPath, onClose }: Props) {
         </div>
       )}
 
+      {/* Repository Manager — Phase 2 */}
+      {isAuthenticated && coreStatus && (
+        <div className="github-section">
+          <div className="github-section-title">Repositories</div>
+          <RepoManager
+            projectPath={projectPath}
+            remoteOrigin={coreStatus.remote_origin}
+            isGitRepo={coreStatus.is_git_repo}
+            onRefresh={refreshCoreStatus}
+          />
+        </div>
+      )}
+
       {/* Coming Soon placeholder for future phases */}
       {isAuthenticated && (
         <div className="github-section github-coming-soon">
           <div className="github-section-title">Coming Soon</div>
           <div className="github-coming-list">
-            <span>• Create / manage repositories</span>
             <span>• Pull requests</span>
             <span>• Issues</span>
             <span>• GitHub Actions status</span>
