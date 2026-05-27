@@ -167,7 +167,7 @@ export default function SyncPanel({ projectPath, currentBranch, hasRemote, onRef
     setPushing(true);
     setShowConfirmPush(false);
     try {
-      const result = await githubPush(false, setUpstream);
+      const result = await githubPush(false, setUpstream, setUpstream ? (currentBranch || undefined) : undefined);
       showToast(`Pushed successfully to ${result.remote}`, "success");
       onRefresh();
     } catch (err) {
