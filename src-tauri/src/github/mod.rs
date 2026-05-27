@@ -9,6 +9,8 @@ pub mod types;
 pub mod auth;
 pub mod client;
 pub mod repos;
+pub mod safety;
+pub mod sync;
 pub mod pull_requests;
 pub mod issues;
 pub mod actions;

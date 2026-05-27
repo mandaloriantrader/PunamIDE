@@ -2484,6 +2484,24 @@ pub fn run() {
             github::repos::github_remove_remote,
             github::repos::github_init_repo,
             github::repos::github_get_repo_slug,
+            // GitHub Phase 6: Safety Layer
+            github::safety::github_pre_push_check,
+            github::safety::github_pre_pull_check,
+            github::safety::github_dry_run_push,
+            github::safety::github_create_safety_snapshot,
+            github::safety::github_rollback_to_snapshot,
+            github::safety::github_list_safety_snapshots,
+            github::safety::github_delete_safety_snapshot,
+            // GitHub Phase 3: Push/Pull/Sync
+            github::sync::github_push,
+            github::sync::github_pull,
+            github::sync::github_fetch,
+            github::sync::github_stash,
+            github::sync::github_stash_pop,
+            github::sync::github_create_branch,
+            github::sync::github_switch_branch,
+            github::sync::github_delete_branch,
+            github::sync::github_merge_abort,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

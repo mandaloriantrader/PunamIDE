@@ -215,3 +215,123 @@ export const githubInitRepo = () =>
 /** Get the owner/repo slug from the current remote origin. */
 export const githubGetRepoSlug = () =>
   invoke<[string, string]>("github_get_repo_slug");
+
+// ─── Phase 6: Safety Layer ───────────────────────────────────────────────────
+
+export interface PrePullStatus {
+  dirty_files: string[];
+  has_remote: boolean;
+  has_upstream: boolean;
+  current_branch: string | null;
+  behind: number;
+  safe_to_pull: boolean;
+  warnings: string[];
+}
+
+export interface SafetySnapshot {
+  id: string;
+  reason: string;
+  created_at: string;
+  files: number;
+}
+
+export interface DryRunPushResult {
+  current_branch: string | null;
+  remote: string | null;
+  ahead: number;
+  commits_to_push: string[];
+  would_create_remote_branch: boolean;
+}
+
+/** Pre-push safety check — returns warnings and whether it's safe. */
+export const githubPrePushCheck = () =>
+  invoke<PrePushStatus>("github_pre_push_check");
+
+/** Pre-pull safety check. */
+export const githubPrePullCheck = () =>
+  invoke<PrePullStatus>("github_pre_pull_check");
+
+/** Dry-run push — shows what would be pushed without doing it. */
+export const githubDryRunPush = () =>
+  invoke<DryRunPushResult>("github_dry_run_push");
+
+/** Create a safety snapshot before a dangerous operation. */
+export const githubCreateSafetySnapshot = (reason: string) =>
+  invoke<SafetySnapshot>("github_create_safety_snapshot", { reason });
+
+/** Rollback to a safety snapshot. Returns number of files restored. */
+export const githubRollbackToSnapshot = (snapshotId: string) =>
+  invoke<number>("github_rollback_to_snapshot", { snapshotId });
+
+/** List all safety snapshots. */
+export const githubListSafetySnapshots = () =>
+  invoke<SafetySnapshot[]>("github_list_safety_snapshots");
+
+/** Delete a safety snapshot. */
+export const githubDeleteSafetySnapshot = (snapshotId: string) =>
+  invoke<void>("github_delete_safety_snapshot", { snapshotId });
+
+// ─── Phase 3: Push / Pull / Sync ─────────────────────────────────────────────
+
+export interface PushResult {
+  success: boolean;
+  message: string;
+  branch: string | null;
+  remote: string;
+}
+
+export interface PullResult {
+  success: boolean;
+  message: string;
+  files_changed: number;
+  insertions: number;
+  deletions: number;
+  conflicts: string[];
+}
+
+export interface FetchResult {
+  success: boolean;
+  message: string;
+  updates: string[];
+}
+
+export interface StashResult {
+  success: boolean;
+  message: string;
+}
+
+/** Push to remote. Use githubPrePushCheck() first for safety. */
+export const githubPush = (force: boolean = false, setUpstream: boolean = false, branch?: string, remote?: string) =>
+  invoke<PushResult>("github_push", { force, setUpstream, branch: branch || null, remote: remote || null });
+
+/** Pull from remote. Create a safety snapshot first. */
+export const githubPull = (rebase: boolean = false, branch?: string, remote?: string) =>
+  invoke<PullResult>("github_pull", { rebase, branch: branch || null, remote: remote || null });
+
+/** Fetch from remote (updates tracking info only). */
+export const githubFetch = (remote?: string, prune: boolean = false) =>
+  invoke<FetchResult>("github_fetch", { remote: remote || null, prune });
+
+/** Stash current changes. */
+export const githubStash = (message?: string) =>
+  invoke<StashResult>("github_stash", { message: message || null });
+
+/** Pop the most recent stash. */
+export const githubStashPop = () =>
+  invoke<StashResult>("github_stash_pop");
+
+/** Create a new branch. */
+export const githubCreateBranch = (name: string, checkout: boolean = true) =>
+  invoke<void>("github_create_branch", { name, checkout });
+
+/** Switch to an existing branch. */
+export const githubSwitchBranch = (name: string) =>
+  invoke<void>("github_switch_branch", { name });
+
+/** Delete a branch (local or remote). */
+export const githubDeleteBranch = (name: string, remote: boolean = false, force: boolean = false) =>
+  invoke<void>("github_delete_branch", { name, remote, force });
+
+/** Abort a merge in progress. */
+export const githubMergeAbort = () =>
+  invoke<void>("github_merge_abort");

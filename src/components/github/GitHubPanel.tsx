@@ -34,6 +34,7 @@ import {
 import type { GitCoreStatus, GitHubUser, BranchInfo } from "../../services/githubService";
 import { showToast } from "../../utils/toast";
 import RepoManager from "./RepoManager";
+import SyncPanel from "./SyncPanel";
 
 interface Props {
   projectPath: string;
@@ -352,6 +353,19 @@ export default function GitHubPanel({ projectPath, onClose }: Props) {
                 </div>
               ))}
           </div>
+        </div>
+      )}
+
+      {/* Sync Panel — Phase 3 + Phase 6 Safety */}
+      {coreStatus?.is_git_repo && (
+        <div className="github-section">
+          <div className="github-section-title">Sync</div>
+          <SyncPanel
+            projectPath={projectPath}
+            currentBranch={coreStatus.branch}
+            hasRemote={!!coreStatus.remote_origin}
+            onRefresh={refreshCoreStatus}
+          />
         </div>
       )}
 
