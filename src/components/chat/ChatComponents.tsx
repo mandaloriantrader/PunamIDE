@@ -39,6 +39,45 @@ export function renderInlineMarkdown(text: string) {
 
 // --- Markdown Message ---
 
+type MessagePart =
+  | { type: "text"; content: string }
+  | { type: "code"; label: string; content: string };
+
+function splitActionCodeBlocks(text: string): MessagePart[] {
+  const parts: MessagePart[] = [];
+  const blockHeader = /===(FILE|EDIT):\s*(.+?)===\s*\n/g;
+  let cursor = 0;
+  let match: RegExpExecArray | null;
+
+  while ((match = blockHeader.exec(text)) !== null) {
+    const [rawHeader, kind, rawPath] = match;
+    const start = match.index;
+    const codeStart = start + rawHeader.length;
+    const endMarker = kind === "FILE" ? "===END_FILE===" : "===END_EDIT===";
+    const explicitEnd = text.indexOf(endMarker, codeStart);
+    const codeEnd = explicitEnd >= 0 ? explicitEnd : text.length;
+
+    if (start > cursor) {
+      parts.push({ type: "text", content: text.slice(cursor, start) });
+    }
+
+    parts.push({
+      type: "code",
+      label: rawPath.trim() || kind.toLowerCase(),
+      content: text.slice(codeStart, codeEnd).replace(/^\n|\n$/g, ""),
+    });
+
+    cursor = explicitEnd >= 0 ? codeEnd + endMarker.length : text.length;
+    blockHeader.lastIndex = cursor;
+  }
+
+  if (cursor < text.length) {
+    parts.push({ type: "text", content: text.slice(cursor) });
+  }
+
+  return parts.length > 0 ? parts : [{ type: "text", content: text }];
+}
+
 export function MarkdownMessage({ text }: { text: string }) {
   const visibleText = text
     .split(/\r?\n/)
@@ -51,11 +90,25 @@ export function MarkdownMessage({ text }: { text: string }) {
     })
     .join("\n")
     .trimStart();
-  const blocks = visibleText.split(/```/g);
+  const parts = splitActionCodeBlocks(visibleText);
 
   return (
     <div className="markdown-message">
-      {blocks.map((block, index) => {
+      {parts.map((part, partIndex) => {
+        if (part.type === "code") {
+          if (!part.content.trim()) return null;
+          return (
+            <div className="markdown-code-block action-code-block" key={`action-code-${partIndex}`}>
+              <div className="markdown-code-header">
+                <span>{part.label}</span>
+              </div>
+              <pre><code>{part.content}</code></pre>
+            </div>
+          );
+        }
+
+        const blocks = part.content.split(/```/g);
+        return blocks.map((block, index) => {
         if (index % 2 === 1) {
           const [firstLine = "", ...rest] = block.replace(/^\n/, "").split("\n");
           const hasLanguage = firstLine.trim() && !firstLine.includes(" ") && rest.length > 0;
@@ -105,6 +158,7 @@ export function MarkdownMessage({ text }: { text: string }) {
               </p>
             );
           });
+        });
       })}
     </div>
   );

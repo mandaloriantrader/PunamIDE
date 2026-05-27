@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useState } from "react";
-import { GitBranch, RefreshCw, X, Sparkles, Copy, Plus, Minus, Check, Upload, Undo2, Save } from "lucide-react";
+import { GitBranch, RefreshCw, X, Sparkles, Copy, Plus, Minus, Check, Upload, Undo2, Save, Shield } from "lucide-react";
 import { pathExists, readFile, runTerminalCommand, writeFile } from "../utils/tauri";
 import { sendToProviderStreaming } from "../utils/providers";
 import type { AIProviderConfig } from "../utils/providers";
 import { showToast } from "../utils/toast";
+import SnapshotManager from "./SnapshotManager";
 
 export type GitChangeStatus = "modified" | "added" | "deleted" | "renamed" | "untracked" | "conflict";
 
@@ -101,6 +102,7 @@ export default function GitPanel({ projectPath, refreshKey, onOpenFile, onViewDi
   const [generatingMsg, setGeneratingMsg] = useState(false);
   const [committing, setCommitting] = useState(false);
   const [checkpointing, setCheckpointing] = useState(false);
+  const [showSnapshots, setShowSnapshots] = useState(false);
   const [pushing, setPushing] = useState(false);
   const [branch, setBranch] = useState("");
 
@@ -411,6 +413,26 @@ export default function GitPanel({ projectPath, refreshKey, onOpenFile, onViewDi
         </button>
         <span>Backs up source files and skips dependencies/build output.</span>
       </div>
+      <div className="git-checkpoint-section" style={{ borderTop: "none", paddingTop: 0 }}>
+        <button
+          type="button"
+          className="git-action-btn"
+          onClick={() => setShowSnapshots(prev => !prev)}
+          title="Open Snapshot Manager — full backup & restore"
+        >
+          <Shield size={12} />
+          {showSnapshots ? "Hide Snapshots" : "Manage Snapshots"}
+        </button>
+      </div>
+
+      {/* Snapshot Manager Panel */}
+      {showSnapshots && (
+        <SnapshotManager
+          projectPath={projectPath}
+          onClose={() => setShowSnapshots(false)}
+          showToast={showToast}
+        />
+      )}
 
       {/* ── Commit input section ── */}
       {changes.length > 0 && (

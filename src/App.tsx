@@ -730,11 +730,12 @@ export default function App() {
         }
         case "response_initialize":
           // DAP handshake: we received the initialize response (capabilities).
-          // The adapter should send an "initialized" event next.
-          // Some adapters (debugpy) send it immediately; log and wait.
-          console.log("[DEBUG] Received initialize response (capabilities). Waiting for 'initialized' event...");
-          setDebugConsoleOutput(prev => [...prev, `[PunamIDE] Initialize response received. Waiting for adapter ready signal...`]);
-          break;
+          // For debugpy and many adapters, this IS the signal to proceed.
+          // Fall through to the "initialized" handler logic.
+          console.log("[DEBUG] Received initialize response — proceeding with handshake");
+          setDebugConsoleOutput(prev => [...prev, `[PunamIDE] Initialize response received. Proceeding...`]);
+          // Fall through intentionally — treat response_initialize same as initialized
+        // eslint-disable-next-line no-fallthrough
         case "initialized":
           // DAP handshake step 2: adapter is ready
           console.log("[DEBUG] Adapter initialized — sending breakpoints + configurationDone + launch/attach");
@@ -1518,15 +1519,11 @@ export default function App() {
         return;
       }
 
-      // ===== Debugger Keyboard Shortcuts =====
-      // F5 = Start/Continue debugging
-      if (e.key === "F5" && !e.shiftKey) {
+      // ===== Refresh Keyboard Shortcuts =====
+      // F5 / Ctrl+F5 = Refresh PunamIDE, matching browser behavior.
+      if (e.key === "F5" && !e.shiftKey && !e.altKey) {
         e.preventDefault();
-        if (debugAdapterStatus === "stopped") {
-          handleStartDebug();
-        } else if (debugAdapterStatus === "paused") {
-          handleDebugContinue();
-        }
+        window.location.reload();
         return;
       }
 
@@ -1573,16 +1570,6 @@ export default function App() {
       if (ctrl && e.shiftKey && e.key.toLowerCase() === "z") {
         e.preventDefault();
         setZenMode((z) => !z);
-        return;
-      }
-
-      // Ctrl+F5 = Start without debugging / restart
-      if (ctrl && e.key === "F5") {
-        e.preventDefault();
-        if (debugAdapterStatus !== "stopped") {
-          handleStopDebug();
-        }
-        setTimeout(() => handleStartDebug(), 100);
         return;
       }
 
@@ -2731,10 +2718,10 @@ export default function App() {
                 <div className="shortcut-row"><kbd>@notes</kbd><span>Include project notes</span></div>
               </div>
               <div className="shortcuts-section">
-                <h3>Debugger</h3>
-                <div className="shortcut-row"><kbd>F5</kbd><span>Start / Continue debugging</span></div>
+                <h3>Refresh &amp; Debugger</h3>
+                <div className="shortcut-row"><kbd>F5</kbd><span>Refresh PunamIDE</span></div>
+                <div className="shortcut-row"><kbd>Ctrl+F5</kbd><span>Refresh PunamIDE</span></div>
                 <div className="shortcut-row"><kbd>Shift+F5</kbd><span>Stop debugging</span></div>
-                <div className="shortcut-row"><kbd>Ctrl+F5</kbd><span>Restart debugging</span></div>
                 <div className="shortcut-row"><kbd>F10</kbd><span>Step over</span></div>
                 <div className="shortcut-row"><kbd>F11</kbd><span>Step into</span></div>
                 <div className="shortcut-row"><kbd>Shift+F11</kbd><span>Step out</span></div>

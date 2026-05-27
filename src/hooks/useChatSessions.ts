@@ -3,6 +3,8 @@ import { saveChatSession, loadChatSessions as dbLoadSessions, deleteChatSession 
 import type { ChatSessionRecord } from "../services/persistence/chatDb";
 import type { ChatMessage, AgentMode } from "../types";
 import type { ChatAttachment } from "../utils/tauri";
+import type { ParsedResponse } from "../utils/prompts";
+import type { ResponseMetrics } from "../utils/providers";
 
 /** Map old mode values to the new 2-mode system */
 function normalizeMode(mode: string | undefined): AgentMode | undefined {
@@ -24,6 +26,11 @@ interface PersistedChatMessage {
   mode?: string;
   timestamp?: number;
   attachments?: ChatAttachment[];
+  parsed?: ParsedResponse;
+  applied?: boolean;
+  metrics?: ResponseMetrics;
+  multiResponses?: ChatMessage["multiResponses"];
+  checkResult?: ChatMessage["checkResult"];
 }
 
 interface ChatSession {
@@ -45,6 +52,20 @@ function recordToSession(rec: ChatSessionRecord): ChatSession {
     createdAt: rec.created_at,
     updatedAt: rec.updated_at,
     messageCount: rec.messages ? JSON.parse(rec.messages).length : 0,
+  };
+}
+
+function restorePersistedMessage(message: PersistedChatMessage): ChatMessage {
+  return {
+    role: message.role,
+    content: message.content,
+    mode: normalizeMode(message.mode),
+    attachments: message.attachments,
+    parsed: message.parsed,
+    applied: message.applied,
+    metrics: message.metrics,
+    multiResponses: message.multiResponses,
+    checkResult: message.checkResult,
   };
 }
 
@@ -96,12 +117,7 @@ export function useChatSessions({ projectPath, messages, setMessages }: UseChatS
         if (targetRecord) {
           try {
             const saved: PersistedChatMessage[] = JSON.parse(targetRecord.messages || "[]");
-            setMessages(saved.map((m) => ({
-              role: m.role,
-              content: m.content,
-              mode: normalizeMode(m.mode),
-              attachments: m.attachments,
-            })));
+            setMessages(saved.map(restorePersistedMessage));
           } catch { /* empty messages */ }
         }
       }
@@ -115,14 +131,19 @@ export function useChatSessions({ projectPath, messages, setMessages }: UseChatS
     if (!projectPath || messages.length === 0 || !activeSessionId) return;
     const timer = setTimeout(async () => {
       const toSave: PersistedChatMessage[] = messages
-        .filter((m) => m.content && m.content.length > 0)
+        .filter((m) => (m.content && m.content.length > 0) || m.parsed || m.multiResponses)
         .slice(-30)
         .map((m) => ({
           role: m.role,
-          content: m.content.slice(0, 2000),
+          content: m.content.slice(0, 200000),
           mode: m.mode,
           timestamp: Date.now(),
           attachments: m.attachments,
+          parsed: m.parsed,
+          applied: m.applied,
+          metrics: m.metrics,
+          multiResponses: m.multiResponses,
+          checkResult: m.checkResult,
         }));
 
       const existing = await dbLoadSessions(1);
@@ -178,12 +199,7 @@ export function useChatSessions({ projectPath, messages, setMessages }: UseChatS
     if (target) {
       try {
         const saved: PersistedChatMessage[] = JSON.parse(target.messages || "[]");
-        setMessages(saved.map((m) => ({
-          role: m.role,
-          content: m.content,
-          mode: normalizeMode(m.mode),
-          attachments: m.attachments,
-        })));
+        setMessages(saved.map(restorePersistedMessage));
       } catch {
         setMessages([]);
       }
@@ -221,12 +237,7 @@ export function useChatSessions({ projectPath, messages, setMessages }: UseChatS
         if (target) {
           try {
             const saved: PersistedChatMessage[] = JSON.parse(target.messages || "[]");
-            setMessages(saved.map((m) => ({
-              role: m.role,
-              content: m.content,
-              mode: normalizeMode(m.mode),
-              attachments: m.attachments,
-            })));
+            setMessages(saved.map(restorePersistedMessage));
           } catch {
             setMessages([]);
           }

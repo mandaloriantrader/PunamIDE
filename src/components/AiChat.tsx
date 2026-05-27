@@ -108,6 +108,14 @@ function hasParsedActions(parsed: ParsedResponse): boolean {
   );
 }
 
+function getStreamingTextBeforeActionBlocks(text: string): string {
+  const actionMarker = text.match(/(^|\n)===(FILE|EDIT|DELETE|CMD):/);
+  if (!actionMarker) return text.trim();
+
+  const markerIndex = actionMarker.index ?? 0;
+  return text.slice(0, markerIndex).trim() || "Preparing code changes...";
+}
+
 function ParsedActionsView({
   parsed,
   applied,
@@ -807,7 +815,7 @@ export default function AiChat({
             const flushStreamedText = () => {
               pendingFlush = false;
               flushTimer = null;
-              const displayText = streamedText.split(/===FILE:/)[0].trim() || streamedText;
+              const displayText = getStreamingTextBeforeActionBlocks(streamedText);
               setMessages((prev) => prev.map((m) =>
                 (m as any).streamId === streamId
                   ? { ...m, content: `${[firstNotice, ...fallbackNotices].join("\n")}\n\n${displayText}â–` }
@@ -867,7 +875,7 @@ export default function AiChat({
           if (parsed && parsed.editOperations.length > 0) {
             parsed = await resolveEditOperations(parsed, projectPath);
           }
-          const hasActions = parsed ? (parsed.fileChanges.length > 0 || parsed.deletions.length > 0 || parsed.commands.length > 0) : false;
+          const hasActions = parsed ? hasParsedActions(parsed) : false;
           recordResponseUsage(finalResp?.metrics);
 
           setMessages((prev) => prev.map((m) => {
@@ -907,7 +915,7 @@ export default function AiChat({
               pendingFlush = false;
               flushTimer = null;
               // Show only the explanation part during streaming (hide raw FILE blocks)
-              const displayText = streamedText.split(/===FILE:/)[0].trim() || streamedText;
+              const displayText = getStreamingTextBeforeActionBlocks(streamedText);
               setMessages((prev) => prev.map((m) =>
                 (m as any).streamId === streamId ? { ...m, content: displayText + "▍" } : m
               ));
@@ -942,7 +950,7 @@ export default function AiChat({
             if (parsed && parsed.editOperations.length > 0) {
               parsed = await resolveEditOperations(parsed, projectPath);
             }
-            const hasActions = parsed ? (parsed.fileChanges.length > 0 || parsed.deletions.length > 0 || parsed.commands.length > 0) : false;
+            const hasActions = parsed ? hasParsedActions(parsed) : false;
 
             // --- MCP tool auto-execution ---
             let effectiveFinalText = finalText;
@@ -1011,7 +1019,7 @@ export default function AiChat({
             if (parsed.editOperations.length > 0) {
               parsed = await resolveEditOperations(parsed, projectPath);
             }
-            const hasActions = parsed.fileChanges.length > 0 || parsed.deletions.length > 0 || parsed.commands.length > 0;
+            const hasActions = hasParsedActions(parsed);
             return { content: resp.text, parsed: hasActions ? parsed : undefined, applied: false, metrics: resp.metrics };
           }));
           setMessages((prev) => [...prev, {
@@ -1041,7 +1049,7 @@ export default function AiChat({
         if (parsed.editOperations.length > 0) {
           parsed = await resolveEditOperations(parsed, projectPath);
         }
-        const hasActions = parsed.fileChanges.length > 0 || parsed.deletions.length > 0 || parsed.commands.length > 0;
+        const hasActions = hasParsedActions(parsed);
         setMessages((prev) => [...prev, {
           role: "assistant",
           content: response.text,
@@ -1501,7 +1509,7 @@ export default function AiChat({
       const flushStreamedText = () => {
         pendingFlush = false;
         flushTimer = null;
-        const displayText = streamedText.split(/===FILE:/)[0].trim() || streamedText;
+        const displayText = getStreamingTextBeforeActionBlocks(streamedText);
         setMessages(prev => prev.map(m =>
           (m as any).streamId === streamId ? { ...m, content: displayText + "▍" } : m
         ));
@@ -1533,7 +1541,7 @@ export default function AiChat({
       if (parsed && parsed.editOperations.length > 0) {
         parsed = await resolveEditOperations(parsed, projectPath);
       }
-      const hasActions = parsed ? (parsed.fileChanges.length > 0 || parsed.deletions.length > 0 || parsed.commands.length > 0) : false;
+      const hasActions = parsed ? hasParsedActions(parsed) : false;
       recordResponseUsage(resp.metrics);
 
       // Finalize message

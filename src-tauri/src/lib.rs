@@ -15,6 +15,7 @@ use std::time::Duration;
 pub mod pty_manager;
 pub mod lsp_manager;
 pub mod dap_manager;
+pub mod snapshot;
 
 #[cfg(target_os = "windows")]
 use std::os::windows::process::CommandExt;
@@ -2437,6 +2438,14 @@ pub fn run() {
             dap_manager::dap_start_tcp,
             dap_manager::dap_send_request,
             dap_manager::dap_stop,
+            // Snapshot commands
+            snapshot::create_snapshot,
+            snapshot::list_snapshots,
+            snapshot::get_restore_preview,
+            snapshot::restore_snapshot,
+            snapshot::export_snapshot_zip,
+            snapshot::delete_snapshot,
+            snapshot::auto_snapshot_if_enabled,
             // PTY commands
             pty_manager::terminal_create,
             pty_manager::terminal_write,
