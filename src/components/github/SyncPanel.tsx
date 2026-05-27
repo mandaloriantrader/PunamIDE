@@ -134,6 +134,13 @@ export default function SyncPanel({ projectPath, currentBranch, hasRemote, onRef
 
       // Step 2: Dry-run preview
       const preview = await githubDryRunPush();
+
+      // First push — no upstream exists, so ahead count is 0 but we still need to push
+      if (!check.has_upstream) {
+        await executePush(true); // set upstream on first push
+        return;
+      }
+
       if (preview.ahead === 0 && !preview.would_create_remote_branch) {
         showToast("Nothing to push — already up to date", "info");
         setPushing(false);
