@@ -16,6 +16,7 @@ pub mod pty_manager;
 pub mod lsp_manager;
 pub mod dap_manager;
 pub mod snapshot;
+pub mod github;
 
 #[cfg(target_os = "windows")]
 use std::os::windows::process::CommandExt;
@@ -2369,6 +2370,7 @@ pub fn run() {
         .manage(FileWatcherHandle(Mutex::new(None)))
         .manage(ProjectIndexCache(Mutex::new(Vec::new())))
         .manage(CodebaseIndex(Mutex::new(None)))
+        .manage(github::auth::GitHubAuthState::new())
         .manage(pty_state)
         .manage(lsp_state)
         .manage(dap_state)
@@ -2461,6 +2463,19 @@ pub fn run() {
             lsp_manager::lsp_definition,
             lsp_manager::lsp_format,
             lsp_manager::lsp_shutdown,
+            // GitHub Phase 0: Git Core Check
+            github::github_check_repo,
+            github::github_is_git_repo,
+            github::github_get_branch,
+            github::github_get_dirty_files,
+            github::github_get_remote_origin,
+            github::github_get_ahead_behind,
+            github::github_list_branches,
+            // GitHub Phase 1: Auth
+            github::auth::github_set_token,
+            github::auth::github_get_user,
+            github::auth::github_check_auth,
+            github::auth::github_logout,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

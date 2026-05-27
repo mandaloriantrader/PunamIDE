@@ -1,0 +1,326 @@
+/* ===== GitHub Panel ===== */
+
+.github-panel {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow-y: auto;
+}
+
+.github-panel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border);
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--text-secondary);
+}
+
+.github-panel-header > span {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+/* ── Sections ── */
+
+.github-section {
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--border);
+}
+
+.github-section-title {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+  color: var(--text-secondary);
+  margin-bottom: 8px;
+}
+
+/* ── Auth Section ── */
+
+.github-auth-section {
+  padding: 12px;
+}
+
+.github-user-info {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.github-user-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.github-avatar {
+  border-radius: 50%;
+  border: 2px solid var(--accent);
+  flex-shrink: 0;
+}
+
+.github-user-details {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-width: 0;
+}
+
+.github-username {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.github-login {
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+
+.github-logout-btn {
+  opacity: 0.6;
+  transition: opacity 0.15s;
+}
+.github-logout-btn:hover {
+  opacity: 1;
+  color: var(--error);
+}
+
+/* ── Auth Form ── */
+
+.github-auth-form {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.github-auth-label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-primary);
+}
+
+.github-token-input-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.github-token-input {
+  flex: 1;
+  padding: 6px 8px;
+  font-size: 12px;
+  font-family: var(--font-mono, monospace);
+  background: var(--input-bg, var(--bg-secondary));
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text-primary);
+  outline: none;
+  transition: border-color 0.15s;
+}
+.github-token-input:focus {
+  border-color: var(--accent);
+}
+.github-token-input::placeholder {
+  color: var(--text-secondary);
+  opacity: 0.6;
+}
+
+.github-connect-btn {
+  padding: 6px 12px;
+  font-size: 12px;
+  font-weight: 500;
+  background: var(--accent);
+  color: #fff;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: opacity 0.15s;
+}
+.github-connect-btn:hover:not(:disabled) {
+  opacity: 0.9;
+}
+.github-connect-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.github-auth-error {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  font-size: 11px;
+  color: var(--error);
+  padding: 4px 0;
+}
+
+.github-auth-hint {
+  font-size: 10px;
+  color: var(--text-secondary);
+  opacity: 0.7;
+}
+.github-auth-hint code {
+  background: var(--bg-secondary);
+  padding: 1px 4px;
+  border-radius: 2px;
+  font-size: 10px;
+}
+
+/* ── Status Grid ── */
+
+.github-status-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.github-status-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 12px;
+  padding: 3px 0;
+}
+
+.github-status-label {
+  color: var(--text-secondary);
+  font-size: 11px;
+}
+
+.github-status-value {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--text-primary);
+  font-size: 12px;
+}
+.github-status-value.ok {
+  color: var(--success, #4caf50);
+}
+.github-status-value.warn {
+  color: var(--warning, #ff9800);
+}
+.github-status-value.dim {
+  color: var(--text-secondary);
+  opacity: 0.7;
+}
+
+.github-ahead {
+  color: var(--success, #4caf50);
+  font-weight: 500;
+  margin-right: 6px;
+}
+
+.github-behind {
+  color: var(--warning, #ff9800);
+  font-weight: 500;
+}
+
+.github-synced {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--success, #4caf50);
+}
+
+/* ── Branches ── */
+
+.github-branch-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-height: 200px;
+  overflow-y: auto;
+}
+
+.github-branch-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 6px;
+  border-radius: 3px;
+  font-size: 12px;
+  color: var(--text-primary);
+}
+.github-branch-item.current {
+  background: var(--accent-bg, rgba(59, 130, 246, 0.1));
+}
+
+.github-branch-name {
+  flex: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.github-branch-badge {
+  font-size: 9px;
+  padding: 1px 5px;
+  border-radius: 8px;
+  background: var(--accent);
+  color: #fff;
+  font-weight: 600;
+  text-transform: uppercase;
+}
+
+.github-branch-upstream {
+  font-size: 10px;
+  color: var(--text-secondary);
+  opacity: 0.7;
+}
+
+/* ── Coming Soon ── */
+
+.github-coming-soon {
+  opacity: 0.7;
+}
+
+.github-coming-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+
+/* ── Utility ── */
+
+.github-error {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  font-size: 11px;
+  color: var(--error);
+  padding: 4px 0;
+}
+
+.github-empty {
+  font-size: 12px;
+  color: var(--text-secondary);
+  text-align: center;
+  padding: 16px 8px;
+}
+
+.github-loading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--text-secondary);
+  padding: 16px 8px;
+}

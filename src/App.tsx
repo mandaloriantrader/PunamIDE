@@ -61,6 +61,7 @@ const TestGenerator  = lazy(() => import("./components/TestGenerator"));
 // Phase 1 — Ported from Zenith IDE
 const DockerPanel       = lazy(() => import("./components/DockerPanel"));
 const NotepadsPanel     = lazy(() => import("./components/NotepadsPanel"));
+const GitHubPanel       = lazy(() => import("./components/github/GitHubPanel"));
 
 // loadNotes is a small utility — import directly, not lazily
 import { loadNotes } from "./components/NotesPanel";
@@ -1416,6 +1417,17 @@ export default function App() {
         return;
       }
 
+      // Ctrl+Shift+H = GitHub Panel
+      if (ctrl && e.shiftKey && e.key.toLowerCase() === "h") {
+        e.preventDefault();
+        setActivityView((prev) => {
+          const next = prev === "github" ? "explorer" : "github";
+          setShowSidebar(true);
+          return next;
+        });
+        return;
+      }
+
       // Ctrl+S = Save
       if (ctrl && e.key === "s") {
         e.preventDefault();
@@ -1913,6 +1925,15 @@ export default function App() {
       },
     },
     {
+      id: "github-panel",
+      title: "Show GitHub Panel",
+      detail: "GitHub integration — repos, PRs, issues",
+      disabled: !projectPath,
+      run: () => {
+        handleActivitySelect("github");
+      },
+    },
+    {
       id: "run-project-check",
       title: runningProjectCheck ? "Running Project Check..." : "Run Project Check",
       detail: projectCheckCommand || "No known check command detected",
@@ -2179,6 +2200,10 @@ export default function App() {
             ) : activityView === "notepads" ? (
               <Suspense fallback={null}>
                 <NotepadsPanel projectPath={projectPath} onClose={() => handleActivitySelect("explorer")} />
+              </Suspense>
+            ) : activityView === "github" ? (
+              <Suspense fallback={null}>
+                <GitHubPanel projectPath={projectPath} onClose={() => handleActivitySelect("explorer")} />
               </Suspense>
             ) : (
               <FileExplorer
@@ -2698,6 +2723,7 @@ export default function App() {
                 <div className="shortcut-row"><kbd>Ctrl+`</kbd><span>Toggle terminal</span></div>
                 <div className="shortcut-row"><kbd>Ctrl+Shift+F</kbd><span>Find &amp; replace</span></div>
                 <div className="shortcut-row"><kbd>Ctrl+Shift+G</kbd><span>Git panel</span></div>
+                <div className="shortcut-row"><kbd>Ctrl+Shift+H</kbd><span>GitHub panel</span></div>
                 <div className="shortcut-row"><kbd>Ctrl+Shift+P</kbd><span>Command palette</span></div>
                 <div className="shortcut-row"><kbd>F1</kbd><span>Command palette</span></div>
                 <div className="shortcut-row"><kbd>F11</kbd><span>Zen mode</span></div>
