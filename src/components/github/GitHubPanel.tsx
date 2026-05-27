@@ -5,7 +5,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import {
-  Github,
+  GitPullRequest,
   RefreshCw,
   X,
   GitBranch,
@@ -156,7 +156,7 @@ export default function GitHubPanel({ projectPath, onClose }: Props) {
     <div className="github-panel">
       {/* Header */}
       <div className="panel-header github-panel-header">
-        <span><Github size={14} /> GITHUB</span>
+        <span><GitPullRequest size={14} /> GITHUB</span>
         <div className="panel-actions">
           <button
             type="button"

@@ -97,6 +97,18 @@ export async function startBackgroundExecution(config: ExecutorConfig): Promise<
 
       // Step 2: Apply file changes
       if (result.fileChanges && result.fileChanges.length > 0) {
+        // Auto-snapshot before AI agent edits (Ghost Restore safety net)
+        try {
+          const { invoke } = await import("@tauri-apps/api/core");
+          await invoke("create_snapshot", {
+            projectRoot: projectPath,
+            name: `pre-agent-edit-${Date.now()}`,
+            reason: "before-ai-edit",
+          });
+        } catch (err) {
+          console.warn("[BG-Agent] Auto-snapshot failed:", err);
+        }
+
         for (const change of result.fileChanges) {
           if (executorCancelled) break;
 

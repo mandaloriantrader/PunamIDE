@@ -6,7 +6,7 @@
 import {
   Files, Search, GitBranch, Bot,
   Settings, Keyboard, Play,
-  Box, StickyNote, Github,
+  Box, StickyNote, GitPullRequest,
 } from "lucide-react";
 
 export type ActivityView =
@@ -47,7 +47,7 @@ export default function ActivityBar({
     { id: "ai",       icon: <Bot size={22} />,     label: "Punam AI" },
     { id: "docker",   icon: <Box size={22} />,     label: "Docker" },
     { id: "notepads", icon: <StickyNote size={22} />, label: "Notepads" },
-    { id: "github",   icon: <Github size={22} />,  label: "GitHub (Ctrl+Shift+H)" },
+    { id: "github",   icon: <GitPullRequest size={22} />,  label: "GitHub (Ctrl+Shift+H)" },
   ];
 
   return (

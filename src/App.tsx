@@ -1603,6 +1603,21 @@ export default function App() {
   const applyParsedChanges = async (parsed: ParsedResponse) => {
     if (!projectPath) return;
 
+    // ── Auto-snapshot before AI edits (Ghost Restore safety net) ──
+    if (parsed.fileChanges.length > 0 || parsed.deletions.length > 0) {
+      try {
+        const { invoke } = await import("@tauri-apps/api/core");
+        await invoke("create_snapshot", {
+          projectRoot: projectPath,
+          name: `pre-ai-edit-${Date.now()}`,
+          reason: "before-ai-edit",
+        });
+      } catch (err) {
+        // Non-blocking — don't prevent the apply if snapshot fails
+        console.warn("[Snapshot] Auto-snapshot before AI edit failed:", err);
+      }
+    }
+
     // Save previous content for undo (checkpoint stack)
     const undoBuffer: Array<{ path: string; previousContent: string }> = [];
     for (const change of parsed.fileChanges) {
