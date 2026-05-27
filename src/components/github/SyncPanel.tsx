@@ -16,6 +16,7 @@ import {
   Plus,
   Trash2,
   Archive,
+  Check,
 } from "lucide-react";
 import {
   githubPrePushCheck,
@@ -32,6 +33,7 @@ import {
   githubSwitchBranch,
   githubDeleteBranch,
 } from "../../services/githubService";
+import { runTerminalCommand } from "../../utils/tauri";
 import type {
   PrePushStatus,
   PrePullStatus,
@@ -62,6 +64,51 @@ export default function SyncPanel({ projectPath, currentBranch, hasRemote, onRef
   const [showBranchCreate, setShowBranchCreate] = useState(false);
   const [newBranchName, setNewBranchName] = useState("");
   const [creatingBranch, setCreatingBranch] = useState(false);
+
+  // Commit
+  const [commitMsg, setCommitMsg] = useState("");
+  const [committing, setCommitting] = useState(false);
+
+  // ── Commit Flow ────────────────────────────────────────────────────────────
+
+  const handleCommit = async () => {
+    if (!commitMsg.trim()) {
+      showToast("Enter a commit message", "warning");
+      return;
+    }
+    setCommitting(true);
+    try {
+      // Stage all changes
+      const stageResult = await runTerminalCommand("git add -A", projectPath);
+      if (stageResult.exit_code !== 0) {
+        showToast(`Stage failed: ${stageResult.stderr || stageResult.stdout}`, "error");
+        return;
+      }
+
+      // Check if there's anything to commit
+      const diffCheck = await runTerminalCommand("git diff --cached --quiet", projectPath);
+      if (diffCheck.exit_code === 0) {
+        showToast("Nothing to commit — working tree clean", "info");
+        return;
+      }
+
+      // Commit
+      const escapedMsg = commitMsg.replace(/"/g, '\\"');
+      const result = await runTerminalCommand(`git commit -m "${escapedMsg}"`, projectPath);
+      if (result.exit_code !== 0) {
+        showToast(`Commit failed: ${result.stderr || result.stdout}`, "error");
+        return;
+      }
+
+      showToast("Committed successfully", "success");
+      setCommitMsg("");
+      onRefresh();
+    } catch (err) {
+      showToast(`Commit failed: ${err}`, "error");
+    } finally {
+      setCommitting(false);
+    }
+  };
 
   // ── Safe Push Flow ─────────────────────────────────────────────────────────
 
@@ -254,6 +301,36 @@ export default function SyncPanel({ projectPath, currentBranch, hasRemote, onRef
 
   return (
     <div className="github-sync-panel">
+      {/* Commit section */}
+      <div className="github-commit-section">
+        <div className="github-commit-input-row">
+          <input
+            type="text"
+            className="github-input"
+            placeholder="Commit message..."
+            value={commitMsg}
+            onChange={(e) => setCommitMsg(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
+                e.preventDefault();
+                handleCommit();
+              }
+            }}
+            disabled={committing}
+          />
+        </div>
+        <button
+          type="button"
+          className="github-sync-btn github-commit-btn"
+          onClick={handleCommit}
+          disabled={committing || !commitMsg.trim()}
+          title="Stage all & commit (Ctrl+Enter)"
+        >
+          <Check size={13} />
+          {committing ? "Committing..." : "Commit All"}
+        </button>
+      </div>
+
       {/* Main sync actions */}
       <div className="github-sync-actions">
         <button

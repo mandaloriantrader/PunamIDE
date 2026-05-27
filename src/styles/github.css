@@ -1065,3 +1065,33 @@
   border-color: var(--accent);
   color: var(--accent);
 }
+
+/* ===== Commit Section ===== */
+
+.github-commit-section {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 8px;
+}
+
+.github-commit-input-row {
+  display: flex;
+  gap: 4px;
+}
+.github-commit-input-row .github-input {
+  flex: 1;
+}
+
+.github-commit-btn {
+  background: var(--accent-bg, rgba(59, 130, 246, 0.1));
+  color: var(--accent);
+  border-color: var(--accent);
+  width: 100%;
+}
+.github-commit-btn:hover:not(:disabled) {
+  background: var(--accent);
+  color: #fff;
+}
