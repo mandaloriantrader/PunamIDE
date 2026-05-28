@@ -22,7 +22,7 @@ import type { ChatMessage } from "../types";
 // ── Constants ─────────────────────────────────────────────────────────────────
 
 const SLIDING_WINDOW_TURNS = 4;
-const MAX_SNIPPET_CHARS = 60000;
+const MAX_SNIPPET_CHARS = 4000;
 const MAX_MEMORY_ENTRIES = 20;
 const MEMORY_STORAGE_KEY = "punam-agent-memory";
 
@@ -181,7 +181,10 @@ function buildContextBlock(snippets: string[], errors: string): string {
     const clipped = snippets.map(s => {
       const raw = s.slice(0, MAX_SNIPPET_CHARS);
       // If snippet has a header (## filename) keep it, add line numbers to code
-      const headerMatch = raw.match(/^(## .+\n```[^\n]*\n)([\s\S]*)$/);
+      const headerMatch = raw.match(/^(## .+
+```[^
+]*
+)([\s\S]*)$/);
       if (headerMatch) {
         const header = headerMatch[1];
         const code = headerMatch[2];

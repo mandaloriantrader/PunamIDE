@@ -16,6 +16,7 @@ import {
   Monitor,
   FlaskConical,
   FilePlus,
+  FileUp,
   X,
   Play,
   BugPlay,
@@ -1022,6 +1023,28 @@ export default function App() {
     }
   };
 
+  // Open individual file(s) via file picker dialog
+  const handleOpenFile = async () => {
+    try {
+      const selected = await open({
+        directory: false,
+        multiple: true,
+        filters: [
+          { name: "All Files", extensions: ["*"] },
+          { name: "Code", extensions: ["ts", "tsx", "js", "jsx", "py", "rs", "go", "java", "c", "cpp", "h", "css", "html", "json", "md", "yaml", "yml", "toml"] },
+        ],
+      });
+      if (selected) {
+        const paths = Array.isArray(selected) ? selected : [selected];
+        for (const filePath of paths) {
+          await handleFileSelect(filePath as string);
+        }
+      }
+    } catch (err) {
+      showToast(`Failed to open file: ${err}`, "error");
+    }
+  };
+
   // Open file in tab
   const handleFileSelect = async (path: string) => {
     const normalizedPath = normalizeFsPath(path);
@@ -1425,6 +1448,13 @@ export default function App() {
           setShowSidebar(true);
           return next;
         });
+        return;
+      }
+
+      // Ctrl+Shift+O = Open File
+      if (ctrl && e.shiftKey && e.key.toLowerCase() === "o") {
+        e.preventDefault();
+        handleOpenFile();
         return;
       }
 
@@ -1871,6 +1901,13 @@ export default function App() {
       run: handleOpenFolder,
     },
     {
+      id: "open-file",
+      title: "Open File",
+      detail: "Open individual file(s) from disk",
+      shortcut: "Ctrl+Shift+O",
+      run: handleOpenFile,
+    },
+    {
       id: "quick-open",
       title: "Quick Open File",
       detail: "Fuzzy search project files",
@@ -2079,6 +2116,9 @@ export default function App() {
         <div className="titlebar-left">
           <button className="toolbar-btn" onClick={handleOpenFolder} title="Open Folder" aria-label="Open project folder">
             <FolderOpen size={15} />
+          </button>
+          <button className="toolbar-btn" onClick={handleOpenFile} title="Open File (Ctrl+Shift+O)" aria-label="Open file">
+            <FileUp size={15} />
           </button>
           <button
             className={`toolbar-btn ${splitMode ? "active" : ""}`}

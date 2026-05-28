@@ -7,7 +7,9 @@ import { useRef, useEffect, useState } from "react";
 import { Send, FileText, Layers, SearchCode, Wrench, MessageCircle, Paperclip, Plus, X, ChevronDown } from "lucide-react";
 import type { ChatAttachment } from "../../utils/tauri";
 import type { AIProviderConfig } from "../../utils/providers";
+import type { OpenTabContext } from "../../types";
 import { ModelSelector } from "./ChatComponents";
+import { TokenPill } from "./TokenPill";
 
 interface ChatInputAreaProps {
   input: string;
@@ -33,6 +35,8 @@ interface ChatInputAreaProps {
   handleFileAttach: () => void;
   handleFileInputChange: (e: React.ChangeEvent<HTMLInputElement>) => void;
   fileInputRef: React.RefObject<HTMLInputElement | null>;
+  // Open tabs for token estimator
+  openTabs: OpenTabContext[];
   // Model selector
   aiProviders: AIProviderConfig[];
   configModel: string;
@@ -53,6 +57,9 @@ interface ChatInputAreaProps {
   hasAppliedMessages: number;
   sendDisabled: boolean;
   isAgentMode?: boolean;
+  // Tool mode toggle
+  toolModeEnabled: boolean;
+  onToggleToolMode: () => void;
 }
 
 export function ChatInputArea({
@@ -76,6 +83,7 @@ export function ChatInputArea({
   handleFileAttach,
   handleFileInputChange,
   fileInputRef,
+  openTabs,
   aiProviders,
   configModel,
   configProvider,
@@ -93,6 +101,8 @@ export function ChatInputArea({
   hasAppliedMessages,
   sendDisabled,
   isAgentMode,
+  toolModeEnabled,
+  onToggleToolMode,
 }: ChatInputAreaProps) {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const [adaptiveDropdownOpen, setAdaptiveDropdownOpen] = useState(false);
@@ -292,6 +302,22 @@ export function ChatInputArea({
             onToggle={() => setModelDropdownOpen(!modelDropdownOpen)}
             onSelect={(selection) => { setActiveModelOverride(selection); setModelDropdownOpen(false); }}
           />
+          {/* Token estimator pill */}
+          <TokenPill
+            message={input}
+            tabs={openTabs}
+            activeTabPath={activeFileRelPath || null}
+          />
+          {/* Tool Mode toggle */}
+          <button
+            className={`ai-tool-mode-btn ${toolModeEnabled ? "active" : ""}`}
+            onClick={onToggleToolMode}
+            title={toolModeEnabled ? "Tool Mode ON — reads files on demand (saves tokens)" : "Tool Mode OFF — sends full file context"}
+            type="button"
+          >
+            <Wrench size={12} />
+            <span className="tool-mode-label">{toolModeEnabled ? "Tool Mode" : "Full Context"}</span>
+          </button>
           {adaptivePreview && (
             <div className="ai-adaptive-wrap">
               <button

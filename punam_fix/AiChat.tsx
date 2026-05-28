@@ -56,7 +56,6 @@ import {
   summarizeOldMessages,
   extractMemoriesFromResponse,
 } from "../utils/contextEngine";
-import { runJsonToolLoop } from "../utils/jsonToolLoop";
 import { detectTaskType } from "../lib/ai/taskDetection";
 import { selectAdaptiveProvider } from "../lib/ai/adaptiveRouter";
 import type { AdaptiveStrategy } from "../lib/ai/providerCapabilities";
@@ -285,9 +284,6 @@ export default function AiChat({
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState("");
   const [agentMode, setAgentMode] = useState<AgentMode>("chat");
-  const [toolModeEnabled, setToolModeEnabled] = useState<boolean>(() => {
-    try { return localStorage.getItem("punam-tool-mode") === "true"; } catch { return false; }
-  });
   const [modelDropdownOpen, setModelDropdownOpen] = useState(false);
   const [activeModelOverride, setActiveModelOverride] = useState<{ providerId: string; model: string } | null>(null);
   const [loading, setLoading] = useState(false);
@@ -1426,15 +1422,11 @@ export default function AiChat({
   };
 
   const agentProposeFix = async () => {
-    if (!agentTask || !agentTask.active) {
-      console.log("[AGENT] agentProposeFix bailed — agentTask:", agentTask);
-      return;
-    }
+    if (!agentTask || !agentTask.active) return;
 
     // ── Intercept simple meta-questions that don't need an API call ──────────
     const taskLower = agentTask.task.toLowerCase();
     const isFileQuery = /which file|what file|what'?s open|current file|opened in editor|open in editor|file is open/.test(taskLower);
-    console.log("[AGENT] isFileQuery check:", { taskLower, isFileQuery, activeFilePath });
     if (isFileQuery) {
       const answer = activeFilePath
         ? `The file currently open in the editor is: **${activeFilePath.replace(/.*[\/\\]/, "")}**`
@@ -1442,68 +1434,6 @@ export default function AiChat({
       setMessages(prev => [...prev, { role: "assistant", content: answer, mode: "chat" } as any]);
       setAgentTask(null);
       setLoading(false);
-      return;
-    }
-
-    // ── Tool Mode Path (JSON tool loop — low token usage) ───────────────────
-    if (toolModeEnabled) {
-      setAgentTask((prev) => prev ? { ...prev, step: "proposing_fix" } : null);
-      setLoading(true);
-
-      try {
-        const enabledModels = getEnabledModels();
-        if (enabledModels.length === 0) {
-          setMessages(prev => [...prev, { role: "assistant", content: "No AI provider configured." }]);
-          setLoading(false);
-          return;
-        }
-        const { providerId, model: modelId } = enabledModels[0];
-        const provider = aiProviders.find(p => p.id === providerId);
-        if (!provider) {
-          setMessages(prev => [...prev, { role: "assistant", content: "Provider not found." }]);
-          setLoading(false);
-          return;
-        }
-
-        // Show thinking indicator
-        setMessages(prev => [...prev, { role: "assistant", content: "🔧 Tool mode: reading files...", mode: "chat" } as any]);
-
-        const result = await runJsonToolLoop({
-          provider,
-          modelId,
-          task: agentTask.task,
-          projectPath,
-          activeFilePath,
-          onToolCall: (toolName) => {
-            setMessages(prev => {
-              const last = prev[prev.length - 1];
-              if (last?.role === "assistant" && last.content.startsWith("🔧")) {
-                return [...prev.slice(0, -1), { ...last, content: `🔧 Tool mode: ${toolName}...` }];
-              }
-              return prev;
-            });
-          },
-        });
-
-        // Replace thinking indicator with final answer
-        setMessages(prev => {
-          const filtered = prev.filter(m => !(m.role === "assistant" && m.content.startsWith("🔧")));
-          return [...filtered, {
-            role: "assistant",
-            content: result.text,
-            mode: "chat",
-            metrics: { tokensIn: 0, tokensOut: 0, durationMs: 0 },
-          } as any];
-        });
-
-        console.log(`[TOOL MODE] Done in ${result.rounds} round(s). Tools: ${result.toolsCalled.join(", ") || "none"}. Saved ~${result.tokensSaved} tokens.`);
-
-      } catch (err) {
-        setMessages(prev => [...prev, { role: "assistant", content: `Tool mode error: ${err instanceof Error ? err.message : String(err)}. Falling back to full context.` }]);
-      } finally {
-        setLoading(false);
-        setAgentTask(null);
-      }
       return;
     }
 
@@ -1529,8 +1459,16 @@ export default function AiChat({
     if (activeFilePath) {
       const relPath = getRelativePath(projectPath, activeFilePath);
       if (!errorFiles.includes(relPath)) {
-        const content = await readFile(activeFilePath).catch(() => "");
-        if (content) snippets.push(`## ${relPath}\n\`\`\`\n${content.slice(0, 60000)}\n\`\`\``);
+        const fileContent = await readFile(activeFilePath).catch(() => "");
+        if (fileContent) {
+          // Only inject first 80 lines — enough for context, not the whole file
+          // Agent can ask for more if needed
+          const lines = fileContent.split("\n");
+          const snippet = lines.slice(0, 80).join("\n");
+          const totalLines = lines.length;
+          const suffix = totalLines > 80 ? `\n... (${totalLines - 80} more lines not shown)` : "";
+          snippets.push(`## ${relPath}\n\`\`\`\n${snippet}${suffix}\n\`\`\``);
+        }
       }
     }
 
@@ -1617,7 +1555,7 @@ export default function AiChat({
         .find(c => c.role === "user")
         ?.parts[0].text ?? "";
       const finalUserPrompt = contextBlock
-        ? `${contextBlock}\n\n# USER QUESTION (${new Date().toISOString()}):\n${currentTask}`
+        ? `${contextBlock}\n\n# USER QUESTION:\n${currentTask}`
         : currentTask;
       console.log("=== AGENT CONTEXT DEBUG ===");
       console.log("[CTX] systemInstruction:", payload.systemInstruction);
@@ -2252,12 +2190,6 @@ export default function AiChat({
         hasAppliedMessages={checkpointCount}
         sendDisabled={loading || cooldown || (!input.trim() && attachments.length === 0)}
         isAgentMode={agentMode === "agent"}
-        toolModeEnabled={toolModeEnabled}
-        onToggleToolMode={() => {
-          const next = !toolModeEnabled;
-          setToolModeEnabled(next);
-          try { localStorage.setItem("punam-tool-mode", String(next)); } catch {}
-        }}
       />
     </div>
   );
