@@ -57,6 +57,7 @@ import {
   extractMemoriesFromResponse,
 } from "../utils/contextEngine";
 import { runJsonToolLoop } from "../utils/jsonToolLoop";
+import { resolveMentions, buildSuggestions } from "../utils/mentionResolver";
 import { detectTaskType } from "../lib/ai/taskDetection";
 import { selectAdaptiveProvider } from "../lib/ai/adaptiveRouter";
 import type { AdaptiveStrategy } from "../lib/ai/providerCapabilities";
@@ -326,6 +327,12 @@ export default function AiChat({
   // --- @web / @codebase / @git mention state ---
   const [webSearchResults, setWebSearchResults] = useState<string>("");
 
+  // --- Stream abort + tracking ---
+  const activeStreamRef = useRef<{ cancel: () => void; streamId: string } | null>(null);
+  const [streamProgress, setStreamProgress] = useState<{ tokens: number; startedAt: number } | null>(null);
+  // Prevents duplicate sends while streaming
+  const isStreamingRef = useRef(false);
+
   // --- Auto-index project for TF-IDF search ---
   useEffect(() => {
     if (!projectPath || !files.length) return;
@@ -496,99 +503,134 @@ export default function AiChat({
     return existingFiles;
   };
 
-  const buildProjectContext = async (userPrompt = "") => {
+  /**
+   * Unified context builder — single-pass with deduplication.
+   * Priority order (highest to lowest): open tabs, @mentions, key files, @codebase/search hits, errors.
+   * Files already loaded by mentionResolver are tracked to avoid re-reads.
+   */
+  const buildProjectContext = async (userPrompt = "", alreadyLoadedResolved?: Set<string>) => {
     const existingFiles = collectExistingFiles();
     const contextFiles = new Map<string, string>();
+    const queued = new Set<string>(); // paths queued for loading (avoids duplicate reads)
+    const resolvedSet = alreadyLoadedResolved || new Set<string>();
 
-    // --- @codebase mention: use TF-IDF search if indexed, else load files ---
+    // Queue a file for loading without checking disk yet (batched later)
+    const queueFile = (relativePath: string) => {
+      if (!relativePath || relativePath === "none") return;
+      if (contextFiles.has(relativePath)) return;
+      if (resolvedSet.has(relativePath)) return;
+      if (queued.has(relativePath)) return;
+      queued.add(relativePath);
+    };
+
+    // 1. Open tabs (in-memory, highest priority, don't override disk content)
+    for (const tab of openTabs) {
+      const rel = getRelativePath(projectPath, tab.path);
+      if (!contextFiles.has(rel)) {
+        contextFiles.set(rel, tab.content);
+      }
+    }
+
+    // 2. @file mentions from the NEW resolver (already resolved before this call)
+    // The mention context blocks were appended to the prompt; we don't need to re-read.
+    // But any remaining mentions in userPrompt not caught by @ notation should still load.
+    for (const mentionedPath of getMentionedFilePaths(userPrompt, existingFiles)) {
+      if (contextFiles.has(mentionedPath)) continue;
+      if (resolvedSet.has(mentionedPath)) {
+        resolvedSet.delete(mentionedPath);
+        continue;
+      }
+      queueFile(mentionedPath);
+    }
+
+    // 3. @folder mentions
+    for (const folderFile of getMentionedFolderFiles(userPrompt, existingFiles)) {
+      if (contextFiles.has(folderFile)) continue;
+      queueFile(folderFile);
+    }
+
+    // 4. Key context files (package.json, tsconfig.json, etc.) — only if available
+    for (const keyFile of KEY_CONTEXT_FILES) {
+      if (!existingFiles.has(keyFile)) continue;
+      if (contextFiles.has(keyFile)) continue;
+      queueFile(keyFile);
+    }
+
+    // 5. Selected project files (multi-file refactoring)
+    for (const fp of selectedProjectFiles) {
+      if (contextFiles.has(fp)) continue;
+      queueFile(fp);
+    }
+
+    // 6. @codebase mention: TF-IDF hits or limited fallback
     const hasCodebaseMention = /@codebase\b/i.test(userPrompt);
     if (hasCodebaseMention) {
       if (isIndexed()) {
-        // Extract the query part after @codebase
         const codebaseQuery = userPrompt.replace(/@codebase\b/i, "").trim();
-        const hits = searchCodebase(codebaseQuery || userPrompt, 8);
+        const hits = searchCodebase(codebaseQuery || userPrompt, 5);
         for (const hit of hits) {
           if (contextFiles.has(hit.path)) continue;
-          const content = await readFile(getProjectFilePath(projectPath, hit.path)).catch(() => "");
-          if (content) contextFiles.set(hit.path, content);
+          queueFile(hit.path);
         }
-      } else {
-        // Fallback: load first 40 files
-        for (const filePath of [...existingFiles].slice(0, 40)) {
-          if (contextFiles.has(filePath)) continue;
-          const content = await readFile(getProjectFilePath(projectPath, filePath)).catch(() => "");
-          if (content) contextFiles.set(filePath, content);
+      }
+      // Small fallback: load up to 10 more files if context is still sparse
+      if (contextFiles.size < 5) {
+        for (const fp of [...existingFiles].slice(0, 10)) {
+          if (contextFiles.has(fp)) continue;
+          if (queued.has(fp)) continue;
+          queueFile(fp);
         }
       }
     }
 
-    // Load explicitly selected project files (multi-file refactoring)
-    for (const filePath of selectedProjectFiles) {
-      if (contextFiles.has(filePath)) continue;
-      const content = await readFile(getProjectFilePath(projectPath, filePath)).catch(() => "");
-      if (content) contextFiles.set(filePath, content);
-    }
-
-    for (const tab of openTabs) {
-      contextFiles.set(getRelativePath(projectPath, tab.path), tab.content);
-    }
-
-    for (const keyFile of KEY_CONTEXT_FILES) {
-      if (!existingFiles.has(keyFile) || contextFiles.has(keyFile)) continue;
-      const content = await readFile(getProjectFilePath(projectPath, keyFile)).catch(() => "");
-      if (content) contextFiles.set(keyFile, content);
-    }
-
-    for (const mentionedPath of getMentionedFilePaths(userPrompt, existingFiles)) {
-      if (contextFiles.has(mentionedPath)) continue;
-      const content = await readFile(getProjectFilePath(projectPath, mentionedPath)).catch(() => "");
-      if (content) contextFiles.set(mentionedPath, content);
-    }
-
-    // Load files from mentioned folders (@folder support)
-    for (const folderFile of getMentionedFolderFiles(userPrompt, existingFiles)) {
-      if (contextFiles.has(folderFile)) continue;
-      const content = await readFile(getProjectFilePath(projectPath, folderFile)).catch(() => "");
-      if (content) contextFiles.set(folderFile, content);
-    }
-
-    // Semantic search: if user asks "where is X used", "find X", "which file has X"
+    // 7. Semantic search hits
     const searchMatch = userPrompt.match(/(?:where|find|search|which file|who uses|grep|look for)\s+["`']?([^"`'\n]{3,40})["`']?/i);
     if (searchMatch && projectPath) {
       const searchQuery = searchMatch[1].trim();
       try {
         const results = await searchProject(searchQuery);
-        if (results.length > 0) {
-          // Load top 3 files from search results
-          for (const result of results.slice(0, 3)) {
-            if (!contextFiles.has(result.path)) {
-              const content = await readFile(getProjectFilePath(projectPath, result.path)).catch(() => "");
-              if (content) contextFiles.set(result.path, content);
-            }
-          }
+        for (const result of results.slice(0, 3)) {
+          if (contextFiles.has(result.path)) continue;
+          queueFile(result.path);
         }
-      } catch { /* search failed, continue without */ }
+      } catch { /* ignore */ }
     }
 
-    // Auto-load files mentioned in terminal/proactive errors (critical for edit precision).
-    const errorContextText = [terminalOutput || "", proactiveError?.output || ""]
-      .filter(Boolean)
-      .join("\n");
+    // 8. Error-referenced files
+    const errorContextText = [terminalOutput || "", proactiveError?.output || ""].filter(Boolean).join("\n");
     for (const errorFile of getFilePathsFromText(errorContextText, existingFiles)) {
-      if (!contextFiles.has(errorFile)) {
-        const content = await readFile(getProjectFilePath(projectPath, errorFile)).catch(() => "");
-        if (content) contextFiles.set(errorFile, content);
-      }
+      if (contextFiles.has(errorFile)) continue;
+      queueFile(errorFile);
     }
 
+    // 9. Active file (always include)
     if (activeFilePath) {
-      const relativePath = getRelativePath(projectPath, activeFilePath);
-      if (!contextFiles.has(relativePath)) {
-        const content = await readFile(activeFilePath).catch(() => "");
-        if (content) contextFiles.set(relativePath, content);
+      const relPath = getRelativePath(projectPath, activeFilePath);
+      if (!contextFiles.has(relPath)) {
+        queueFile(relPath);
       }
     }
 
+    // ═══ BATCH LOAD: read all queued files ═══
+    const queuedArr = [...queued];
+    const readPromises = queuedArr.map(async (relPath) => {
+      const fp = getProjectFilePath(projectPath, relPath);
+      // For active file, use the original path directly
+      const readPath = (relPath === getRelativePath(projectPath, activeFilePath || "")) && activeFilePath
+        ? activeFilePath
+        : fp;
+      const content = await readFile(readPath).catch(() => "");
+      return { path: relPath, content };
+    });
+
+    const results = await Promise.all(readPromises);
+    for (const { path: relPath, content } of results) {
+      if (content && !contextFiles.has(relPath)) {
+        contextFiles.set(relPath, content);
+      }
+    }
+
+    // ═══ BUILD OUTPUT ═══
     let totalChars = 0;
     const sections: string[] = [];
     const attachedNames: string[] = [];
@@ -609,7 +651,7 @@ export default function AiChat({
         : "Context attached: file tree only"
     );
 
-    // Detect frameworks from attached context files
+    // Frameworks
     const packageJson = contextFiles.get("package.json") || null;
     const cargoToml = contextFiles.get("Cargo.toml") || contextFiles.get("src-tauri/Cargo.toml") || null;
     const frameworks = detectFrameworks(packageJson, cargoToml);
@@ -617,13 +659,13 @@ export default function AiChat({
       ? `\n\n# Detected Frameworks\n${frameworks.join(", ")}`
       : "";
 
-    // Load project rules (punam.rules.md, .punam/rules.md, AGENTS.md)
+    // Project rules
     let projectRulesSection = "";
     for (const rulesFile of PROJECT_RULES_FILES) {
       const rulesContent = await readFile(getProjectFilePath(projectPath, rulesFile)).catch(() => "");
       if (rulesContent) {
         projectRulesSection = `\n\n# Project Rules (from ${rulesFile})\nFollow these project-specific instructions:\n${rulesContent.slice(0, 3000)}`;
-        break; // Use first found rules file
+        break;
       }
     }
 
@@ -668,8 +710,29 @@ export default function AiChat({
     setLoading(true);
 
     try {
+      // ── Resolve @mentions in the prompt ───────────────────────────────────
+      const mentionSources = {
+        projectPath,
+        files,
+        allProjectFiles: Array.from(collectExistingFiles()),
+        selectedText: selectedText || "",
+        terminalOutput: terminalOutput || "",
+        problemsRaw: problems
+          ? problems.map((p) => `[${p.severity}] ${p.path}:${p.line} — ${p.message}`).join("\n")
+          : "",
+        gitBranch: "",
+      };
+      const resolved = await resolveMentions(userPrompt, mentionSources);
+      const effectivePrompt = resolved.cleanPrompt;
+      const mentionContext = resolved.contextBlocks.join("\n\n");
+
+      // Merge mention-resolved context into the prompt
+      const enrichedUserPrompt = mentionContext
+        ? `${effectivePrompt}\n\n# Resolved @Mention Context\n${mentionContext}`
+        : effectivePrompt;
+
       const fileTree = buildFileContext(files);
-      const attachedContext = await buildProjectContext(userPrompt);
+      const attachedContext = await buildProjectContext(enrichedUserPrompt);
 
       // If user is searching for something, include search results
       let searchSection = "";
@@ -912,16 +975,20 @@ export default function AiChat({
             // Listen for streaming tokens — BATCHED for performance
             const { listen } = await import("@tauri-apps/api/event");
             let streamedText = "";
-            let pendingFlush = false;
-            let flushTimer: ReturnType<typeof setTimeout> | null = null;
+            let tokenCount = 0;
+            const streamStart = performance.now();
+            let rafId = 0;
 
             const flushStreamedText = () => {
-              pendingFlush = false;
-              flushTimer = null;
-              // Show only the explanation part during streaming (hide raw FILE blocks)
               const displayText = getStreamingTextBeforeActionBlocks(streamedText);
+              const actionCount = (streamedText.match(/===FILE:/g) || []).length;
+              const fileHint = actionCount > 0 ? ` (${actionCount} file${actionCount !== 1 ? "s" : ""})` : "";
+              const elapsed = (performance.now() - streamStart) / 1000;
+              const tps = elapsed > 0 ? Math.round(tokenCount / elapsed) : 0;
               setMessages((prev) => prev.map((m) =>
-                (m as any).streamId === streamId ? { ...m, content: displayText + "▍" } : m
+                (m as any).streamId === streamId
+                  ? { ...m, content: displayText + "▍", streamProgress: `${tps} t/s${fileHint}` }
+                  : m
               ));
             };
 
@@ -929,13 +996,12 @@ export default function AiChat({
               const { token, done } = event.payload;
               if (!done && token) {
                 streamedText += token;
-                // Batch: only flush every 40ms to avoid excessive re-renders
-                if (!pendingFlush) {
-                  pendingFlush = true;
-                  flushTimer = setTimeout(flushStreamedText, 40);
-                }
+                tokenCount++;
+                if (!rafId) rafId = requestAnimationFrame(() => { rafId = 0; flushStreamedText(); });
               }
             });
+
+            activeStreamRef.current = { cancel: () => { cancelAnimationFrame(rafId); unlisten(); }, streamId };
 
             // Send the streaming request
             const imagePayload = currentImages.length > 0
@@ -943,9 +1009,8 @@ export default function AiChat({
               : undefined;
             const resp = await sendToProviderStreaming(provider, modelId, { systemPrompt: SYSTEM_PROMPT, userPrompt: prompt, images: imagePayload });
             unlisten();
-            // Flush any remaining buffered tokens
-            if (flushTimer) { clearTimeout(flushTimer); flushTimer = null; }
-            if (pendingFlush) flushStreamedText();
+            cancelAnimationFrame(rafId);
+            flushStreamedText(); // final flush
 
             // Finalize: parse the full response and render properly
             const finalText = resp.success ? resp.text : (resp.error || "Unknown error");
@@ -1152,6 +1217,12 @@ export default function AiChat({
   const handleSend = async () => {
     const text = input.trim();
     if ((!text && attachments.length === 0) || loading || cooldown) return;
+
+    // Cancel any active stream before starting a new one
+    if (activeStreamRef.current) {
+      activeStreamRef.current.cancel();
+      activeStreamRef.current = null;
+    }
 
     const mode = agentMode;
 
@@ -1658,6 +1729,29 @@ export default function AiChat({
         extractMemoriesFromResponse(projectPath, currentTask, finalText, changedFiles);
       }
 
+      // Tool Mode tip — soft hint when full context was overkill
+      if (!toolModeEnabled && payload.tokenEstimate > 5000) {
+        const SIMPLE_FILE_QUERY_PATTERNS = [
+          /what.*line\s+\d+/i,
+          /line\s+\d+/i,
+          /what.*written/i,
+          /where.*defined/i,
+          /find .* in/i,
+          /search .* file/i,
+          /which file/i,
+          /current file/i,
+          /open file/i,
+        ];
+        const isSimple = SIMPLE_FILE_QUERY_PATTERNS.some(p => p.test(currentTask));
+        if (isSimple) {
+          setMessages(prev => [...prev, {
+            role: "assistant",
+            content: "💡 Tip: Tool Mode could answer simple file lookups with far fewer tokens.",
+            mode: "chat",
+          } as any]);
+        }
+      }
+
     } catch (err) {
       const providerName = aiProviders.find(hasUsableProvider)?.name || config.provider || "AI";
       setMessages(prev => [...prev, { role: "assistant", content: `Currently using ${providerName}. Something went wrong — please try again.` }]);
@@ -1924,8 +2018,8 @@ export default function AiChat({
         onCloseSessionList={() => setShowSessionList(false)}
       />
 
-      {/* Messages */}
-      <div className="chat-messages">
+      {/* Messages — virtualized: browser skips rendering off-screen messages */}
+      <div className="chat-messages" style={{ contentVisibility: "auto", containIntrinsicSize: "auto 500px" }}>
         {/* Proactive Error Detection — sticky at top so it doesn't scroll away (B008 fix) */}
         {proactiveError && (
           <div className="proactive-error-card" style={{ position: "sticky", top: 0, zIndex: 10 }}>

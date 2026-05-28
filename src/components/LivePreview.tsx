@@ -1,41 +1,43 @@
 /**
  * LivePreview — renders HTML/Markdown/SVG in an iframe sandbox,
- * or proxies a dev server URL.
- * Now auto-detects running dev server from terminal output.
+ * or proxies a dev server URL. Enhanced with hot reload, error overlay,
+ * and console capture.
  */
 
 import { useEffect, useRef, useState, useCallback } from "react";
-import { RefreshCw, ExternalLink, Monitor, X, Globe, Zap } from "lucide-react";
+import { RefreshCw, ExternalLink, Monitor, X, Globe, Zap, Terminal } from "lucide-react";
+import { listen } from "@tauri-apps/api/event";
 
 interface Props {
   filePath: string;
   content: string;
   language: string;
   projectPath?: string;
-  terminalOutput?: string;  // NEW: pass terminal output for auto-detection
+  terminalOutput?: string;
+  /** Incremented by parent on each save — triggers reload */
+  saveFlashKey?: number;
   onClose: () => void;
 }
 
-/** Detect localhost URLs from terminal output (Vite, CRA, Next, etc.) */
+// ── Dev server URL detection ────────────────────────────────────────────────
+
 function detectDevServerUrl(terminal: string): string | null {
   if (!terminal) return null;
-  // Match patterns like: Local: http://localhost:5173/ or ➜ Local: http://localhost:3000
   const patterns = [
     /(?:Local|localhost|server).*?(https?:\/\/localhost:\d+)/i,
     /➜\s+Local:\s+(https?:\/\/localhost:\d+)/i,
     /running at\s+(https?:\/\/localhost:\d+)/i,
     /listening on\s+(https?:\/\/localhost:\d+)/i,
     /started.*?(https?:\/\/localhost:\d+)/i,
-    /(https?:\/\/localhost:\d+(?:\/[^\s]*)?)/i, // fallback: any localhost URL
+    /(https?:\/\/localhost:\d+(?:\/[^\s]*)?)/i,
   ];
   for (const re of patterns) {
     const m = terminal.match(re);
-    if (m?.[1]) return m[1].replace(/\/$/, ""); // strip trailing slash
+    if (m?.[1]) return m[1].replace(/\/$/, "");
   }
   return null;
 }
 
-/** Languages that can be previewed directly */
 function isDirectPreviewable(language: string, path: string): boolean {
   const lower = path.toLowerCase();
   return (
@@ -77,7 +79,7 @@ function buildPreviewHtml(content: string, language: string, path: string): stri
   return content;
 }
 
-export default function LivePreview({ filePath, content, language, terminalOutput, onClose }: Props) {
+export default function LivePreview({ filePath, content, language, terminalOutput, saveFlashKey, onClose }: Props) {
   const iframeRef = useRef<HTMLIFrameElement>(null);
   const [refreshKey, setRefreshKey] = useState(0);
   const [mode, setMode] = useState<"direct" | "url">(
@@ -87,12 +89,16 @@ export default function LivePreview({ filePath, content, language, terminalOutpu
   const [activeUrl, setActiveUrl] = useState("http://localhost:5174");
   const [detectedUrl, setDetectedUrl] = useState<string | null>(null);
   const [autoRefreshOnSave, setAutoRefreshOnSave] = useState(true);
+  const [consoleLogs, setConsoleLogs] = useState<Array<{ level: string; message: string; timestamp: number }>>([]);
+  const [showConsole, setShowConsole] = useState(false);
+  const [lastError, setLastError] = useState<{ message: string; source: string; line: number } | null>(null);
   const prevContentRef = useRef(content);
+  const prevSaveKeyRef = useRef(saveFlashKey ?? 0);
 
   const filename = filePath.split(/[\\/]/).pop() ?? filePath;
   const canDirectPreview = isDirectPreviewable(language, filePath);
 
-  // Auto-detect dev server URL from terminal output
+  // ── Auto-detect dev server URL from terminal output ──────────────────────
   useEffect(() => {
     const url = detectDevServerUrl(terminalOutput ?? "");
     if (url && url !== detectedUrl) {
@@ -100,7 +106,37 @@ export default function LivePreview({ filePath, content, language, terminalOutpu
     }
   }, [terminalOutput]);
 
-  // Auto-refresh on file save (content change) in URL mode
+  // ── Hot reload: listen for file watcher events ───────────────────────────
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+    const setup = async () => {
+      try {
+        const unlistenFn = await listen<{ paths: string[]; kind: string }>("fs-changed", (event) => {
+          if (!autoRefreshOnSave || mode !== "url") return;
+          const changedPaths = event.payload.paths || [];
+          // Reload if any changed file is inside the project
+          if (changedPaths.length > 0) {
+            setRefreshKey(k => k + 1);
+          }
+        });
+        unlisten = unlistenFn;
+      } catch { /* listen not available (non-Tauri) */ }
+    };
+    setup();
+    return () => { if (unlisten) unlisten(); };
+  }, [autoRefreshOnSave, mode]);
+
+  // ── Refresh on save (parent incrementing saveFlashKey) ───────────────────
+  useEffect(() => {
+    if (saveFlashKey !== undefined && saveFlashKey !== prevSaveKeyRef.current) {
+      prevSaveKeyRef.current = saveFlashKey;
+      if (autoRefreshOnSave && mode === "url") {
+        setRefreshKey(k => k + 1);
+      }
+    }
+  }, [saveFlashKey, autoRefreshOnSave, mode]);
+
+  // ── Auto-refresh on content change (direct mode) ─────────────────────────
   useEffect(() => {
     if (!autoRefreshOnSave || mode !== "url") return;
     if (content !== prevContentRef.current) {
@@ -109,7 +145,7 @@ export default function LivePreview({ filePath, content, language, terminalOutpu
     }
   }, [content, mode, autoRefreshOnSave]);
 
-  // Apply direct mode preview
+  // ── Apply direct mode preview ────────────────────────────────────────────
   useEffect(() => {
     if (mode !== "direct") return;
     const iframe = iframeRef.current;
@@ -121,9 +157,81 @@ export default function LivePreview({ filePath, content, language, terminalOutpu
     return () => URL.revokeObjectURL(url);
   }, [content, language, filePath, refreshKey, mode]);
 
+  // ── Error overlay + console capture for URL mode ─────────────────────────
+  useEffect(() => {
+    const iframe = iframeRef.current;
+    if (!iframe || mode !== "url") return;
+
+    const handleMessage = (event: MessageEvent) => {
+      if (!event.data || typeof event.data !== "object") return;
+      const { type, level, message, timestamp } = event.data;
+
+      if (type === "error") {
+        setLastError({
+          message: String(event.data.message || "Unknown error"),
+          source: String(event.data.source || ""),
+          line: Number(event.data.line || 0),
+        });
+      } else if (type === "console") {
+        setConsoleLogs(prev => {
+          const next = [...prev, { level: level || "log", message: String(message || ""), timestamp: timestamp || Date.now() }];
+          return next.length > 100 ? next.slice(-100) : next;
+        });
+      }
+    };
+
+    window.addEventListener("message", handleMessage);
+    return () => window.removeEventListener("message", handleMessage);
+  }, [activeUrl, mode, refreshKey]);
+
+  // Inject error capture script into URL mode iframe
+  useEffect(() => {
+    if (mode !== "url") return;
+    const iframe = iframeRef.current;
+    if (!iframe) return;
+
+    const tryInject = () => {
+      try {
+        const iframeWindow = iframe.contentWindow;
+        if (!iframeWindow) return;
+
+        // Inject error + console capture (best-effort — works on same-origin pages)
+        const script = `
+          (function() {
+            if (window.__punam_injected__) return;
+            window.__punam_injected__ = true;
+            window.addEventListener('error', function(e) {
+              window.parent.postMessage({
+                type: 'error', message: e.message, source: e.filename, line: e.lineno
+              }, '*');
+            });
+            var _log = console.log; var _warn = console.warn; var _err = console.error;
+            function capture(level, args) {
+              window.parent.postMessage({ type: 'console', level: level, message: args.map(String).join(' '), timestamp: Date.now() }, '*');
+            }
+            console.log = function() { _log.apply(console, arguments); capture('log', arguments); };
+            console.warn = function() { _warn.apply(console, arguments); capture('warn', arguments); };
+            console.error = function() { _err.apply(console, arguments); capture('error', arguments); };
+          })();
+        `;
+        try {
+          (iframeWindow as any).eval(script);
+        } catch { /* cross-origin — can't inject */ }
+      } catch { /* cross-origin */ }
+    };
+
+    // Try injecting after load
+    iframe.addEventListener("load", () => setTimeout(tryInject, 300));
+    // Also try immediately (if already loaded)
+    setTimeout(tryInject, 500);
+  }, [activeUrl, mode, refreshKey]);
+
+  // ── URL bar handlers ─────────────────────────────────────────────────────
   const handleGoUrl = useCallback(() => {
     setActiveUrl(urlInput);
     setRefreshKey(k => k + 1);
+    setLastError(null);
+    setConsoleLogs([]);
   }, [urlInput]);
 
   const handleUseDetected = useCallback(() => {
@@ -132,7 +240,14 @@ export default function LivePreview({ filePath, content, language, terminalOutpu
     setActiveUrl(detectedUrl);
     setMode("url");
     setRefreshKey(k => k + 1);
+    setLastError(null);
+    setConsoleLogs([]);
   }, [detectedUrl]);
+
+  const handleRefresh = useCallback(() => {
+    setRefreshKey(k => k + 1);
+    setLastError(null);
+  }, []);
 
   return (
     <div className="live-preview-panel">
@@ -154,18 +269,26 @@ export default function LivePreview({ filePath, content, language, terminalOutpu
               <Globe size={12} /> URL
             </button>
           </div>
-          {/* Auto-refresh toggle */}
           <button
             className={`lp-mode-btn ${autoRefreshOnSave ? "active" : ""}`}
             onClick={() => setAutoRefreshOnSave(v => !v)}
-            title={autoRefreshOnSave ? "Auto-refresh on save: ON" : "Auto-refresh on save: OFF"}
+            title={autoRefreshOnSave ? "Hot Reload: ON" : "Hot Reload: OFF"}
           >
-            <Zap size={12} />
+            <Zap size={12} /> {autoRefreshOnSave ? "ON" : "OFF"}
           </button>
-          <button className="icon-btn small" onClick={() => setRefreshKey(k => k + 1)} title="Refresh" aria-label="Refresh">
+          {consoleLogs.length > 0 && (
+            <button
+              className={`lp-mode-btn ${showConsole ? "active" : ""}`}
+              onClick={() => setShowConsole(v => !v)}
+              title="Console output"
+            >
+              <Terminal size={12} /> {consoleLogs.length}
+            </button>
+          )}
+          <button className="icon-btn small" onClick={handleRefresh} title="Refresh" aria-label="Refresh">
             <RefreshCw size={13} />
           </button>
-          <button className="icon-btn small" onClick={() => window.open(activeUrl, "_blank")} title="Open in browser" disabled={mode === "direct"} aria-label="Open in browser">
+          <button className="icon-btn small" onClick={() => window.open(mode === "url" ? activeUrl : "", "_blank")} title="Open in browser" disabled={mode !== "url"} aria-label="Open in browser">
             <ExternalLink size={13} />
           </button>
           <button className="icon-btn small" onClick={onClose} aria-label="Close preview">
@@ -174,14 +297,32 @@ export default function LivePreview({ filePath, content, language, terminalOutpu
         </div>
       </div>
 
-      {/* Auto-detected dev server banner */}
+      {/* Error overlay */}
+      {lastError && (
+        <div className="lp-error-overlay">
+          <div className="lp-error-header">
+            <span>⚠️ Page Error</span>
+            <button className="icon-btn small" onClick={() => setLastError(null)} aria-label="Dismiss error">
+              <X size={12} />
+            </button>
+          </div>
+          <div className="lp-error-body">
+            <code className="lp-error-message">{lastError.message}</code>
+            {lastError.source && (
+              <div className="lp-error-source">
+                {lastError.source}{lastError.line > 0 ? `:${lastError.line}` : ""}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Detected dev server banner */}
       {detectedUrl && mode !== "url" && (
         <div className="lp-detected-banner">
           <Zap size={12} />
           <span>Dev server detected: <code>{detectedUrl}</code></span>
-          <button className="btn-primary compact" onClick={handleUseDetected}>
-            Open
-          </button>
+          <button className="btn-primary compact" onClick={handleUseDetected}>Open</button>
           <button className="icon-btn small" onClick={() => setDetectedUrl(null)} aria-label="Dismiss">
             <X size={11} />
           </button>
@@ -206,6 +347,19 @@ export default function LivePreview({ filePath, content, language, terminalOutpu
             </button>
           )}
           <button className="btn-primary compact" onClick={handleGoUrl}>Go</button>
+        </div>
+      )}
+
+      {/* Console panel */}
+      {showConsole && consoleLogs.length > 0 && (
+        <div className="lp-console">
+          {consoleLogs.map((entry, i) => (
+            <div key={i} className={`lp-console-entry lp-${entry.level}`}>
+              <span className="lp-console-timestamp">{new Date(entry.timestamp).toLocaleTimeString()}</span>
+              <span className="lp-console-level">[{entry.level}]</span>
+              <span className="lp-console-msg">{entry.message}</span>
+            </div>
+          ))}
         </div>
       )}
 

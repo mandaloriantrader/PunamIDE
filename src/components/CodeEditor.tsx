@@ -243,20 +243,15 @@ export default function CodeEditor({
     }> | null;
   } | null>(null);
 
-  // Keep a stable ref to the editor instance for use in callbacks
   const editorRef = useRef<editor.IStandaloneCodeEditor | null>(null);
   const monacoRef = useRef<typeof import("monaco-editor") | null>(null);
   const [saveFlashKey, setSaveFlashKey] = useState(0);
   const onSaveRef = useRef<Props["onSave"]>(onSave);
   const pathRef = useRef(path);
   const lspEnabledRef = useRef(lspEnabled);
-  // Decoration collection for the green-flash effect
   const decorationIdsRef = useRef<string[]>([]);
-  // LSP provider disposables
   const lspDisposablesRef = useRef<IDisposable[]>([]);
-  // Track which languages have providers registered
   const lspRegisteredLangsRef = useRef<Set<string>>(new Set());
-  // Track whether LSP didOpen was sent for current file
   const lspOpenedFileRef = useRef<string | null>(null);
 
   useEffect(() => {
@@ -266,70 +261,44 @@ export default function CodeEditor({
   }, [lspEnabled, onSave, path]);
 
   // ── LSP Lifecycle ──────────────────────────────────────────────────────────
-  // Connect LSP manager once when component mounts with a project path
   useEffect(() => {
     if (!lspEnabled || !projectPath) return;
-
     lspManager.setProjectPath(projectPath);
-    lspManager.connect().catch((err) => {
-      console.warn("[LSP] Failed to connect:", err);
-    });
-
-    return () => {
-      // Don't disconnect on every unmount — LSP persists across file switches.
-      // Cleanup happens at app level or when project changes.
-    };
+    lspManager.connect().catch((err) => { console.warn("[LSP] Failed to connect:", err); });
+    return () => {};
   }, [lspEnabled, projectPath]);
 
-  // Start LSP server for the current language and register Monaco providers
   useEffect(() => {
     if (!lspEnabled || !projectPath || !path) return;
-
     const monaco = monacoRef.current;
     const languageId = lspManager.getLanguageForFile(path);
-    if (!languageId) return; // File type not supported by any LSP server
-
+    if (!languageId) return;
     let cancelled = false;
-
     const initLsp = async () => {
-      // Start the server (no-op if already running)
       const started = await lspManager.startServer(languageId);
       if (!started || cancelled) return;
-
-      // Register Monaco providers for this language if not already registered
       if (monaco && !lspRegisteredLangsRef.current.has(languageId)) {
         const disposables = registerLspProviders(monaco, lspService, [languageId]);
         lspDisposablesRef.current.push(...disposables);
         lspRegisteredLangsRef.current.add(languageId);
       }
     };
-
     initLsp();
-
-    return () => {
-      cancelled = true;
-    };
+    return () => { cancelled = true; };
   }, [lspEnabled, projectPath, path]);
 
-  // Send didOpen/didClose when the active file changes
   useEffect(() => {
     if (!lspEnabled || !projectPath || !path) return;
-
     const languageId = lspManager.getLanguageForFile(path);
     if (!languageId) return;
-
-    // Close previous file if different
     const prevFile = lspOpenedFileRef.current;
     if (prevFile && prevFile !== path) {
       const prevLangId = lspManager.getLanguageForFile(prevFile);
-      if (prevLangId) {
-        lspManager.notifyDocumentClose(prevFile, prevLangId);
-      }
+      if (prevLangId) lspManager.notifyDocumentClose(prevFile, prevLangId);
     }
-
-    // Open current file — retry until server is ready (max 3 seconds)
     let attempts = 0;
     const maxAttempts = 6;
+    let timer: ReturnType<typeof setTimeout>;
     const tryOpen = () => {
       attempts++;
       if (lspManager.isServerRunning(languageId)) {
@@ -339,16 +308,11 @@ export default function CodeEditor({
         timer = setTimeout(tryOpen, 500);
       }
     };
-    let timer = setTimeout(tryOpen, 500);
-
-    return () => {
-      clearTimeout(timer);
-    };
-    // Only re-run when path changes, not content
+    timer = setTimeout(tryOpen, 500);
+    return () => { clearTimeout(timer); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [lspEnabled, projectPath, path]);
 
-  // Notify LSP of content changes (debounced internally by lspService)
   const notifyLspChange = useCallback((newContent: string) => {
     if (!lspEnabled || !path) return;
     const languageId = lspManager.getLanguageForFile(path);
@@ -356,22 +320,15 @@ export default function CodeEditor({
     lspManager.notifyDocumentChange(path, languageId, newContent);
   }, [lspEnabled, path]);
 
-  // Cleanup LSP providers on unmount
   useEffect(() => {
     return () => {
-      for (const d of lspDisposablesRef.current) {
-        d.dispose();
-      }
+      for (const d of lspDisposablesRef.current) d.dispose();
       lspDisposablesRef.current = [];
       lspRegisteredLangsRef.current.clear();
-
-      // Close the last opened file
       const openedFile = lspOpenedFileRef.current;
       if (openedFile) {
         const langId = lspManager.getLanguageForFile(openedFile);
-        if (langId) {
-          lspManager.notifyDocumentClose(openedFile, langId);
-        }
+        if (langId) lspManager.notifyDocumentClose(openedFile, langId);
         lspOpenedFileRef.current = null;
       }
     };
@@ -392,7 +349,6 @@ export default function CodeEditor({
       defineRuntimeTheme(monaco, nextType);
       monaco.editor.setTheme("punam-runtime");
     };
-
     window.addEventListener("punam-theme-change", handleThemeChange);
     return () => window.removeEventListener("punam-theme-change", handleThemeChange);
   }, []);
@@ -402,45 +358,27 @@ export default function CodeEditor({
     const ed = editorRef.current;
     const monaco = monacoRef.current;
     if (!ed || !monaco) return;
-
     const model = ed.getModel();
     if (!model) return;
-
     const position = ed.getPosition();
     if (!position) return;
-
-    // ── Multi-cursor support ──────────────────────────────────────────────────
-    // If there are multiple cursor selections, handle them all at once
     const selections = ed.getSelections() ?? [];
     const nonEmptySelections = selections.filter(s => !s.isEmpty());
-
     if (nonEmptySelections.length > 1) {
-      // Collect all selected texts
       const snippets = nonEmptySelections.map(s => model.getValueInRange(s));
       const combined = snippets.join("\n---\n");
-
-      // Position widget below the last selection
       const lastSel = nonEmptySelections[nonEmptySelections.length - 1];
       const scrollTop = ed.getScrollTop();
       const editorLayout = ed.getLayoutInfo();
       const lineHeightPx = ed.getOption(monaco.editor.EditorOption.lineHeight);
       const contentTop = ed.getTopForLineNumber(lastSel.endLineNumber);
-
       setInlineEditSelection({
         selectedCode: combined,
         prefix: `${snippets.length} selections`,
         suffix: "",
-        range: {
-          startLine: lastSel.startLineNumber,
-          startCol: lastSel.startColumn,
-          endLine: lastSel.endLineNumber,
-          endCol: lastSel.endColumn,
-        },
+        range: { startLine: lastSel.startLineNumber, startCol: lastSel.startColumn, endLine: lastSel.endLineNumber, endCol: lastSel.endColumn },
         multiSelections: nonEmptySelections.map(s => ({
-          startLine: s.startLineNumber,
-          startCol: s.startColumn,
-          endLine: s.endLineNumber,
-          endCol: s.endColumn,
+          startLine: s.startLineNumber, startCol: s.startColumn, endLine: s.endLineNumber, endCol: s.endColumn,
           originalText: model.getValueInRange(s),
         })),
       });
@@ -448,108 +386,61 @@ export default function CodeEditor({
       setInlineEditOpen(true);
       return;
     }
-
-    // ── Single cursor (original behaviour) ───────────────────────────────────
     const selection = ed.getSelection();
     const hasSelection = selection && !selection.isEmpty();
     const range = hasSelection
-      ? {
-          startLine: selection.startLineNumber,
-          startCol: selection.startColumn,
-          endLine: selection.endLineNumber,
-          endCol: selection.endColumn,
-        }
-      : {
-          startLine: position.lineNumber,
-          startCol: 1,
-          endLine: position.lineNumber,
-          endCol: model.getLineMaxColumn(position.lineNumber),
-        };
-
-    const selectedCode = model.getValueInRange({
-      startLineNumber: range.startLine,
-      startColumn: range.startCol,
-      endLineNumber: range.endLine,
-      endColumn: range.endCol,
-    });
-
+      ? { startLine: selection.startLineNumber, startCol: selection.startColumn, endLine: selection.endLineNumber, endCol: selection.endColumn }
+      : { startLine: position.lineNumber, startCol: 1, endLine: position.lineNumber, endCol: model.getLineMaxColumn(position.lineNumber) };
+    const selectedCode = model.getValueInRange({ startLineNumber: range.startLine, startColumn: range.startCol, endLineNumber: range.endLine, endColumn: range.endCol });
     const fullText = model.getValue();
     const lines = fullText.split("\n");
     const prefixLines = lines.slice(Math.max(0, range.startLine - 61), range.startLine - 1);
     const suffixLines = lines.slice(range.endLine, Math.min(lines.length, range.endLine + 20));
-
     const scrollTop = ed.getScrollTop();
     const editorLayout = ed.getLayoutInfo();
     const lineHeightPx = ed.getOption(monaco.editor.EditorOption.lineHeight);
     const contentTop = ed.getTopForLineNumber(range.endLine);
-
-    setInlineEditSelection({
-      selectedCode,
-      prefix: prefixLines.join("\n"),
-      suffix: suffixLines.join("\n"),
-      range,
-      multiSelections: null,
-    });
+    setInlineEditSelection({ selectedCode, prefix: prefixLines.join("\n"), suffix: suffixLines.join("\n"), range, multiSelections: null });
     setInlineEditPos({ top: contentTop - scrollTop, left: editorLayout.contentLeft, lineHeight: lineHeightPx });
     setInlineEditOpen(true);
   }, []);
 
-  // ── Apply AI result back into the editor ──────────────────────────────────
+  // ── Apply AI result ──────────────────────────────────────────────────────
   const handleInlineApply = useCallback(
     (newCode: string) => {
       const ed = editorRef.current;
       const monaco = monacoRef.current;
       if (!ed || !monaco || !inlineEditSelection) return;
-
-      // ── Multi-cursor apply ───────────────────────────────────────────────
       if (inlineEditSelection.multiSelections && inlineEditSelection.multiSelections.length > 0) {
-        // The AI response may contain multiple sections separated by ---
         const parts = newCode.split(/\n---\n/);
         const edits = inlineEditSelection.multiSelections.map((sel, i) => ({
           range: new monaco.Range(sel.startLine, sel.startCol, sel.endLine, sel.endCol),
           text: (parts[i] ?? parts[0] ?? newCode).trimEnd(),
         }));
-
-        // Apply all at once — Monaco handles offset adjustments automatically
         ed.executeEdits("inline-edit-multi", edits);
-
-        // Flash all edited ranges green
         const flashDecorations = inlineEditSelection.multiSelections.map(sel => ({
           range: new monaco.Range(sel.startLine, 1, sel.endLine, 1),
           options: { isWholeLine: true, className: INLINE_EDIT_DECORATION_CLASSNAME },
         }));
         const newDecorations = ed.deltaDecorations(decorationIdsRef.current, flashDecorations);
         decorationIdsRef.current = newDecorations;
-        setTimeout(() => {
-          if (editorRef.current) {
-            decorationIdsRef.current = editorRef.current.deltaDecorations(decorationIdsRef.current, []);
-          }
-        }, 1400);
-
+        setTimeout(() => { if (editorRef.current) decorationIdsRef.current = editorRef.current.deltaDecorations(decorationIdsRef.current, []); }, 1400);
         onChange(ed.getModel()?.getValue() ?? "");
         setInlineEditOpen(false);
         setInlineEditSelection(null);
         setTimeout(() => ed.focus(), 50);
         return;
       }
-
-      // ── Single-cursor apply (original) ──────────────────────────────────
       const { range } = inlineEditSelection;
       const editRange = new monaco.Range(range.startLine, range.startCol, range.endLine, range.endCol);
       ed.executeEdits("inline-edit", [{ range: editRange, text: newCode }]);
-
       const newEndLine = range.startLine + newCode.split("\n").length - 1;
       const flashRange = new monaco.Range(range.startLine, 1, newEndLine, 1);
       const newDecorations = ed.deltaDecorations(decorationIdsRef.current, [
         { range: flashRange, options: { isWholeLine: true, className: INLINE_EDIT_DECORATION_CLASSNAME } },
       ]);
       decorationIdsRef.current = newDecorations;
-      setTimeout(() => {
-        if (editorRef.current) {
-          decorationIdsRef.current = editorRef.current.deltaDecorations(decorationIdsRef.current, []);
-        }
-      }, 1400);
-
+      setTimeout(() => { if (editorRef.current) decorationIdsRef.current = editorRef.current.deltaDecorations(decorationIdsRef.current, []); }, 1400);
       onChange(ed.getModel()?.getValue() ?? "");
       setInlineEditOpen(false);
       setInlineEditSelection(null);
@@ -566,18 +457,11 @@ export default function CodeEditor({
 
   const handleManualSave = useCallback(async () => {
     const currentPath = pathRef.current;
-
     if (lspEnabledRef.current && currentPath) {
       const langId = lspManager.getLanguageForFile(currentPath);
-      if (langId) {
-        lspManager.notifyDocumentSave(currentPath, langId);
-      }
+      if (langId) lspManager.notifyDocumentSave(currentPath, langId);
     }
-
-    if (onSaveRef.current) {
-      await onSaveRef.current();
-      setSaveFlashKey((key) => key + 1);
-    }
+    if (onSaveRef.current) { await onSaveRef.current(); setSaveFlashKey((key) => key + 1); }
   }, []);
 
   // ── Monaco onMount ─────────────────────────────────────────────────────────
@@ -587,230 +471,77 @@ export default function CodeEditor({
     defineRuntimeTheme(monaco, theme === "light" ? "light" : "dark");
     monaco.editor.setTheme("punam-runtime");
 
-    // Selection changes
     if (onSelectionChange) {
       editorInstance.onDidChangeCursorSelection(() => {
         const sel = editorInstance.getSelection();
-        if (sel && !sel.isEmpty()) {
-          onSelectionChange(editorInstance.getModel()?.getValueInRange(sel) || "");
-        } else {
-          onSelectionChange("");
-        }
+        if (sel && !sel.isEmpty()) onSelectionChange(editorInstance.getModel()?.getValueInRange(sel) || "");
+        else onSelectionChange("");
       });
     }
-
-    // Cursor position changes
     if (onCursorChange) {
-      editorInstance.onDidChangeCursorPosition((e) => {
-        onCursorChange({ line: e.position.lineNumber, column: e.position.column });
-      });
+      editorInstance.onDidChangeCursorPosition((e) => onCursorChange({ line: e.position.lineNumber, column: e.position.column }));
     }
-
-    // Initial problem markers
-    if (problems && problems.length > 0) {
-      setMarkers(editorInstance, monaco, problems, path);
-    }
-
-    // Debugger breakpoint glyphs
-    // We add a click handler to the glyph margin to toggle breakpoints
+    if (problems && problems.length > 0) setMarkers(editorInstance, monaco, problems, path);
     editorInstance.onMouseDown((e) => {
       if (e.target.type === monaco.editor.MouseTargetType.GUTTER_GLYPH_MARGIN && onToggleBreakpoint) {
-        const line = e.target.position!.lineNumber;
-        onToggleBreakpoint(line);
+        onToggleBreakpoint(e.target.position!.lineNumber);
       }
     });
 
-    // ── Ctrl+K → open inline edit ──────────────────────────────────────────
-    editorInstance.addCommand(
-      monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyK,
-      () => {
-        openInlineEdit();
-      },
-    );
+    editorInstance.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyK, () => openInlineEdit());
+    editorInstance.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, () => { void handleManualSave(); });
+    editorInstance.addAction({ id: "punam-save-file", label: "Save File  (Ctrl+S)", contextMenuGroupId: "navigation", contextMenuOrder: -10, run: () => { void handleManualSave(); } });
 
-    // ── Ctrl+S → notify LSP of save ──────────────────────────────────────────
-    editorInstance.addCommand(
-      monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS,
-      () => { void handleManualSave(); },
-    );
-
-    editorInstance.addAction({
-      id: "punam-save-file",
-      label: "Save File  (Ctrl+S)",
-      contextMenuGroupId: "navigation",
-      contextMenuOrder: -10,
-      run: () => { void handleManualSave(); },
-    });
-
-    // Context menu: Punam actions
     if (onAskPunam) {
-      // Inline edit (Ctrl+K)
-      editorInstance.addAction({
-        id: "punam-inline-edit",
-        label: "Punam: Edit Here  (Ctrl+K)",
-        contextMenuGroupId: "punam",
-        contextMenuOrder: 0,
-        run: () => openInlineEdit(),
-      });
-
-      editorInstance.addAction({
-        id: "punam-explain",
-        label: "Punam: Explain This",
-        keybindings: [monaco.KeyMod.CtrlCmd | monaco.KeyMod.Shift | monaco.KeyCode.KeyE],
-        contextMenuGroupId: "punam",
-        contextMenuOrder: 1,
-        run: (ed) => {
-          const sel = ed.getSelection();
-          const text =
-            sel && !sel.isEmpty()
-              ? ed.getModel()?.getValueInRange(sel) || ""
-              : ed.getModel()?.getLineContent(ed.getPosition()?.lineNumber || 1) || "";
-          if (text.trim()) onAskPunam(text, "explain");
-        },
-      });
-
-      editorInstance.addAction({
-        id: "punam-fix",
-        label: "Punam: Fix This",
-        contextMenuGroupId: "punam",
-        contextMenuOrder: 2,
-        run: (ed) => {
-          const sel = ed.getSelection();
-          const text =
-            sel && !sel.isEmpty()
-              ? ed.getModel()?.getValueInRange(sel) || ""
-              : ed.getModel()?.getLineContent(ed.getPosition()?.lineNumber || 1) || "";
-          if (text.trim()) onAskPunam(text, "fix");
-        },
-      });
-
-      editorInstance.addAction({
-        id: "punam-refactor",
-        label: "Punam: Refactor This",
-        contextMenuGroupId: "punam",
-        contextMenuOrder: 3,
-        run: (ed) => {
-          const sel = ed.getSelection();
-          const text =
-            sel && !sel.isEmpty()
-              ? ed.getModel()?.getValueInRange(sel) || ""
-              : ed.getModel()?.getLineContent(ed.getPosition()?.lineNumber || 1) || "";
-          if (text.trim()) onAskPunam(text, "refactor");
-        },
-      });
-
-      // Generate tests
-      editorInstance.addAction({
-        id: "punam-gen-tests",
-        label: "Punam: Generate Tests",
-        contextMenuGroupId: "punam",
-        contextMenuOrder: 4,
-        run: (ed) => {
-          const sel = ed.getSelection();
-          const text =
-            sel && !sel.isEmpty()
-              ? ed.getModel()?.getValueInRange(sel) || ""
-              : ed.getModel()?.getValue() || "";
-          if (text.trim()) onAskPunam(`Generate comprehensive unit tests for this code:\n\n${text}`, "fix");
-        },
-      });
-
-      // AI Docs
-      editorInstance.addAction({
-        id: "punam-gen-docs",
-        label: "Punam: Generate Docs",
-        contextMenuGroupId: "punam",
-        contextMenuOrder: 5,
-        run: (ed) => {
-          const sel = ed.getSelection();
-          const text =
-            sel && !sel.isEmpty()
-              ? ed.getModel()?.getValueInRange(sel) || ""
-              : ed.getModel()?.getLineContent(ed.getPosition()?.lineNumber || 1) || "";
-          if (text.trim()) onAskPunam(`Add JSDoc/docstring documentation to this code:\n\n${text}`, "explain");
-        },
-      });
+      editorInstance.addAction({ id: "punam-inline-edit", label: "Punam: Edit Here  (Ctrl+K)", contextMenuGroupId: "punam", contextMenuOrder: 0, run: () => openInlineEdit() });
+      editorInstance.addAction({ id: "punam-explain", label: "Punam: Explain This", keybindings: [monaco.KeyMod.CtrlCmd | monaco.KeyMod.Shift | monaco.KeyCode.KeyE], contextMenuGroupId: "punam", contextMenuOrder: 1, run: (ed) => { const sel = ed.getSelection(); const text = sel && !sel.isEmpty() ? ed.getModel()?.getValueInRange(sel) || "" : ed.getModel()?.getLineContent(ed.getPosition()?.lineNumber || 1) || ""; if (text.trim()) onAskPunam(text, "explain"); } });
+      editorInstance.addAction({ id: "punam-fix", label: "Punam: Fix This", contextMenuGroupId: "punam", contextMenuOrder: 2, run: (ed) => { const sel = ed.getSelection(); const text = sel && !sel.isEmpty() ? ed.getModel()?.getValueInRange(sel) || "" : ed.getModel()?.getLineContent(ed.getPosition()?.lineNumber || 1) || ""; if (text.trim()) onAskPunam(text, "fix"); } });
+      editorInstance.addAction({ id: "punam-refactor", label: "Punam: Refactor This", contextMenuGroupId: "punam", contextMenuOrder: 3, run: (ed) => { const sel = ed.getSelection(); const text = sel && !sel.isEmpty() ? ed.getModel()?.getValueInRange(sel) || "" : ed.getModel()?.getLineContent(ed.getPosition()?.lineNumber || 1) || ""; if (text.trim()) onAskPunam(text, "refactor"); } });
+      editorInstance.addAction({ id: "punam-gen-tests", label: "Punam: Generate Tests", contextMenuGroupId: "punam", contextMenuOrder: 4, run: (ed) => { const sel = ed.getSelection(); const text = sel && !sel.isEmpty() ? ed.getModel()?.getValueInRange(sel) || "" : ed.getModel()?.getValue() || ""; if (text.trim()) onAskPunam(`Generate comprehensive unit tests for this code:\n\n${text}`, "fix"); } });
+      editorInstance.addAction({ id: "punam-gen-docs", label: "Punam: Generate Docs", contextMenuGroupId: "punam", contextMenuOrder: 5, run: (ed) => { const sel = ed.getSelection(); const text = sel && !sel.isEmpty() ? ed.getModel()?.getValueInRange(sel) || "" : ed.getModel()?.getLineContent(ed.getPosition()?.lineNumber || 1) || ""; if (text.trim()) onAskPunam(`Add JSDoc/docstring documentation to this code:\n\n${text}`, "explain"); } });
     }
 
-    // Inline completion provider (Copilot-style)
+    // Register inline completion provider (Copilot-style ghost text)
     if (inlineCompletionEnabled && aiProviders.length > 0) {
-      registerInlineCompletionProvider(monaco, aiProviders);
+      setupInlineCompletion(monaco, aiProviders);
     }
   };
 
   return (
     <div className="code-editor" style={{ position: "relative" }}>
       <Editor
-        height="100%"
-        path={path}
-        line={line}
-        language={language}
-        value={content}
-        beforeMount={handleBeforeMount}
-        onMount={handleMount}
-        theme="punam-runtime"
-        onChange={(val) => {
-          const newVal = val || "";
-          onChange(newVal);
-          notifyLspChange(newVal);
-        }}
+        height="100%" path={path} line={line} language={language} value={content}
+        beforeMount={handleBeforeMount} onMount={handleMount} theme="punam-runtime"
+        onChange={(val) => { const newVal = val || ""; onChange(newVal); notifyLspChange(newVal); }}
         onValidate={() => {}}
         options={{
-          fontSize: fontSize,
-          lineHeight: Math.round(fontSize * 1.6),
+          fontSize, lineHeight: Math.round(fontSize * 1.6),
           fontFamily: "'Fira Code', 'Cascadia Code', 'JetBrains Mono', 'Consolas', monospace",
-          minimap: { enabled: showMinimap, maxColumn: 80 },
-          wordWrap: wordWrap,
-          lineNumbers: "on",
-          lineNumbersMinChars: 4,
-          renderLineHighlight: "all",
-          renderLineHighlightOnlyWhenFocus: false,
+          minimap: { enabled: showMinimap, maxColumn: 80 }, wordWrap,
+          lineNumbers: "on", lineNumbersMinChars: 4,
+          renderLineHighlight: "all", renderLineHighlightOnlyWhenFocus: false,
           renderWhitespace: "selection",
-          guides: {
-            indentation: true,
-            highlightActiveIndentation: true,
-          },
+          guides: { indentation: true, highlightActiveIndentation: true },
           bracketPairColorization: { enabled: true },
-          autoClosingBrackets: "always",
-          autoClosingQuotes: "always",
-          formatOnPaste: true,
-          scrollBeyondLastLine: false,
-          smoothScrolling: true,
-          cursorBlinking: "smooth",
-          cursorSmoothCaretAnimation: "on",
-          cursorWidth: 2,
-          padding: { top: 10, bottom: 10 },
-          tabSize: 2,
-          glyphMargin: true,
+          autoClosingBrackets: "always", autoClosingQuotes: "always",
+          formatOnPaste: true, scrollBeyondLastLine: false, smoothScrolling: true,
+          cursorBlinking: "smooth", cursorSmoothCaretAnimation: "on", cursorWidth: 2,
+          padding: { top: 10, bottom: 10 }, tabSize: 2, glyphMargin: true,
           inlineSuggest: { enabled: true },
           quickSuggestions: { other: true, comments: false, strings: true },
         }}
       />
-
-      {/* Breakpoint glyphs */}
-      <BreakpointGlyphs editor={editorRef.current} monaco={monacoRef.current} breakpoints={breakpoints} currentDebugSource={currentDebugSource} currentFilePath={path} />
-
-      {/* ── Inline edit widget overlay ── */}
-      {saveFlashKey > 0 && (
-        <div
-          key={saveFlashKey}
-          className="editor-save-flash"
-          aria-label="Saved"
-          role="status"
-        />
-      )}
-
+      <BreakpointGlyphs editor={editorRef.current} monaco={monacoRef.current} breakpoints={breakpoints} currentDebugSource={currentDebugSource || null} currentFilePath={path} />
+      {saveFlashKey > 0 && <div key={saveFlashKey} className="editor-save-flash" aria-label="Saved" role="status" />}
       {inlineEditOpen && inlineEditSelection && (
         <InlineEditWidget
           position={inlineEditPos}
           selectedCode={inlineEditSelection.selectedCode}
           prefixContext={inlineEditSelection.multiSelections ? "" : inlineEditSelection.prefix}
           suffixContext={inlineEditSelection.multiSelections ? "" : inlineEditSelection.suffix}
-          language={language}
-          aiProviders={aiProviders}
+          language={language} aiProviders={aiProviders}
           multiCursorCount={inlineEditSelection.multiSelections?.length ?? 0}
-          onApply={handleInlineApply}
-          onDismiss={handleInlineDismiss}
+          onApply={handleInlineApply} onDismiss={handleInlineDismiss}
         />
       )}
     </div>
@@ -819,155 +550,68 @@ export default function CodeEditor({
 
 // ─── Problem markers ──────────────────────────────────────────────────────────
 
-function setMarkers(
-  editorInstance: editor.IStandaloneCodeEditor,
-  monaco: typeof import("monaco-editor"),
-  problems: Problem[],
-  currentPath: string,
-) {
+function setMarkers(editorInstance: editor.IStandaloneCodeEditor, monaco: typeof import("monaco-editor"), problems: Problem[], currentPath: string) {
   const model = editorInstance.getModel();
   if (!model) return;
-
   const normPath = (p: string) => p.replace(/\\/g, "/").toLowerCase();
   const currentNorm = normPath(currentPath);
-
   const fileProblems = problems.filter((p) => {
     const pNorm = normPath(p.path);
-    return (
-      currentNorm.endsWith(pNorm) ||
-      pNorm.endsWith(currentNorm.split("/").pop() || "")
-    );
+    return currentNorm.endsWith(pNorm) || pNorm.endsWith(currentNorm.split("/").pop() || "");
   });
-
   const markers: editor.IMarkerData[] = fileProblems.map((p) => {
     let severity: number;
-    switch (p.severity) {
-      case "error":
-        severity = monaco.MarkerSeverity.Error;
-        break;
-      case "warning":
-        severity = monaco.MarkerSeverity.Warning;
-        break;
-      default:
-        severity = monaco.MarkerSeverity.Info;
-    }
-    return {
-      severity,
-      message: p.message,
-      startLineNumber: p.line,
-      startColumn: p.column || 1,
-      endLineNumber: p.line,
-      endColumn: 1000,
-      source: "PunamIDE",
-    };
+    switch (p.severity) { case "error": severity = monaco.MarkerSeverity.Error; break; case "warning": severity = monaco.MarkerSeverity.Warning; break; default: severity = monaco.MarkerSeverity.Info; }
+    return { severity, message: p.message, startLineNumber: p.line, startColumn: p.column || 1, endLineNumber: p.line, endColumn: 1000, source: "PunamIDE" };
   });
-
   monaco.editor.setModelMarkers(model, "punamide-problems", markers);
 }
 
-// ─── Inline Completion Provider (Copilot-style) ───────────────────────────────
+// ─── Inline Completion Provider (Copilot-style ghost text) ───────────────────
 
 let inlineProviderRegistered = false;
 let lastCompletionRequest = 0;
 let currentAiProviders: AIProviderConfig[] = [];
 
-const COMPLETION_DEBOUNCE_MS = 800;
-const COMPLETION_SYSTEM_PROMPT = `You are a code completion engine. Given the code context (prefix before cursor and suffix after cursor), output ONLY the code that should be inserted at the cursor position. Rules:
-- Output ONLY the completion text, nothing else
-- No explanations, no markdown, no code fences
-- Complete the current line or add 1-3 logical next lines
-- Match the existing code style, indentation, and naming conventions
-- If the context doesn't suggest a clear completion, output nothing (empty string)
-- Keep completions short and focused (max 3-4 lines)`;
-
-function registerInlineCompletionProvider(
-  monaco: typeof import("monaco-editor"),
-  aiProviders: AIProviderConfig[],
-) {
+function setupInlineCompletion(monaco: typeof import("monaco-editor"), aiProviders: AIProviderConfig[]) {
   currentAiProviders = aiProviders;
   if (inlineProviderRegistered) return;
   inlineProviderRegistered = true;
 
   const provider: languages.InlineCompletionsProvider = {
-    provideInlineCompletions: async (
-      model: editor.ITextModel,
-      position: Position,
-      _context: languages.InlineCompletionContext,
-      token: CancellationToken,
-    ): Promise<languages.InlineCompletions> => {
+    provideInlineCompletions: async (model: editor.ITextModel, position: Position, _context: languages.InlineCompletionContext, token: CancellationToken): Promise<languages.InlineCompletions> => {
       const now = Date.now();
       lastCompletionRequest = now;
-      await new Promise((r) => setTimeout(r, COMPLETION_DEBOUNCE_MS));
-      if (lastCompletionRequest !== now || token.isCancellationRequested) {
-        return { items: [] };
-      }
+      await new Promise((r) => setTimeout(r, 800));
+      if (lastCompletionRequest !== now || token.isCancellationRequested) return { items: [] };
 
       const fullText = model.getValue();
       const offset = model.getOffsetAt(position);
       const prefix = fullText.slice(Math.max(0, offset - 1500), offset);
       const suffix = fullText.slice(offset, offset + 500);
-
       const currentLine = model.getLineContent(position.lineNumber);
       const beforeCursor = currentLine.slice(0, position.column - 1);
-      if (
-        !beforeCursor.trim() &&
-        !prefix.trim().endsWith("{") &&
-        !prefix.trim().endsWith("(")
-      ) {
-        return { items: [] };
-      }
+      if (!beforeCursor.trim() && !prefix.trim().endsWith("{") && !prefix.trim().endsWith("(")) return { items: [] };
 
-      const activeProvider = currentAiProviders.find(
-        (p) => p.apiKey && p.models.some((m) => m.enabled),
-      );
+      const activeProvider = currentAiProviders.find((p) => p.apiKey && p.models.some((m) => m.enabled));
       if (!activeProvider) return { items: [] };
       const activeModel = activeProvider.models.find((m) => m.enabled);
       if (!activeModel) return { items: [] };
 
       try {
         const resp = await sendToProviderStreaming(activeProvider, activeModel.id, {
-          systemPrompt: COMPLETION_SYSTEM_PROMPT,
-          userPrompt: `Language: ${model.getLanguageId()}\n\n// Code before cursor:\n${prefix}\n\n// Code after cursor:\n${suffix}\n\n// Complete from cursor position:`,
+          systemPrompt: "You are a code completion engine. Output ONLY the completion text — no explanations, no markdown, no code fences. Complete 1-3 logical lines. Match existing style and indentation.",
+          userPrompt: `Language: ${model.getLanguageId()}\n\nCode before cursor:\n${prefix}\n\nCode after cursor:\n${suffix}\n\nCompletion:`,
         });
-
-        if (token.isCancellationRequested || lastCompletionRequest !== now) {
-          return { items: [] };
-        }
-
+        if (token.isCancellationRequested || lastCompletionRequest !== now) return { items: [] };
         if (resp.success && resp.text.trim()) {
-          let completion = resp.text
-            .replace(/^```[\w]*\n?/, "")
-            .replace(/\n?```$/, "")
-            .replace(/^\n/, "");
-
-          if (
-            completion.length > 500 ||
-            /^(Here|This|The|I |Note)/i.test(completion)
-          ) {
-            return { items: [] };
-          }
-
-          return {
-            items: [
-              {
-                insertText: completion,
-                range: {
-                  startLineNumber: position.lineNumber,
-                  startColumn: position.column,
-                  endLineNumber: position.lineNumber,
-                  endColumn: position.column,
-                },
-              },
-            ],
-          };
+          let completion = resp.text.replace(/^```[\w]*\n?/, "").replace(/\n?```$/, "").replace(/^\n/, "");
+          if (completion.length > 500 || /^(Here|This|The|I |Note)/i.test(completion)) return { items: [] };
+          return { items: [{ insertText: completion, range: { startLineNumber: position.lineNumber, startColumn: position.column, endLineNumber: position.lineNumber, endColumn: position.column } }] };
         }
-      } catch {
-        // Silently fail
-      }
-
+      } catch { /* silently fail */ }
       return { items: [] };
     },
-
     disposeInlineCompletions: () => {},
   } as languages.InlineCompletionsProvider;
 

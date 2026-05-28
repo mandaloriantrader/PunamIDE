@@ -122,6 +122,10 @@ import { useAutoSave } from "./hooks/useAutoSave";
 // Background agent panel
 import BackgroundAgentPanel from "./components/BackgroundAgentPanel";
 
+// Keyboard shortcuts
+import { useKeyboardShortcuts } from "./hooks/useKeyboardShortcuts";
+import type { Keybinding, ShortcutHandler } from "./hooks/useKeyboardShortcuts";
+
 const isAbsolutePath = (path: string) => /^[A-Za-z]:[\\/]/.test(path) || path.startsWith("/");
 const normalizeFsPath = (path: string) => path.replace(/\\/g, "/").replace(/\/+/g, "/").toLowerCase();
 

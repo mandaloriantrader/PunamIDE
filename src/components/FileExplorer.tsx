@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useCallback, useMemo, useRef, useEffect } from "react";
 import {
   createDirectory,
   createFile,
@@ -29,6 +29,17 @@ interface ContextMenuState {
   entry?: FileEntry;
 }
 
+// ── Flat node for virtualized rendering ──────────────────────────────────────
+
+interface FlatNode {
+  entry: FileEntry;
+  depth: number;
+  index: number;
+}
+
+const ROW_HEIGHT = 28;
+const OVERSCAN = 15;
+
 const getSeparator = (path: string) => (path.includes("\\") ? "\\" : "/");
 
 const getParentPath = (path: string) => {
@@ -43,76 +54,140 @@ const joinPath = (base: string, name: string) => {
   return `${base.replace(/[\\/]+$/, "")}${separator}${name}`;
 };
 
-// ─── File tree item ────────────────────────────────────────────────────────────
+// ── Flatten visible tree ─────────────────────────────────────────────────────
 
-function FileTreeItem({
-  entry,
-  depth,
-  onFileSelect,
+function flattenVisibleTree(
+  entries: FileEntry[],
+  expandedSet: Set<string>,
+): FlatNode[] {
+  const result: FlatNode[] = [];
+  function walk(items: FileEntry[], depth: number) {
+    for (const entry of items) {
+      result.push({ entry, depth, index: result.length });
+      if (entry.is_dir && entry.children && expandedSet.has(entry.path)) {
+        walk(entry.children, depth + 1);
+      }
+    }
+  }
+  walk(entries, 0);
+  return result;
+}
+
+// ── VirtualTreeList ──────────────────────────────────────────────────────────
+
+function VirtualTreeList({
+  flatNodes,
   selectedFile,
+  expandedSet,
+  onToggleExpand,
+  onFileSelect,
   onContextMenu,
 }: {
-  entry: FileEntry;
-  depth: number;
-  onFileSelect: (path: string) => void;
+  flatNodes: FlatNode[];
   selectedFile?: string;
+  expandedSet: Set<string>;
+  onToggleExpand: (path: string) => void;
+  onFileSelect: (path: string) => void;
   onContextMenu: (event: React.MouseEvent, entry: FileEntry) => void;
 }) {
-  const [expanded, setExpanded] = useState(depth < 1);
-  const isSelected = selectedFile === entry.path;
+  const containerRef = useRef<HTMLDivElement>(null);
+  const [scrollTop, setScrollTop] = useState(0);
+  const [containerHeight, setContainerHeight] = useState(600);
 
-  if (entry.is_dir) {
-    return (
-      <div>
-        <div
-          className={`file-tree-item ${isSelected ? "selected" : ""}`}
-          style={{ paddingLeft: depth * 16 + 8 }}
-          onClick={() => setExpanded(!expanded)}
-          onContextMenu={(event) => onContextMenu(event, entry)}
-        >
-          <span className={`tree-icon chevron-icon ${expanded ? "expanded" : ""}`}>
-            <ChevronRight size={14} />
-          </span>
-          <span className="tree-icon" style={{ display: "flex", alignItems: "center" }}>
-            <FolderIcon open={expanded} name={entry.name} size={16} />
-          </span>
-          <span className="tree-name">{entry.name}</span>
-        </div>
-        {expanded && entry.children && (
-          <div className="folder-children expanded">
-            {entry.children.map((child) => (
-              <FileTreeItem
-                key={child.path}
-                entry={child}
-                depth={depth + 1}
-                onFileSelect={onFileSelect}
-                selectedFile={selectedFile}
-                onContextMenu={onContextMenu}
-              />
-            ))}
-          </div>
-        )}
-      </div>
-    );
-  }
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el) return;
+    const ro = new ResizeObserver((entries) => {
+      for (const entry of entries) {
+        setContainerHeight(entry.contentRect.height);
+      }
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+
+  const handleScroll = useCallback((e: React.UIEvent<HTMLDivElement>) => {
+    setScrollTop(e.currentTarget.scrollTop);
+  }, []);
+
+  const totalHeight = flatNodes.length * ROW_HEIGHT;
+
+  const startIndex = Math.max(0, Math.floor(scrollTop / ROW_HEIGHT) - OVERSCAN);
+  const endIndex = Math.min(
+    flatNodes.length,
+    Math.ceil((scrollTop + containerHeight) / ROW_HEIGHT) + OVERSCAN,
+  );
+
+  const visibleNodes = useMemo(
+    () => flatNodes.slice(startIndex, endIndex),
+    [flatNodes, startIndex, endIndex],
+  );
 
   return (
     <div
-      className={`file-tree-item ${isSelected ? "selected" : ""}`}
-      style={{ paddingLeft: depth * 16 + 8 }}
-      onClick={() => onFileSelect(entry.path)}
-      onContextMenu={(event) => onContextMenu(event, entry)}
+      ref={containerRef}
+      className="file-tree"
+      role="tree"
+      aria-label="Project files"
+      onScroll={handleScroll}
+      style={{ overflowY: "auto", overflowX: "hidden", flex: 1, position: "relative" }}
     >
-      <span className="tree-icon" style={{ width: 14 }} />
-      <span className="tree-icon" style={{ display: "flex", alignItems: "center", flexShrink: 0 }}>
-        <FileIcon name={entry.name} size={16} />
-      </span>
-      <span className="tree-name">{entry.name}</span>
+      <div style={{ height: totalHeight, position: "relative" }}>
+        {visibleNodes.map((node) => {
+          const { entry, depth, index } = node;
+          const isSelected = selectedFile === entry.path;
+          const isExpanded = entry.is_dir && expandedSet.has(entry.path);
+          const top = index * ROW_HEIGHT;
+
+          return (
+            <div
+              key={entry.path}
+              className={`file-tree-item ${isSelected ? "selected" : ""}`}
+              style={{
+                position: "absolute",
+                top,
+                left: 0,
+                right: 0,
+                height: ROW_HEIGHT,
+                paddingLeft: depth * 16 + 8,
+              }}
+              onClick={() => {
+                if (entry.is_dir) {
+                  onToggleExpand(entry.path);
+                } else {
+                  onFileSelect(entry.path);
+                }
+              }}
+              onContextMenu={(event) => onContextMenu(event, entry)}
+              data-path={entry.path}
+            >
+              {/* Chevron for directories */}
+              {entry.is_dir ? (
+                <span className={`tree-icon chevron-icon ${isExpanded ? "expanded" : ""}`}>
+                  <ChevronRight size={14} />
+                </span>
+              ) : (
+                <span className="tree-icon" style={{ width: 14 }} />
+              )}
+              {/* Folder/File icon */}
+              <span className="tree-icon" style={{ display: "flex", alignItems: "center", flexShrink: 0 }}>
+                {entry.is_dir ? (
+                  <FolderIcon open={isExpanded ?? false} name={entry.name} size={16} />
+                ) : (
+                  <FileIcon name={entry.name} size={16} />
+                )}
+              </span>
+              {/* Name */}
+              <span className="tree-name">{entry.name}</span>
+            </div>
+          );
+        })}
+      </div>
     </div>
   );
 }
 
-// ─── Main export ───────────────────────────────────────────────────────────────
+// ── Main export ───────────────────────────────────────────────────────────────
 
 export default function FileExplorer({
   files,
@@ -126,6 +201,45 @@ export default function FileExplorer({
   selectedFile,
 }: Props) {
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
+  const [expandedSet, setExpandedSet] = useState<Set<string>>(() => {
+    // Auto-expand root-level entries
+    const initial = new Set<string>();
+    for (const f of files) {
+      if (f.is_dir) initial.add(f.path);
+    }
+    return initial;
+  });
+
+  // Re-sync expanded set when files change (e.g. after refresh)
+  useEffect(() => {
+    setExpandedSet((prev) => {
+      const next = new Set<string>();
+      for (const f of files) {
+        if (f.is_dir && (prev.size === 0 || prev.has(f.path))) {
+          next.add(f.path);
+        }
+      }
+      return next;
+    });
+  }, [files]);
+
+  const handleToggleExpand = useCallback((path: string) => {
+    setExpandedSet((prev) => {
+      const next = new Set(prev);
+      if (next.has(path)) {
+        next.delete(path);
+      } else {
+        next.add(path);
+      }
+      return next;
+    });
+  }, []);
+
+  // Flatten only visible nodes
+  const flatNodes = useMemo(
+    () => flattenVisibleTree(files, expandedSet),
+    [files, expandedSet],
+  );
 
   const closeContextMenu = () => setContextMenu(null);
 
@@ -224,24 +338,29 @@ export default function FileExplorer({
       <div className="panel-header">
         <span>EXPLORER</span>
       </div>
-      <div className="file-tree" role="tree" aria-label="Project files">
-        {loading && files.length === 0 && (
-          <div className="file-tree-loading">
-            <div className="loading-spinner" />
-            <span>Loading files...</span>
-          </div>
-        )}
-        {files.map((entry) => (
-          <FileTreeItem
-            key={entry.path}
-            entry={entry}
-            depth={0}
-            onFileSelect={onFileSelect}
-            selectedFile={selectedFile}
-            onContextMenu={handleContextMenu}
-          />
-        ))}
-      </div>
+
+      {loading && files.length === 0 && (
+        <div className="file-tree-loading">
+          <div className="loading-spinner" />
+          <span>Loading files...</span>
+        </div>
+      )}
+
+      {flatNodes.length > 0 ? (
+        <VirtualTreeList
+          flatNodes={flatNodes}
+          selectedFile={selectedFile}
+          expandedSet={expandedSet}
+          onToggleExpand={handleToggleExpand}
+          onFileSelect={onFileSelect}
+          onContextMenu={handleContextMenu}
+        />
+      ) : !loading ? (
+        <div className="file-tree-empty">
+          <span>No files found</span>
+        </div>
+      ) : null}
+
       {contextMenu && (
         <div
           className="context-menu"

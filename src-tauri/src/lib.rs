@@ -177,6 +177,20 @@ const SKIP_DIRS: &[&str] = &[
     ".git", "node_modules", "__pycache__", ".pytest_cache", "venv", ".venv",
     "dist", "build", "out", "target", ".idea", ".vscode", ".next", ".nuxt",
     "coverage", ".gradle", "vendor", ".dart_tool", "egg-info",
+    // Additional heavy directories — never worth scanning
+    ".angular", ".cache", ".cargo", ".cdk", ".coverage", ".devcontainer",
+    ".expo", ".expo-shared", ".gitlab", ".husky", ".jekyll-cache",
+    ".meteor", ".nx", ".parcel-cache", ".platformio", ".roo",
+    ".rush", ".serverless", ".storybook", ".terraform", ".trunk",
+    ".turbo", ".vs", ".yarn", ".zeplin",
+    "android", "ios", "__MACOSX",
+    "bazel-bin", "bazel-out", "bazel-testlogs", "bazel-punamide",
+    "bin", "obj", "Debug", "Release", "x64", "x86",
+    ".rs", "cmake-build-debug", "cmake-build-release",
+    "DerivedData", "Library", "Pods",
+    "generated", ".svelte-kit", ".solid", ".output",
+    "tmp", "temp", "cache", ".cache",
+    ".terraform.d", ".serverless_next",
 ];
 
 const SKIP_FILES: &[&str] = &[
@@ -2112,7 +2126,307 @@ fn diff_strings(old_text: String, new_text: String) -> DiffResult {
     DiffResult { hunks, additions, deletions }
 }
 
-// --- AI Context Builder ---
+// --- Unified Context Engine (TF-IDF + git + tabs) ---
+
+#[derive(Serialize, Debug)]
+pub struct RelevantContext {
+    pub project_summary: String,
+    pub relevant_files: Vec<ContextFile>,
+    pub git_status: Vec<String>,
+    pub open_tab_paths: Vec<String>,
+    pub total_tokens_estimate: usize,
+}
+
+#[tauri::command]
+fn get_relevant_context(
+    query: String,
+    open_tab_paths: Vec<String>,
+    max_files: usize,
+    state: State<ProjectRoot>,
+    cache: State<ProjectIndexCache>,
+    code_index: State<CodebaseIndex>,
+) -> Result<RelevantContext, String> {
+    let root = get_project_root(&state)?;
+    let root_path = Path::new(&root);
+
+    // 1. Ensure project index is built
+    let index = {
+        let cached = cache.0.lock().map_err(|_| "Lock error".to_string())?;
+        if cached.is_empty() {
+            drop(cached);
+            refresh_project_index_impl(&root, &cache)?;
+            cache.0.lock().map_err(|_| "Lock error".to_string())?.clone()
+        } else {
+            cached.clone()
+        }
+    };
+
+    let project_name = root_path
+        .file_name()
+        .map(|n| n.to_string_lossy().to_string())
+        .unwrap_or_else(|| root.clone());
+
+    if index.is_empty() {
+        return Ok(RelevantContext {
+            project_summary: format!("Project: {} (no files indexed)", project_name),
+            relevant_files: Vec::new(),
+            git_status: Vec::new(),
+            open_tab_paths,
+            total_tokens_estimate: 0,
+        });
+    }
+
+    // 2. Build scored file list combining TF-IDF + token overlap
+    let mut scored_files: Vec<(f64, String)> = Vec::new();
+    let query_lower = query.to_lowercase();
+
+    // 2a. Try TF-IDF codebase index first (deep semantic)
+    if let Ok(idx_guard) = code_index.0.lock() {
+        if let Some(ref tfidf) = *idx_guard {
+            let query_tokens = tokenize_code(&query);
+            if !query_tokens.is_empty() {
+                let doc_count = tfidf.chunks.len() as f64;
+                let mut tf_scores: HashMap<usize, f64> = HashMap::new();
+                for token in &query_tokens {
+                    if let Some(entries) = tfidf.inverted.get(token.as_str()) {
+                        let idf = (doc_count / (entries.len() as f64 + 1.0)).ln() + 1.0;
+                        for &(chunk_idx, tf) in entries {
+                            *tf_scores.entry(chunk_idx).or_insert(0.0) += tf * idf;
+                        }
+                    }
+                }
+                // Aggregate by file path (max chunk score per file)
+                let mut file_scores: HashMap<String, f64> = HashMap::new();
+                for (chunk_idx, score) in tf_scores {
+                    let path = &tfidf.chunks[chunk_idx].path;
+                    let entry = file_scores.entry(path.clone()).or_insert(0.0);
+                    *entry = entry.max(score);
+                }
+                for (path, score) in file_scores {
+                    scored_files.push((score * ext_boost(&path), path));
+                }
+            }
+        }
+    }
+
+    // 2b. Token-overlap scoring against file index previews
+    let query_tokens = tokenize_code(&query);
+    for entry in index.iter() {
+        if entry.is_binary || entry.preview.is_empty() { continue; }
+        if scored_files.iter().any(|(_, p)| p == &entry.path) { continue; }
+
+        let file_tokens = tokenize_code(&entry.preview);
+        let mut score: f64 = 0.0;
+        for qt in &query_tokens {
+            for ft in &file_tokens {
+                if ft.contains(qt.as_str()) || qt.contains(ft.as_str()) {
+                    score += 1.0;
+                }
+            }
+        }
+
+        if score > 0.0 {
+            score *= ext_boost(&entry.path);
+            let filename = entry.path.rsplit('/').next().unwrap_or(&entry.path).to_lowercase();
+            if query_lower.contains(&filename.replace('.', "")) { score += 5.0; }
+            scored_files.push((score, entry.path.clone()));
+        }
+    }
+
+    // 3. Git recency boost
+    let mut git_status_lines: Vec<String> = Vec::new();
+    if let Ok(statuses) = git_status(state) {
+        let modified_set: std::collections::HashSet<String> = statuses.iter().map(|s| s.path.clone()).collect();
+        for (score, path) in scored_files.iter_mut() {
+            if modified_set.contains(path.as_str()) { *score *= 1.5; }
+        }
+        git_status_lines = statuses.iter().map(|s| format!("[{}] {}", s.status.to_uppercase(), s.path)).collect();
+    }
+
+    // 4. Open tab boost (3x)
+    let tab_set: std::collections::HashSet<&str> = open_tab_paths.iter().map(|s| s.as_str()).collect();
+    for (score, path) in scored_files.iter_mut() {
+        if tab_set.contains(path.as_str()) { *score *= 3.0; }
+    }
+
+    // 5. Sort and take top
+    scored_files.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
+
+    let top_files: Vec<ContextFile> = scored_files.iter()
+        .take(max_files.max(3))
+        .filter(|(s, _)| *s > 0.0)
+        .filter_map(|(score, path)| {
+            let full_path = root_path.join(path);
+            let content = fs::read_to_string(&full_path).ok()?;
+            let trimmed = if content.len() > 3000 {
+                format!("{}...\n[truncated]", &content[..3000])
+            } else { content };
+            Some(ContextFile { path: path.clone(), content: trimmed, relevance: *score })
+        })
+        .collect();
+
+    let tokens = top_files.iter().map(|f| f.content.len() / 4).sum::<usize>()
+        + git_status_lines.len() * 10 + 500;
+
+    Ok(RelevantContext {
+        project_summary: format!("Project: {} ({} files). Query: {}", project_name, index.len(), query),
+        relevant_files: top_files,
+        git_status: git_status_lines,
+        open_tab_paths,
+        total_tokens_estimate: tokens,
+    })
+}
+
+fn ext_boost(path: &str) -> f64 {
+    match path.rsplit('.').next().unwrap_or("") {
+        "ts" | "tsx" | "js" | "jsx" => 1.2, "rs" | "py" | "go" => 1.1,
+        "css" | "scss" | "less" => 0.7, "html" => 0.8,
+        "json" | "toml" | "yaml" | "yml" => 0.6, "md" | "txt" => 0.4,
+        _ => 1.0,
+    }
+}
+
+fn refresh_project_index_impl(root: &str, cache: &State<ProjectIndexCache>) -> Result<(), String> {
+    let mut entries = Vec::new();
+    index_directory(Path::new(root), Path::new(root), &mut entries, 0);
+    let mut cached = cache.0.lock().map_err(|_| "Lock error".to_string())?;
+    *cached = entries;
+    Ok(())
+}
+
+// --- 3-Way Merge Engine (prevents silent overwrite) ---
+
+#[derive(Serialize, Debug)]
+pub struct ThreeWayMergeResult {
+    pub merged: bool,              // true if no conflicts
+    pub merged_content: String,    // the merged result (with conflict markers if any)
+    pub has_conflicts: bool,
+    pub conflict_count: usize,
+    pub conflict_regions: Vec<(usize, usize)>, // (line_start, line_end) of conflict blocks
+}
+
+#[tauri::command]
+fn try_3way_merge(
+    file_path: String,
+    ai_proposed_content: String,
+    state: State<ProjectRoot>,
+) -> Result<ThreeWayMergeResult, String> {
+    let root = get_project_root(&state)?;
+    let safe_path = validate_path_within_project(&file_path, &root)?;
+    let current_content = fs::read_to_string(&safe_path)
+        .map_err(|e| format!("Failed to read file: {}", e))?;
+
+    let current_lines: Vec<&str> = current_content.lines().collect();
+    let proposed_lines: Vec<&str> = ai_proposed_content.lines().collect();
+
+    let mut merged_lines: Vec<String> = Vec::new();
+    let mut conflicts = 0;
+    let mut conflict_regions: Vec<(usize, usize)> = Vec::new();
+
+    // Simple 3-way diff: if AI output equals current → no conflict
+    // Otherwise, use overlap-based merge with conflict markers
+    let mut i = 0;
+    let mut j = 0;
+    let mut in_conflict = false;
+    let mut conflict_start = 0;
+
+    while i < current_lines.len() || j < proposed_lines.len() {
+        if i < current_lines.len() && j < proposed_lines.len()
+            && current_lines[i] == proposed_lines[j]
+        {
+            if in_conflict {
+                merged_lines.push(">>>>>>> AI Proposed".to_string());
+                conflicts += 1;
+                conflict_regions.push((conflict_start, merged_lines.len()));
+                in_conflict = false;
+            }
+            merged_lines.push(current_lines[i].to_string());
+            i += 1;
+            j += 1;
+        } else if i < current_lines.len() && j < proposed_lines.len() {
+            // Lines differ — look ahead up to 4 lines for re-sync
+            let mut synced = false;
+            for look in 1..=4 {
+                if i + look < current_lines.len()
+                    && j < proposed_lines.len()
+                    && current_lines[i + look] == proposed_lines[j]
+                {
+                    // User added lines
+                    for k in 0..look {
+                        if !in_conflict {
+                            in_conflict = true;
+                            conflict_start = merged_lines.len();
+                            merged_lines.push("<<<<<<< Current File (user edits)".to_string());
+                        }
+                        merged_lines.push(current_lines[i + k].to_string());
+                    }
+                    merged_lines.push("=======".to_string());
+                    i += look;
+                    synced = true;
+                    break;
+                }
+                if j + look < proposed_lines.len()
+                    && i < current_lines.len()
+                    && current_lines[i] == proposed_lines[j + look]
+                {
+                    // AI proposed new lines
+                    for k in 0..look {
+                        if !in_conflict {
+                            in_conflict = true;
+                            conflict_start = merged_lines.len();
+                            merged_lines.push("<<<<<<< Current File (user edits)".to_string());
+                        }
+                        merged_lines.push(proposed_lines[j + k].to_string());
+                    }
+                    merged_lines.push("=======".to_string());
+                    j += look;
+                    synced = true;
+                    break;
+                }
+            }
+            if !synced {
+                // Both changed — true conflict
+                if !in_conflict {
+                    in_conflict = true;
+                    conflict_start = merged_lines.len();
+                    merged_lines.push("<<<<<<< Current File (user edits)".to_string());
+                }
+                if i < current_lines.len() {
+                    merged_lines.push(current_lines[i].to_string());
+                    i += 1;
+                }
+                if j < proposed_lines.len() {
+                    merged_lines.push(proposed_lines[j].to_string());
+                    j += 1;
+                }
+            }
+        } else if i < current_lines.len() {
+            // Only in current — user added lines (no conflict since AI didn't touch this region)
+            merged_lines.push(current_lines[i].to_string());
+            i += 1;
+        } else {
+            // Only in proposed — AI added new lines
+            merged_lines.push(proposed_lines[j].to_string());
+            j += 1;
+        }
+    }
+
+    if in_conflict {
+        merged_lines.push(">>>>>>> AI Proposed".to_string());
+        conflicts += 1;
+        conflict_regions.push((conflict_start, merged_lines.len()));
+    }
+
+    Ok(ThreeWayMergeResult {
+        merged: conflicts == 0,
+        merged_content: merged_lines.join("\n"),
+        has_conflicts: conflicts > 0,
+        conflict_count: conflicts,
+        conflict_regions,
+    })
+}
+
+// --- Legacy AI Context Builder ---
 
 #[derive(Serialize, Debug)]
 pub struct AIContext {
@@ -2428,8 +2742,10 @@ pub fn run() {
             search_codebase,
             // Differ commands
             diff_strings,
+            try_3way_merge,
             // Context builder commands
             build_ai_context,
+            get_relevant_context,
             // SQLite persistence commands
             db_init,
             db_save_chat_session,
@@ -2463,6 +2779,7 @@ pub fn run() {
             lsp_manager::lsp_definition,
             lsp_manager::lsp_format,
             lsp_manager::lsp_shutdown,
+            lsp_manager::lsp_did_close,
             // GitHub Phase 0: Git Core Check
             github::github_check_repo,
             github::github_is_git_repo,

@@ -477,6 +477,25 @@ pub fn lsp_did_save(
     send_to_stdin(&server.stdin, &notification.to_string())
 }
 
+#[tauri::command]
+pub fn lsp_did_close(
+    file_uri: String,
+    language_id: String,
+    state: State<LspState>,
+) -> Result<(), String> {
+    let servers = state.0.lock().map_err(|_| "Lock error".to_string())?;
+    let server = servers.get(&language_id)
+        .ok_or_else(|| format!("LSP server for '{}' not running", language_id))?;
+
+    let notification = serde_json::json!({
+        "jsonrpc": "2.0",
+        "method": "textDocument/didClose",
+        "params": { "textDocument": { "uri": file_uri } }
+    });
+
+    send_to_stdin(&server.stdin, &notification.to_string())
+}
+
 // --- Request Commands ---
 
 #[tauri::command]
