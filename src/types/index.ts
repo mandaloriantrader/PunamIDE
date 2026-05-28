@@ -4,6 +4,7 @@
 
 import type { ParsedResponse } from "../utils/prompts";
 import type { ResponseMetrics } from "../utils/providers";
+import type { StreamBlock } from "../utils/protocol";
 
 // --- Agent Modes ---
 
@@ -35,6 +36,10 @@ export interface ChatMessage {
     applied?: boolean;
     metrics: ResponseMetrics;
   }>;
+  /** Structured streaming blocks for Cline-like progressive rendering. */
+  blocks?: StreamBlock[];
+  /** True when the AI has finished streaming its full response. */
+  isComplete?: boolean;
 }
 
 // --- Project Check ---

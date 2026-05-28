@@ -42,6 +42,8 @@ interface RightPanelProps {
   onApplyDirect: (parsed: any) => Promise<void>;
   onRunCommand: (cmd: string) => void;
   onRevertLastApply: () => Promise<void>;
+  forcePrompt?: { text: string; mode?: string } | null;
+  onForcePromptConsumed?: () => void;
 }
 
 const TABS: { id: RightPanelTab; label: string; icon: typeof MessageSquare }[] = [
@@ -99,6 +101,8 @@ export default function RightPanel(props: RightPanelProps) {
               onApplyDirect={props.onApplyDirect}
               onRunCommand={props.onRunCommand}
               onRevertLastApply={props.onRevertLastApply}
+              forcePrompt={props.forcePrompt}
+              onForcePromptConsumed={props.onForcePromptConsumed}
             />
           </PanelErrorBoundary>
         )}

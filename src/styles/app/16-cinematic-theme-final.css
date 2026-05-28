@@ -965,7 +965,12 @@
   background: transparent !important;
   box-shadow: none !important;
   outline: none !important;
-  resize: vertical !important;
+  resize: none !important;
+  scrollbar-width: none !important;
+}
+
+.ai-input-box .ai-textarea::-webkit-scrollbar {
+  display: none !important;
 }
 
 /* === Minimal Settings Refresh === */

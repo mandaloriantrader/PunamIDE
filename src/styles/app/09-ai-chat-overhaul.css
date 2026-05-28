@@ -345,6 +345,8 @@
 .ai-input-box {
   display: flex;
   flex-direction: column;
+  container-type: inline-size;
+  container-name: ai-input-box;
   background: var(--bg-secondary);
   border: 1px solid var(--border);
   border-radius: 12px;
@@ -368,7 +370,7 @@
   color: var(--text-primary);
   font-size: 13px;
   font-family: var(--font-sans);
-  resize: vertical;
+  resize: none;
   outline: none;
   min-height: 60px;
   max-height: 320px;
@@ -379,6 +381,11 @@
   display: block;
   overflow-y: auto;
   box-sizing: border-box;
+  scrollbar-width: none;
+}
+
+.ai-textarea::-webkit-scrollbar {
+  display: none;
 }
 
 .ai-textarea::placeholder {
@@ -1095,11 +1102,105 @@
   }
 
   .ai-model-selector-wrap {
-    max-width: 34%;
+    max-width: 30%;
+  }
+
+  .ai-input-row .ai-model-trigger {
+    padding-inline: 6px;
+  }
+
+  .ai-input-row .ai-model-name {
+    max-width: 72px;
+  }
+
+  .ai-tool-mode-btn {
+    width: 30px;
+    min-width: 30px;
+    justify-content: center;
+    padding-inline: 0;
+  }
+
+  .ai-tool-mode-btn .tool-mode-label {
+    display: none;
   }
 
   .ai-input-row .ai-adaptive-preview {
-    max-width: 112px;
+    max-width: 34px;
+    min-width: 34px;
+    justify-content: center;
+    padding-inline: 4px;
+    overflow: hidden;
+  }
+
+  .ai-input-row .ai-adaptive-preview .adaptive-preview-label {
+    display: none;
+  }
+
+  .ai-input-row .ai-adaptive-preview .model-chevron {
+    display: none;
+  }
+}
+
+@container ai-input-box (max-width: 420px) {
+  .ai-input-row {
+    gap: 5px;
+  }
+
+  .ai-model-selector-wrap {
+    max-width: 28%;
+  }
+
+  .ai-input-row .ai-model-trigger {
+    padding-inline: 6px;
+  }
+
+  .ai-input-row .ai-model-name {
+    max-width: 70px;
+  }
+
+  .ai-tool-mode-btn {
+    width: 30px;
+    min-width: 30px;
+    justify-content: center;
+    padding-inline: 0;
+  }
+
+  .ai-tool-mode-btn .tool-mode-label {
+    display: none;
+  }
+
+  .ai-input-row .ai-adaptive-preview {
+    width: 30px;
+    min-width: 30px;
+    max-width: 30px;
+    justify-content: center;
+    padding-inline: 0;
+    overflow: hidden;
+  }
+
+  .ai-input-row .ai-adaptive-preview .adaptive-preview-label {
+    display: none;
+  }
+
+  .ai-input-row .ai-adaptive-preview .model-chevron {
+    display: none;
+  }
+}
+
+@container ai-input-box (max-width: 340px) {
+  .ai-model-selector-wrap {
+    max-width: 24px;
+  }
+
+  .ai-input-row .ai-model-trigger {
+    width: 24px;
+    padding-inline: 0;
+    justify-content: center;
+  }
+
+  .ai-input-row .ai-model-name,
+  .ai-input-row .ai-model-trigger .model-chevron {
+    display: none;
   }
 }
 

@@ -232,6 +232,8 @@ export default function App() {
   const [wordWrap, setWordWrap] = useState<"on" | "off">("on");
   // Git diff view
   const [gitDiffFile, setGitDiffFile] = useState<string | null>(null);
+  // Force prompt from right-click context menu (explain/fix/refactor)
+  const [forceAiPrompt, setForceAiPrompt] = useState<{ text: string; mode: string } | null>(null);
   const toastIdRef = useRef(0);
   const tabsRef = useRef<Tab[]>([]);
   const dapRequestSeq = useRef(1);
@@ -2369,10 +2371,11 @@ export default function App() {
                           onCursorChange={setEditorCursorPosition}
                           onLeftSave={() => handleSaveTab(activeTab)}
                           onRightSave={() => handleSaveTab(rightActiveTab || activeTab)}
-                          onAskPunam={(text, _mode) => {
+                          onAskPunam={(text, mode) => {
                             setSelectedText(text);
                             handleActivitySelect("ai");
                             setShowAiPanel(true);
+                            setForceAiPrompt({ text, mode: String(mode) });
                           }}
                         />
                         </Suspense>
@@ -2388,10 +2391,11 @@ export default function App() {
           onSelectionChange={setSelectedText}
           onCursorChange={setEditorCursorPosition}
           onSave={handleSaveActiveFile}
-              onAskPunam={(text, _mode) => {
+              onAskPunam={(text, mode) => {
                 setSelectedText(text);
                 handleActivitySelect("ai");
                 setShowAiPanel(true);
+                setForceAiPrompt({ text, mode: String(mode) });
               }}
               theme={config.theme}
               aiProviders={aiProviders}
@@ -2535,6 +2539,8 @@ export default function App() {
                 onApplyChanges={handleApplyChanges}
                 onApplyDirect={async (parsed) => { if (!projectPath) return; await applyParsedChanges(parsed); }}
                 onRunCommand={(cmd) => { setShowTerminal(true); setBottomPanelActive("terminal"); setPendingTerminalCmd(cmd); }}
+                forcePrompt={forceAiPrompt}
+                onForcePromptConsumed={() => setForceAiPrompt(null)}
                 onRevertLastApply={async () => {
                   if (checkpoints.length === 0) return;
                   const cp = checkpoints[checkpoints.length - 1];

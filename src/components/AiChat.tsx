@@ -63,6 +63,8 @@ import { selectAdaptiveProvider } from "../lib/ai/adaptiveRouter";
 import type { AdaptiveStrategy } from "../lib/ai/providerCapabilities";
 import { classifyProviderError, describeHealthStatus, markProviderHealthy, setProviderHealth } from "../lib/ai/providerHealth";
 import type { RunObservation } from "../services/run/verifiedRun";
+import { parseStreamBlocks, resetParseState } from "../utils/streamBlocks";
+import MessageBubble from "./chat/MessageBubble";
 
 // Background agent store
 import { useBackgroundAgentStore } from "../store/backgroundAgentStore";
@@ -207,6 +209,9 @@ interface Props {
   checkpointCount?: number;
   mcpServers?: MCPServerConfig[];
   projectNotes?: string;
+  /** External prompt trigger from right-click context menu (explain/fix/refactor) */
+  forcePrompt?: { text: string; mode?: string } | null;
+  onForcePromptConsumed?: () => void;
 }
 
 const AGENT_MODES: Array<{
@@ -282,6 +287,8 @@ export default function AiChat({
   checkpointCount = 0,
   mcpServers = [],
   projectNotes = "",
+  forcePrompt,
+  onForcePromptConsumed,
 }: Props) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState("");
@@ -332,6 +339,20 @@ export default function AiChat({
   const [streamProgress, setStreamProgress] = useState<{ tokens: number; startedAt: number } | null>(null);
   // Prevents duplicate sends while streaming
   const isStreamingRef = useRef(false);
+
+  // --- Auto-send forcePrompt from right-click context menu ---
+  useEffect(() => {
+    if (forcePrompt && forcePrompt.text && !loading) {
+      const prefixes: Record<string, string> = {
+        explain: "Explain the following code in detail:\n\n",
+        fix: "Fix the following code. Only output the fixed code:\n\n",
+        refactor: "Refactor this code for readability:\n\n",
+      };
+      const fullPrompt = (prefixes[forcePrompt.mode || "explain"] || "") + forcePrompt.text;
+      requestPunam(fullPrompt, "chat");
+      onForcePromptConsumed?.();
+    }
+  }, [forcePrompt?.text, forcePrompt?.mode]);
 
   // --- Auto-index project for TF-IDF search ---
   useEffect(() => {
@@ -882,10 +903,13 @@ export default function AiChat({
             const flushStreamedText = () => {
               pendingFlush = false;
               flushTimer = null;
-              const displayText = getStreamingTextBeforeActionBlocks(streamedText);
+              resetParseState();
+              const result = parseStreamBlocks(streamedText);
+              const blocks = [...result.completed, ...(result.inProgress ? [result.inProgress] : [])];
+              const displayText = "";
               setMessages((prev) => prev.map((m) =>
                 (m as any).streamId === streamId
-                  ? { ...m, content: `${[firstNotice, ...fallbackNotices].join("\n")}\n\n${displayText}â–` }
+                  ? { ...m, content: `${[firstNotice, ...fallbackNotices].join("\n")}\n`, blocks, isComplete: false }
                   : m
               ));
             };
@@ -945,12 +969,15 @@ export default function AiChat({
           const hasActions = parsed ? hasParsedActions(parsed) : false;
           recordResponseUsage(finalResp?.metrics);
 
+          const finalBlocks = parseStreamBlocks(finalText).completed;
           setMessages((prev) => prev.map((m) => {
             if ((m as any).streamId !== streamId) return m;
             const { streamId: _sid, ...rest } = m as any;
             return {
               ...rest,
               content: responseText,
+              blocks: finalBlocks,
+              isComplete: true,
               parsed: hasActions ? parsed : undefined,
               applied: false,
               metrics: finalResp?.metrics,
@@ -980,14 +1007,14 @@ export default function AiChat({
             let rafId = 0;
 
             const flushStreamedText = () => {
-              const displayText = getStreamingTextBeforeActionBlocks(streamedText);
-              const actionCount = (streamedText.match(/===FILE:/g) || []).length;
-              const fileHint = actionCount > 0 ? ` (${actionCount} file${actionCount !== 1 ? "s" : ""})` : "";
+              resetParseState();
+              const result = parseStreamBlocks(streamedText);
+              const blocks = [...result.completed, ...(result.inProgress ? [result.inProgress] : [])];
               const elapsed = (performance.now() - streamStart) / 1000;
               const tps = elapsed > 0 ? Math.round(tokenCount / elapsed) : 0;
               setMessages((prev) => prev.map((m) =>
                 (m as any).streamId === streamId
-                  ? { ...m, content: displayText + "▍", streamProgress: `${tps} t/s${fileHint}` }
+                  ? { ...m, content: "", blocks, isComplete: false, streamProgress: `${tps} t/s` }
                   : m
               ));
             };
@@ -1055,12 +1082,15 @@ export default function AiChat({
               }
             }
 
+            const finalBlocks = parseStreamBlocks(effectiveFinalText).completed;
             setMessages((prev) => prev.map((m) => {
               if ((m as any).streamId !== streamId) return m;
               const { streamId: _sid, ...rest } = m as any;
               return {
                 ...rest,
                 content: effectiveFinalText,
+                blocks: finalBlocks,
+                isComplete: true,
                 parsed: hasActions ? parsed : undefined,
                 applied: false,
                 metrics: resp.metrics,
@@ -1664,9 +1694,11 @@ export default function AiChat({
       const flushStreamedText = () => {
         pendingFlush = false;
         flushTimer = null;
-        const displayText = getStreamingTextBeforeActionBlocks(streamedText);
+        resetParseState();
+        const result = parseStreamBlocks(streamedText);
+        const blocks = [...result.completed, ...(result.inProgress ? [result.inProgress] : [])];
         setMessages(prev => prev.map(m =>
-          (m as any).streamId === streamId ? { ...m, content: displayText + "▍" } : m
+          (m as any).streamId === streamId ? { ...m, content: "", blocks, isComplete: false } : m
         ));
       };
 
@@ -1716,11 +1748,12 @@ export default function AiChat({
       const hasActions = parsed ? hasParsedActions(parsed) : false;
       recordResponseUsage(resp.metrics);
 
-      // Finalize message
+      // Finalize message with blocks
+      const finalBlocks = parseStreamBlocks(finalText).completed;
       setMessages(prev => prev.map(m => {
         if ((m as any).streamId !== streamId) return m;
         const { streamId: _sid, ...rest } = m as any;
-        return { ...rest, content: finalText, parsed: hasActions ? parsed : undefined, applied: false, metrics: resp.metrics };
+        return { ...rest, content: finalText, blocks: finalBlocks, isComplete: true, parsed: hasActions ? parsed : undefined, applied: false, metrics: resp.metrics };
       }));
 
       // Auto-extract memories from the response
@@ -2176,7 +2209,10 @@ export default function AiChat({
                           )}
                         </div>
                       )}
-                      {!msg.parsed && <MarkdownMessage text={msg.content} />}
+                      {!msg.parsed && !msg.blocks && <MarkdownMessage text={msg.content} />}
+                      {msg.blocks && msg.blocks.length > 0 && (
+                        <MessageBubble blocks={msg.blocks} isStreaming={!msg.isComplete} />
+                      )}
                     </>
                   )}
                   {msg.metrics && <ResponseMetricsDisplay metrics={msg.metrics} />}
@@ -2319,7 +2355,6 @@ export default function AiChat({
         handleFileAttach={handleFileAttach}
         handleFileInputChange={handleFileInputChange}
         fileInputRef={fileInputRef}
-        openTabs={openTabs}
         aiProviders={aiProviders}
         configModel={config.model}
         configProvider={config.provider}
@@ -2356,5 +2391,4 @@ export default function AiChat({
     </div>
   );
 }
-
 
