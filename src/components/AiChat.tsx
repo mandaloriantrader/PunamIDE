@@ -1492,7 +1492,7 @@ export default function AiChat({
             role: "assistant",
             content: result.text,
             mode: "chat",
-            metrics: { tokensIn: 0, tokensOut: 0, durationMs: 0 },
+            metrics: result.metrics,
           } as any];
         });
 
@@ -1530,7 +1530,7 @@ export default function AiChat({
       const relPath = getRelativePath(projectPath, activeFilePath);
       if (!errorFiles.includes(relPath)) {
         const content = await readFile(activeFilePath).catch(() => "");
-        if (content) snippets.push(`## ${relPath}\n\`\`\`\n${content.slice(0, 60000)}\n\`\`\``);
+        if (content) snippets.push(`## ${relPath}\n\`\`\`\n${content.slice(0, 100000)}\n\`\`\``);
       }
     }
 

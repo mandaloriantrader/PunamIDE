@@ -25,6 +25,7 @@ export interface ToolLoopResult {
   rounds: number;
   toolsCalled: string[];
   tokensSaved: number; // estimated vs full-context
+  metrics: any; // ResponseMetrics from provider — passed through for display
 }
 
 interface ToolCall {
@@ -116,6 +117,7 @@ When answering:
 
   const toolsCalled: string[] = [];
   let finalText = "";
+  let accumulatedMetrics: any = null;
 
   for (let round = 0; round < MAX_ROUNDS; round++) {
     // Join conversation into a single user prompt
@@ -127,6 +129,22 @@ When answering:
       userPrompt,
     });
 
+    // Accumulate metrics — keep the last response's metrics but sum tokens
+    if (resp.metrics) {
+      if (!accumulatedMetrics) {
+        accumulatedMetrics = { ...resp.metrics };
+      } else {
+        accumulatedMetrics.promptTokens = (accumulatedMetrics.promptTokens || 0) + (resp.metrics.promptTokens || 0);
+        accumulatedMetrics.responseTokens = (accumulatedMetrics.responseTokens || 0) + (resp.metrics.responseTokens || 0);
+        accumulatedMetrics.totalTokens = (accumulatedMetrics.totalTokens || 0) + (resp.metrics.totalTokens || 0);
+        accumulatedMetrics.durationMs = (accumulatedMetrics.durationMs || 0) + (resp.metrics.durationMs || 0);
+        if (resp.metrics.estimatedCostUsd) {
+          accumulatedMetrics.estimatedCostUsd = (accumulatedMetrics.estimatedCostUsd || 0) + resp.metrics.estimatedCostUsd;
+          accumulatedMetrics.estimatedCostInr = (accumulatedMetrics.estimatedCostInr || 0) + resp.metrics.estimatedCostInr;
+        }
+      }
+    }
+
     if (!resp.success) {
       return {
         text: resp.error || "LLM call failed",
@@ -134,6 +152,7 @@ When answering:
         rounds: round + 1,
         toolsCalled,
         tokensSaved: 0,
+        metrics: accumulatedMetrics,
       };
     }
 
@@ -149,6 +168,7 @@ When answering:
         rounds: round + 1,
         toolsCalled,
         tokensSaved: estimateTokenSavings(finalText),
+        metrics: accumulatedMetrics,
       };
     }
 
@@ -174,6 +194,7 @@ When answering:
     rounds: MAX_ROUNDS,
     toolsCalled,
     tokensSaved: 0,
+    metrics: accumulatedMetrics,
   };
 }
 

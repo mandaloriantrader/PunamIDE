@@ -26,3 +26,13 @@ test-debug/
 *.njsproj
 *.sln
 *.sw?
+# PunamIDE project checkpoints
+node_modules/
+dist/
+dist-ssr/
+src-tauri/target/
+recovery-backups/
+recovered-build-css/
+test-debug/
+*.log
+*.local
