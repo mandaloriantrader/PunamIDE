@@ -1,4 +1,4 @@
-﻿import { useState, useRef, useEffect } from "react";
+import { useState, useRef, useEffect } from "react";
 import type { ElementType } from "react";
 import {
   User,
@@ -10,7 +10,7 @@ import {
   Zap,
   Image,
 } from "lucide-react";
-import { readFile, searchProject } from "../utils/tauri";
+import { callLlm, readFile, searchProject } from "../utils/tauri";
 import type { AppConfig, FileEntry } from "../utils/tauri";
 import { checkTcpPort, runTerminalCommand } from "../utils/tauri";
 import type { MCPServerConfig } from "../utils/mcp";
@@ -18,7 +18,6 @@ import { buildMcpToolsPrompt, parseMcpCalls, mcpCallTool, formatMcpResult } from
 import { SYSTEM_PROMPT, parseResponse } from "../utils/prompts";
 import type { ParsedResponse } from "../utils/prompts";
 import { sendToMultipleModels, sendToProviderStreaming, estimateTokens } from "../utils/providers";
-import { runAgentToolLoop, shouldUseToolLoop } from "../utils/agentToolLoop";
 import type { AIProviderConfig, ResponseMetrics } from "../utils/providers";
 import { recordUsage } from "./UsageDashboard";
 import { detectFrameworks } from "../utils/contextGathering";
@@ -32,6 +31,7 @@ import {
   buildFileContext,
   getProjectFilePath,
   getRelativePath,
+  truncateContext,
   getMentionedFilePaths,
   getMentionedFolderFiles,
   getUnresolvedMentions,
@@ -40,6 +40,8 @@ import {
   buildGitContext,
   KEY_CONTEXT_FILES,
   PROJECT_RULES_FILES,
+  MAX_CONTEXT_FILE_CHARS,
+  MAX_TOTAL_CONTEXT_CHARS,
 } from "../utils/chatHelpers";
 import { MarkdownMessage, PunamAvatar, ResponseMetricsDisplay, getActionLabel, formatAgentStep } from "./chat/ChatComponents";
 import { ChatHeader } from "./chat/ChatHeader";
@@ -77,7 +79,7 @@ interface AgentTaskState {
   history: string[];
   suggestedCommand: string | null;
   autoApply: boolean;       // Skip diff preview, apply directly
-  subtasks: string[];       // Task queue â€” list of subtasks to execute
+  subtasks: string[];       // Task queue — list of subtasks to execute
   currentSubtask: number;   // Index of current subtask being executed
 }
 
@@ -229,7 +231,7 @@ const AGENT_MODES: Array<{
     id: "agent",
     label: "Agent",
     icon: Zap,
-    placeholder: "Describe any task â€” I'll plan and execute it autonomously...",
+    placeholder: "Describe any task — I'll plan and execute it autonomously...",
     instruction:
       "Mode: Agent. You are an autonomous coding agent. Plan step-by-step, then execute: create/edit/delete files, run commands, and iterate until the task is complete. Be thorough and precise.",
   },
@@ -398,14 +400,14 @@ export default function AiChat({
       });
       if (filePath) {
         await writeTextFile(filePath, markdown);
-        setMessages((prev) => [...prev, { role: "assistant", content: `âœ… Chat exported to \`${filePath}\`` }]);
+        setMessages((prev) => [...prev, { role: "assistant", content: `✅ Chat exported to \`${filePath}\`` }]);
       }
     } catch {
       try {
         await navigator.clipboard.writeText(markdown);
-        setMessages((prev) => [...prev, { role: "assistant", content: "âœ… Chat copied to clipboard (save dialog unavailable)." }]);
+        setMessages((prev) => [...prev, { role: "assistant", content: "✅ Chat copied to clipboard (save dialog unavailable)." }]);
       } catch {
-        setMessages((prev) => [...prev, { role: "assistant", content: "âš ï¸ Could not export chat. Try again." }]);
+        setMessages((prev) => [...prev, { role: "assistant", content: "⚠️ Could not export chat. Try again." }]);
       }
     }
   };
@@ -463,18 +465,18 @@ export default function AiChat({
     if (!isExactGreeting && !isIdentityQuestion && !isCapabilityQuestion) return null;
 
     if (lower.includes("who made") || lower.includes("who created") || lower.includes("who built") || lower.includes("who developed") || lower.includes("creator") || lower.includes("developer") || lower.includes("designed")) {
-      return "I was created and developed by **Amritanshu Amar**. He designed me to be an intelligent, AI-powered coding assistant that helps developers write, edit, and manage code through natural language â€” all from within a sleek desktop IDE.";
+      return "I was created and developed by **Amritanshu Amar**. He designed me to be an intelligent, AI-powered coding assistant that helps developers write, edit, and manage code through natural language — all from within a sleek desktop IDE.";
     }
 
     if (lower.includes("what can you do") || lower.includes("what do you do") || lower.includes("how do you work")) {
-      return "I'm **Punam**, your AI-powered coding assistant! I was created by **Amritanshu Amar**.\n\nHere's what I can do:\n\nâ€¢ **Edit & create files** â€” describe what you want in plain English and I'll generate the code changes\nâ€¢ **Understand your project** â€” I can see your file tree and understand the structure\nâ€¢ **Multi-language support** â€” Python, JavaScript, TypeScript, Rust, Go, Java, and many more\nâ€¢ **Run commands** â€” I can suggest terminal commands to run\nâ€¢ **Debug & fix** â€” describe a bug and I'll find and fix it\n\nJust type what you need!";
+      return "I'm **Punam**, your AI-powered coding assistant! I was created by **Amritanshu Amar**.\n\nHere's what I can do:\n\n• **Edit & create files** — describe what you want in plain English and I'll generate the code changes\n• **Understand your project** — I can see your file tree and understand the structure\n• **Multi-language support** — Python, JavaScript, TypeScript, Rust, Go, Java, and many more\n• **Run commands** — I can suggest terminal commands to run\n• **Debug & fix** — describe a bug and I'll find and fix it\n\nJust type what you need!";
     }
 
     if (isExactGreeting) {
-      return "Hey there! I'm **Punam**, your AI coding assistant created by **Amritanshu Amar**. I'm here to help you write, edit, and manage your code. Just tell me what you need â€” describe it in plain English and I'll take care of the rest!";
+      return "Hey there! I'm **Punam**, your AI coding assistant created by **Amritanshu Amar**. I'm here to help you write, edit, and manage your code. Just tell me what you need — describe it in plain English and I'll take care of the rest!";
     }
 
-    return "Hi! I'm **Punam** â€” an AI-powered coding assistant built right into this IDE. I was created and developed by **Amritanshu Amar**.\n\nI help you write, modify, and debug code using natural language. Just describe what you want â€” like \"add a login page\" or \"fix the error in main.py\" â€” and I'll generate the exact code changes, show you a preview, and apply them when you're ready.\n\nI support multiple AI providers (Google Gemini, OpenAI, OpenRouter, Groq, Mistral AI, Ollama) and work with any programming language. Think of me as your personal coding partner!";
+    return "Hi! I'm **Punam** — an AI-powered coding assistant built right into this IDE. I was created and developed by **Amritanshu Amar**.\n\nI help you write, modify, and debug code using natural language. Just describe what you want — like \"add a login page\" or \"fix the error in main.py\" — and I'll generate the exact code changes, show you a preview, and apply them when you're ready.\n\nI support multiple AI providers (Google Gemini, OpenAI, OpenRouter, Groq, Mistral AI, Ollama) and work with any programming language. Think of me as your personal coding partner!";
   };
 
   const collectExistingFiles = () => {
@@ -493,14 +495,6 @@ export default function AiChat({
   const buildProjectContext = async (userPrompt = "") => {
     const existingFiles = collectExistingFiles();
     const contextFiles = new Map<string, string>();
-
-    // Skip file context for casual/greeting messages â€” saves tokens
-    const CASUAL_PATTERN = /^(hi|hello|hey|thanks|thank you|ok|okay|sure|yes|no|lol|haha|good|great|nice|cool|bye|gm|gn)[\s!?.]*$/i;
-    if (CASUAL_PATTERN.test(userPrompt.trim())) {
-      setContextFiles([]);
-      setContextSummary("");
-      return "";
-    }
 
     // --- @codebase mention: use TF-IDF search if indexed, else load files ---
     const hasCodebaseMention = /@codebase\b/i.test(userPrompt);
@@ -531,25 +525,8 @@ export default function AiChat({
       if (content) contextFiles.set(filePath, content);
     }
 
-    // Smart tab inclusion: only include active file + files mentioned in the message
-    // This avoids sending all open tabs (wasteful for simple questions)
-    const CODE_QUERY_PATTERN = /line|function|class|error|bug|fix|explain|refactor|what|how|why|where|find|search|read|show|import|variable|method|def |const |let |var /i;
-    const isCodeQuery = CODE_QUERY_PATTERN.test(userPrompt);
-
     for (const tab of openTabs) {
-      const relPath = getRelativePath(projectPath, tab.path);
-      const tabName = tab.path.split(/[\\/]/).pop()?.toLowerCase() || "";
-
-      // Always include the active file
-      const isActive = activeFilePath && tab.path === activeFilePath;
-      // Include if mentioned by name in the message
-      const isMentioned = userPrompt.toLowerCase().includes(tabName);
-      // Include all tabs only for code queries (refactor, explain, etc.)
-      const includeAll = isCodeQuery;
-
-      if (isActive || isMentioned || includeAll) {
-        contextFiles.set(relPath, tab.content);
-      }
+      contextFiles.set(getRelativePath(projectPath, tab.path), tab.content);
     }
 
     for (const keyFile of KEY_CONTEXT_FILES) {
@@ -612,23 +589,13 @@ export default function AiChat({
     const sections: string[] = [];
     const attachedNames: string[] = [];
 
-    // Inline limits to avoid Vite caching issues with imported constants
-    const FILE_CHAR_LIMIT = 20000;
-    const TOTAL_CHAR_LIMIT = 80000;
-
     for (const [path, content] of contextFiles) {
-      if (totalChars >= TOTAL_CHAR_LIMIT) break;
-      const remaining = TOTAL_CHAR_LIMIT - totalChars;
-      const maxForFile = Math.min(FILE_CHAR_LIMIT, remaining);
-      const clipped = content.length <= maxForFile ? content : content.slice(0, maxForFile) + "\n\n/* ...truncated... */";
-      // Add line numbers so the model can reference specific lines accurately
-      const numbered = clipped
-        .split("\n")
-        .map((line, i) => `${String(i + 1).padStart(4, " ")} | ${line}`)
-        .join("\n");
-      sections.push(`## ${path}\n\`\`\`\n${numbered}\n\`\`\``);
+      if (totalChars >= MAX_TOTAL_CONTEXT_CHARS) break;
+      const remaining = MAX_TOTAL_CONTEXT_CHARS - totalChars;
+      const clipped = truncateContext(content, Math.min(MAX_CONTEXT_FILE_CHARS, remaining));
+      sections.push(`## ${path}\n\`\`\`\n${clipped}\n\`\`\``);
       attachedNames.push(path);
-      totalChars += numbered.length;
+      totalChars += clipped.length;
     }
 
     setContextFiles(attachedNames);
@@ -683,30 +650,6 @@ export default function AiChat({
     return sections.join("\n\n") + frameworkSection + projectRulesSection + gitSection + webSection + notesSection;
   };
 
-  // â”€â”€â”€ Auto-Continue: Detect truncated responses and continue automatically â”€â”€â”€
-  const MAX_AUTO_CONTINUES = 4; // Safety limit to prevent infinite loops
-  const autoContinueCountRef = useRef(0);
-  const agentProposFixRunning = useRef(false);
-
-  /** Detect if an AI response was truncated mid-output (unclosed FILE/EDIT blocks) */
-  const isResponseTruncated = (text: string): boolean => {
-    // Count opens vs closes for FILE blocks
-    const fileOpens = (text.match(/===FILE:\s*.+?===/g) || []).length;
-    const fileCloses = (text.match(/===END_FILE===/g) || []).length;
-    if (fileOpens > fileCloses) return true;
-
-    // Count opens vs closes for EDIT blocks
-    const editOpens = (text.match(/===EDIT:\s*.+?===/g) || []).length;
-    const editCloses = (text.match(/===END_EDIT===/g) || []).length;
-    if (editOpens > editCloses) return true;
-
-    // Check for unclosed code fences (``` without matching close)
-    const fences = (text.match(/```/g) || []).length;
-    if (fences % 2 !== 0) return true;
-
-    return false;
-  };
-
   const requestPunam = async (userPrompt: string, mode: AgentMode = agentMode) => {
     // Check if any API key is available (new provider system OR legacy config)
     const hasProviderKey = aiProviders.some((p) => p.apiKey && p.models.some((m) => m.enabled));
@@ -740,7 +683,7 @@ export default function AiChat({
           const results = await searchProject(query).catch(() => []);
           if (results.length > 0) {
             const resultLines = results.slice(0, 15).map(
-              (r) => `${r.path}:${r.line} â€” ${r.preview.slice(0, 100)}`
+              (r) => `${r.path}:${r.line} — ${r.preview.slice(0, 100)}`
             );
             searchSection = `\n\n# Search Results for "${query}" (${results.length} matches)\n\`\`\`\n${resultLines.join("\n")}\n\`\`\``;
           }
@@ -767,7 +710,7 @@ export default function AiChat({
       let problemsSection = "";
       if (problems && problems.length > 0) {
         const problemLines = problems.slice(0, 20).map(
-          (p) => `[${p.severity}] ${p.path}:${p.line} â€” ${p.message}`
+          (p) => `[${p.severity}] ${p.path}:${p.line} — ${p.message}`
         );
         problemsSection = `\n\n# Current Problems/Errors (${problems.length} total)\n\`\`\`\n${problemLines.join("\n")}\n\`\`\``;
       }
@@ -792,15 +735,15 @@ export default function AiChat({
           : m.content.slice(0, 500);
         return `${role}: ${content}`;
       }).join("\n");
-      const historySection = recentHistory ? `\n\n# Conversation History (recent â€” for continuity only, current project context takes priority)\n${recentHistory}` : "";
+      const historySection = recentHistory ? `\n\n# Conversation History (recent)\n${recentHistory}` : "";
 
       // Detect @file mentions that don't resolve to existing files (B010)
       const unresolvedFiles = getUnresolvedMentions(userPrompt, collectExistingFiles());
       const unresolvedSection = unresolvedFiles.length > 0
-        ? `\n\n# âš ï¸ Non-Existent File References\nThe user mentioned the following file(s) that do NOT exist in the project:\n${unresolvedFiles.map((f) => `- ${f}`).join("\n")}\nIMPORTANT: Before proposing to create these files, explicitly tell the user that the file does not exist and ask if they want you to create it. Do NOT silently create files that the user may have assumed already existed.`
+        ? `\n\n# ⚠️ Non-Existent File References\nThe user mentioned the following file(s) that do NOT exist in the project:\n${unresolvedFiles.map((f) => `- ${f}`).join("\n")}\nIMPORTANT: Before proposing to create these files, explicitly tell the user that the file does not exist and ask if they want you to create it. Do NOT silently create files that the user may have assumed already existed.`
         : "";
 
-      const prompt = `# Agent Mode\n${modeInstruction}${contextInstruction}${mcpSection}${workspaceSection}\n\n# Current Project Structure\n\`\`\`\n${fileTree}\`\`\`\n\n# Attached File Context\n${attachedContext || "No file contents attached."}\n\n# User Request\n${userPrompt}${editorStateSection}${selectionSection}${searchSection}${problemsSection}${terminalSection}${unresolvedSection}${historySection}`;
+      const prompt = `# Agent Mode\n${modeInstruction}${contextInstruction}${mcpSection}${workspaceSection}\n\n# User Request\n${userPrompt}${editorStateSection}${selectionSection}${searchSection}${problemsSection}${terminalSection}${unresolvedSection}${historySection}\n\n# Project Structure\n\`\`\`\n${fileTree}\`\`\`\n\n# Attached File Context\n${attachedContext || "No file contents attached."}`;
 
       // Collect current image attachments from the last user message
       const lastUserMsg = messages[messages.length - 1];
@@ -845,7 +788,7 @@ export default function AiChat({
 
           const streamId = `stream-${Date.now()}`;
           const firstNotice = "";
-          setMessages((prev) => [...prev, { role: "assistant", content: `${firstNotice}\n\nÃ¢â€“Â`, mode, streamId } as ChatMessage & { streamId: string }]);
+          setMessages((prev) => [...prev, { role: "assistant", content: `${firstNotice}\n\nâ–`, mode, streamId } as ChatMessage & { streamId: string }]);
 
           const fallbackNotices: string[] = [];
           let finalResp: Awaited<ReturnType<typeof sendToProviderStreaming>> | null = null;
@@ -860,7 +803,7 @@ export default function AiChat({
 
             setMessages((prev) => prev.map((m) =>
               (m as any).streamId === streamId
-                ? { ...m, content: `${[firstNotice, ...fallbackNotices].join("\n")}\n\nUsing ${candidate.provider.name} / ${candidate.model}...\n\nÃ¢â€“Â` }
+                ? { ...m, content: `${[firstNotice, ...fallbackNotices].join("\n")}\n\nUsing ${candidate.provider.name} / ${candidate.model}...\n\nâ–` }
                 : m
             ));
 
@@ -875,7 +818,7 @@ export default function AiChat({
               const displayText = getStreamingTextBeforeActionBlocks(streamedText);
               setMessages((prev) => prev.map((m) =>
                 (m as any).streamId === streamId
-                  ? { ...m, content: `${[firstNotice, ...fallbackNotices].join("\n")}\n\n${displayText}Ã¢â€“Â` }
+                  ? { ...m, content: `${[firstNotice, ...fallbackNotices].join("\n")}\n\n${displayText}â–` }
                   : m
               ));
             };
@@ -951,7 +894,7 @@ export default function AiChat({
 
         // Use new multi-provider system
         if (enabledModels.length === 1) {
-          // Single model â€” use streaming for real-time token display
+          // Single model — use streaming for real-time token display
           const { providerId, model: modelId } = enabledModels[0];
           const provider = aiProviders.find((p) => p.id === providerId);
 
@@ -960,9 +903,9 @@ export default function AiChat({
           } else {
             // Add placeholder message with unique stream ID for tracking
             const streamId = `stream-${Date.now()}`;
-            setMessages((prev) => [...prev, { role: "assistant", content: "â–", mode, streamId } as ChatMessage & { streamId: string }]);
+            setMessages((prev) => [...prev, { role: "assistant", content: "▍", mode, streamId } as ChatMessage & { streamId: string }]);
 
-            // Listen for streaming tokens â€” BATCHED for performance
+            // Listen for streaming tokens — BATCHED for performance
             const { listen } = await import("@tauri-apps/api/event");
             let streamedText = "";
             let pendingFlush = false;
@@ -974,7 +917,7 @@ export default function AiChat({
               // Show only the explanation part during streaming (hide raw FILE blocks)
               const displayText = getStreamingTextBeforeActionBlocks(streamedText);
               setMessages((prev) => prev.map((m) =>
-                (m as any).streamId === streamId ? { ...m, content: displayText + "â–" } : m
+                (m as any).streamId === streamId ? { ...m, content: displayText + "▍" } : m
               ));
             };
 
@@ -1018,12 +961,12 @@ export default function AiChat({
                 for (const call of mcpCalls) {
                   const server = mcpServers.find(s => s.id === call.serverId && s.enabled);
                   if (!server) {
-                    mcpResultParts.push(`âš ï¸ MCP server "${call.serverId}" not found or disabled.`);
+                    mcpResultParts.push(`⚠️ MCP server "${call.serverId}" not found or disabled.`);
                     continue;
                   }
                   setMessages(prev => [...prev, {
                     role: "assistant",
-                    content: `ðŸ”§ Calling MCP tool **${call.serverId}.${call.toolName}**â€¦`,
+                    content: `🔧 Calling MCP tool **${call.serverId}.${call.toolName}**…`,
                   }]);
                   const result = await mcpCallTool(server, call.toolName, call.args, projectPath);
                   const formatted = formatMcpResult(call.toolName, result);
@@ -1055,21 +998,9 @@ export default function AiChat({
               };
             }));
             recordResponseUsage(resp.metrics);
-
-            // â”€â”€â”€ Auto-Continue: If response was truncated, automatically continue â”€â”€â”€
-            if (resp.success && isResponseTruncated(effectiveFinalText) && autoContinueCountRef.current < MAX_AUTO_CONTINUES) {
-              autoContinueCountRef.current += 1;
-              // Small delay to let the UI update, then auto-continue
-              setTimeout(() => {
-                requestPunam("Continue from where you stopped. Complete the remaining code. Do NOT repeat what you already wrote â€” pick up exactly where the output was cut off.", mode);
-              }, 500);
-              return;
-            }
-            // Reset auto-continue counter on successful complete response
-            autoContinueCountRef.current = 0;
           }
         } else {
-          // Multiple models â€” send in parallel (no streaming for multi)
+          // Multiple models — send in parallel (no streaming for multi)
           const imagePayloadMulti = currentImages.length > 0
             ? currentImages.map((img) => ({ base64: img.base64, mimeType: img.mimeType }))
             : undefined;
@@ -1099,106 +1030,37 @@ export default function AiChat({
           }]);
         }
       } else {
-        // Legacy single-provider system â€” now with streaming
-        // Guard: if no API key configured, don't attempt streaming (would crash backend)
-        if (!config.api_key && config.provider !== "ollama") {
-          setMessages((prev) => [...prev, { role: "assistant", content: "No API key configured. Set one up in Settings to use AI features." }]);
-          setLoading(false);
-          setCooldown(true);
-          setTimeout(() => setCooldown(false), 3000);
-          return;
-        }
-        const legacyProviderConfig: import("../utils/providers").AIProviderConfig = {
-          id: "legacy",
-          type: config.provider === "gemini" ? "gemini" : "openai-compatible",
-          name: config.provider === "gemini" ? "Google Gemini" : config.provider === "groq" ? "Groq" : config.provider === "openai" ? "OpenAI" : config.provider,
-          apiKey: config.api_key || "",
-          baseUrl: config.provider === "groq" ? "https://api.groq.com/openai/v1"
-            : config.provider === "openai" ? "https://api.openai.com/v1"
-            : undefined,
-          models: [{ id: config.model, name: config.model, enabled: true }],
-        };
-
-        // Add placeholder message with streaming cursor
-        const streamId = `stream-${Date.now()}`;
-        setMessages((prev) => [...prev, { role: "assistant", content: "\u258D", mode, streamId } as ChatMessage & { streamId: string }]);
-
-        // Listen for streaming tokens â€” BATCHED for performance
-        const { listen } = await import("@tauri-apps/api/event");
-        let streamedText = "";
-        let pendingFlush = false;
-        let flushTimer: ReturnType<typeof setTimeout> | null = null;
-
-        const flushStreamedText = () => {
-          pendingFlush = false;
-          flushTimer = null;
-          const displayText = getStreamingTextBeforeActionBlocks(streamedText);
-          setMessages((prev) => prev.map((m) =>
-            (m as any).streamId === streamId ? { ...m, content: displayText + "\u258D" } : m
-          ));
-        };
-
-        const unlisten = await listen<{ token: string; done: boolean }>("llm-stream", (event) => {
-          const { token, done } = event.payload;
-          if (!done && token) {
-            streamedText += token;
-            if (!pendingFlush) {
-              pendingFlush = true;
-              flushTimer = setTimeout(flushStreamedText, 40);
-            }
-          }
+        // Fallback to legacy single-provider system
+        const response = await callLlm({
+          provider: config.provider,
+          api_key: config.api_key,
+          model: config.model,
+          system_prompt: SYSTEM_PROMPT,
+          user_prompt: prompt,
         });
 
-        const resp = await sendToProviderStreaming(legacyProviderConfig, config.model, {
-          systemPrompt: SYSTEM_PROMPT,
-          userPrompt: prompt,
-        });
-        unlisten();
-        if (flushTimer) { clearTimeout(flushTimer); flushTimer = null; }
-        if (pendingFlush) flushStreamedText();
-
-        if (!resp.success) {
-          const providerName = legacyProviderConfig.name;
-          setMessages((prev) => prev.map((m) =>
-            (m as any).streamId === streamId
-              ? { ...m, content: `Currently using ${providerName} / ${config.model}. The service is temporarily unavailable \u2014 please try again in a moment.`, streamId: undefined }
-              : m
-          ));
+        if (!response.success) {
+          const providerName = config.provider === "gemini" ? "Google Gemini" : config.provider === "groq" ? "Groq" : config.provider === "openai" ? "OpenAI" : config.provider;
+          setMessages((prev) => [...prev, { role: "assistant", content: `Currently using ${providerName} / ${config.model}. The service is temporarily unavailable — please try again in a moment.` }]);
           return;
         }
 
-        let parsed = parseResponse(resp.text, collectExistingFiles());
+        let parsed = parseResponse(response.text, collectExistingFiles());
         if (parsed.editOperations.length > 0) {
           parsed = await resolveEditOperations(parsed, projectPath);
         }
         const hasActions = hasParsedActions(parsed);
-        recordResponseUsage(resp.metrics);
-
-        setMessages((prev) => prev.map((m) => {
-          if ((m as any).streamId !== streamId) return m;
-          const { streamId: _sid, ...rest } = m as any;
-          return {
-            ...rest,
-            content: resp.text,
-            parsed: hasActions ? parsed : undefined,
-            applied: false,
-            metrics: resp.metrics,
-          };
-        }));
-
-        // â”€â”€â”€ Auto-Continue: If response was truncated, automatically continue â”€â”€â”€
-        if (isResponseTruncated(resp.text) && autoContinueCountRef.current < MAX_AUTO_CONTINUES) {
-          autoContinueCountRef.current += 1;
-          setTimeout(() => {
-            requestPunam("Continue from where you stopped. Complete the remaining code. Do NOT repeat what you already wrote â€” pick up exactly where the output was cut off.", mode);
-          }, 500);
-          return;
-        }
-        autoContinueCountRef.current = 0;
+        setMessages((prev) => [...prev, {
+          role: "assistant",
+          content: response.text,
+          mode,
+          parsed: hasActions ? parsed : undefined,
+          applied: false,
+        }]);
       }
     } catch (err) {
       const providerName = config.provider === "gemini" ? "Google Gemini" : config.provider === "groq" ? "Groq" : config.provider === "openai" ? "OpenAI" : config.provider;
-      setMessages((prev) => [...prev, { role: "assistant", content: `Currently using ${providerName} / ${config.model}. Something went wrong â€” please try again.` }]);
+      setMessages((prev) => [...prev, { role: "assistant", content: `Currently using ${providerName} / ${config.model}. Something went wrong — please try again.` }]);
     } finally {
       setLoading(false);
       setCooldown(true);
@@ -1293,7 +1155,7 @@ export default function AiChat({
     const webMatch = text.match(/@web\s+(.+?)(?:\n|$)/i);
     if (webMatch) {
       const query = webMatch[1].trim().slice(0, 150);
-      setMessages((prev) => [...prev, { role: "assistant", content: `ðŸŒ Searching the web for: _${query}_...` }]);
+      setMessages((prev) => [...prev, { role: "assistant", content: `🌐 Searching the web for: _${query}_...` }]);
       try {
         // Build a minimal search via a DuckDuckGo instant-answer URL (no API key needed)
         const encoded = encodeURIComponent(query);
@@ -1304,15 +1166,15 @@ export default function AiChat({
           const source = data.AbstractURL || data.AnswerType || "";
           if (abstract) {
             setWebSearchResults(`Query: ${query}\n\nResult: ${abstract}${source ? `\nSource: ${source}` : ""}`);
-            setMessages((prev) => [...prev.slice(0, -1), { role: "assistant", content: `ðŸŒ Web: ${abstract.slice(0, 200)}${abstract.length > 200 ? "â€¦" : ""}` }]);
+            setMessages((prev) => [...prev.slice(0, -1), { role: "assistant", content: `🌐 Web: ${abstract.slice(0, 200)}${abstract.length > 200 ? "…" : ""}` }]);
           } else {
             setWebSearchResults(`Query: ${query}\n\nNo direct answer found. The AI will answer from training data.`);
-            setMessages((prev) => [...prev.slice(0, -1), { role: "assistant", content: `ðŸŒ No instant answer found for "${query}". Proceeding with AI knowledge.` }]);
+            setMessages((prev) => [...prev.slice(0, -1), { role: "assistant", content: `🌐 No instant answer found for "${query}". Proceeding with AI knowledge.` }]);
           }
         }
       } catch {
         setWebSearchResults("");
-        setMessages((prev) => [...prev.slice(0, -1), { role: "assistant", content: `ðŸŒ Web search unavailable. Proceeding with AI knowledge.` }]);
+        setMessages((prev) => [...prev.slice(0, -1), { role: "assistant", content: `🌐 Web search unavailable. Proceeding with AI knowledge.` }]);
       }
     }
 
@@ -1325,7 +1187,7 @@ export default function AiChat({
     // B010 fix: Show a visible warning when @file mentions don't resolve to existing files
     const unresolvedFiles = getUnresolvedMentions(text, collectExistingFiles());
     if (unresolvedFiles.length > 0) {
-      const warningMsg = `âš ï¸ Note: ${unresolvedFiles.map((f) => `\`${f}\``).join(", ")} ${unresolvedFiles.length === 1 ? "does" : "do"} not exist in the project. If you want me to create ${unresolvedFiles.length === 1 ? "it" : "them"}, I'll confirm before doing so.`;
+      const warningMsg = `⚠️ Note: ${unresolvedFiles.map((f) => `\`${f}\``).join(", ")} ${unresolvedFiles.length === 1 ? "does" : "do"} not exist in the project. If you want me to create ${unresolvedFiles.length === 1 ? "it" : "them"}, I'll confirm before doing so.`;
       setMessages((prev) => [...prev, { role: "assistant", content: warningMsg }]);
     }
 
@@ -1345,7 +1207,6 @@ export default function AiChat({
     // --- Agent mode: always use autonomous agent loop ---
     if (mode === "agent") {
       startAgentTask(text);
-      await new Promise(resolve => setTimeout(resolve, 300)); // wait for state to settle
       await agentProposeFix();
       return;
     }
@@ -1360,7 +1221,6 @@ export default function AiChat({
 
     if (isAgentTask && !agentTask?.active) {
       startAgentTask(text);
-      await new Promise(resolve => setTimeout(resolve, 300)); // wait for state to settle
       await agentProposeFix();
       return;
     }
@@ -1537,7 +1397,7 @@ export default function AiChat({
     setAgentTask(null);
     setMessages((prev) => [...prev, {
       role: "assistant",
-      content: "âœ“ Task sent to background. You can keep coding â€” check the status bar for progress.",
+      content: "✓ Task sent to background. You can keep coding — check the status bar for progress.",
     }]);
   };
 
@@ -1557,33 +1417,45 @@ export default function AiChat({
 
     setMessages((prev) => [...prev, {
       role: "assistant",
-      content: "âœ“ Task running in background. Keep coding â€” check the status bar for progress.",
+      content: "✓ Task running in background. Keep coding — check the status bar for progress.",
     }]);
   };
 
-  // Agent fix proposal implementation.
-//
-// Replace the ENTIRE function body with the version below.
-// The function signature stays the same.
-// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-
   const agentProposeFix = async () => {
     if (!agentTask || !agentTask.active) return;
-    if (agentProposFixRunning.current) return;
-    agentProposFixRunning.current = true;
 
-    try {
-      setAgentTask((prev) => prev ? { ...prev, step: "proposing_fix" } : null);
+    setAgentTask((prev) => prev ? { ...prev, step: "proposing_fix" } : null);
 
-    // â”€â”€ Shared setup (same for both paths) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    // ── Build context using the Context Engine ──────────────────────────────
     const existingFiles = collectExistingFiles();
     const errorContextText = [terminalOutput || "", proactiveError?.output || ""]
       .filter(Boolean)
       .join("\n");
+    const errorFiles = getFilePathsFromText(errorContextText, existingFiles);
+
+    // Load relevant file snippets (error-referenced files + active file)
+    const snippets: string[] = [];
+    for (const filePath of errorFiles.slice(0, 3)) {
+      try {
+        const content = await readFile(getProjectFilePath(projectPath, filePath));
+        if (content) {
+          snippets.push(`## ${filePath}\n\`\`\`\n${content.slice(0, 6000)}\n\`\`\``);
+        }
+      } catch { /* skip */ }
+    }
+    if (activeFilePath) {
+      const relPath = getRelativePath(projectPath, activeFilePath);
+      if (!errorFiles.includes(relPath)) {
+        const content = await readFile(activeFilePath).catch(() => "");
+        if (content) snippets.push(`## ${relPath}\n\`\`\`\n${content.slice(0, 4000)}\n\`\`\``);
+      }
+    }
 
     // Load persistent memories
     const memories = loadAgentMemories(projectPath);
     const compressedMemory = compressMemories(memories);
+
+    // Summarize old messages
     const chatSummary = summarizeOldMessages(messages);
     const fullMemory = [compressedMemory, chatSummary].filter(Boolean).join("\n\n");
 
@@ -1592,204 +1464,42 @@ export default function AiChat({
       ? `Previous attempts (DO NOT repeat):\n${agentTask.history.map((h, i) => `${i + 1}. ${h}`).join("\n")}`
       : "";
 
+    // Build the payload using the Context Engine formula
     const currentTask = agentTask.subtasks.length > 1
       ? agentTask.subtasks[agentTask.currentSubtask]
       : agentTask.task;
 
-    // â”€â”€ Pick path: tool loop OR full-context fallback â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-    const enabledModels = getEnabledModels();
-    if (enabledModels.length === 0) {
-      setMessages(prev => [...prev, { role: "assistant", content: "No AI provider configured." }]);
-      setLoading(false);
-      return;
-    }
-    const { providerId, model: modelId } = enabledModels[0];
-    const provider = aiProviders.find(p => p.id === providerId);
-    if (!provider) {
-      setMessages(prev => [...prev, { role: "assistant", content: "Provider not found." }]);
-      setLoading(false);
-      return;
-    }
-
-    const useToolLoop = shouldUseToolLoop(currentTask);
-
-    // â”€â”€ Path A: Tool-calling loop â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-    if (useToolLoop) {
-      const payload = assemblePersistentPayload({
-        globalGoal: agentTask.task,
-        currentSubtask: `${currentTask} (attempt ${agentTask.attempt}/${agentTask.maxAttempts})${historyContext ? "\n" + historyContext : ""}`,
-        fullHistory: messages,
-        activeFileSnippets: [], // tool loop reads on demand â€” no snippets upfront
-        latestErrors: errorContextText.slice(-2000),
-        projectMemory: fullMemory,
-        projectPath,
-        toolLoopMode: true, // â† key flag
-      });
-
-      setLoading(true);
-
-      // Add streaming placeholder
-      const streamId = `stream-${Date.now()}`;
-      setMessages(prev => [...prev, { role: "assistant", content: "â–", mode: "chat", streamId } as any]);
-
-      // Track which tools fired (for UI feedback)
-      const firedTools: string[] = [];
-
-      await runAgentToolLoop({
-        provider,
-        modelId,
-        systemPrompt: payload.systemInstruction,
-        task: currentTask,
-        projectPath,
-        activeFilePath,
-        maxRounds: 10,
-
-        onToolCall: (toolName) => {
-          firedTools.push(toolName);
-          // Show a subtle status while tools are running
-          const statusText = `ðŸ”§ Using tool: \`${toolName}\`â€¦`;
-          setMessages(prev => prev.map(m =>
-            (m as any).streamId === streamId
-              ? { ...m, content: statusText + "\n\nâ–" }
-              : m
-          ));
-        },
-
-        onToken: (token) => {
-          // For JSON-fallback providers, update the message as text arrives
-          setMessages(prev => prev.map(m =>
-            (m as any).streamId === streamId
-              ? { ...m, content: token + "â–" }
-              : m
-          ));
-        },
-
-        onDone: async (finalText) => {
-          // If tool loop exhausted rounds without a real answer, fall back to full-context
-          if (finalText === "Max tool rounds reached." || !finalText.trim()) {
-            console.warn("[AGENT TOOL LOOP] No useful answer from tool loop, falling back to full-context");
-            setMessages(prev => prev.filter(m => (m as any).streamId !== streamId));
-            setLoading(false);
-            _agentProposeFixFullContext(
-              currentTask, existingFiles, errorContextText, fullMemory, historyContext,
-              provider, modelId
-            );
-            return;
-          }
-
-          // Parse the final answer for any FILE/CMD blocks (full-context style)
-          let parsed = await parseResponseAsync(finalText, existingFiles).catch(() => null);
-          if (parsed && parsed.editOperations.length > 0) {
-            parsed = await resolveEditOperations(parsed, projectPath);
-          }
-          const hasActions = parsed ? hasParsedActions(parsed) : false;
-
-          setMessages(prev => prev.map(m => {
-            if ((m as any).streamId !== streamId) return m;
-            const { streamId: _sid, ...rest } = m as any;
-            return {
-              ...rest,
-              content: finalText,
-              parsed: hasActions ? parsed : undefined,
-              applied: false,
-            };
-          }));
-
-          if (parsed) {
-            const changedFiles = parsed.fileChanges.map(f => f.path);
-            extractMemoriesFromResponse(projectPath, currentTask, finalText, changedFiles);
-          }
-
-          setLoading(false);
-          setAgentTask((prev) => prev ? { ...prev, step: "awaiting_approval" } : null);
-        },
-
-        onError: (err) => {
-          console.warn("[AGENT TOOL LOOP] Tool loop failed, will retry with full-context fallback:", err);
-          // On tool loop error: fall through to full-context fallback below
-          setMessages(prev => prev.filter(m => (m as any).streamId !== streamId));
-          setLoading(false);
-          // Trigger full-context retry by re-running without tool loop
-          _agentProposeFixFullContext(
-            currentTask, existingFiles, errorContextText, fullMemory, historyContext,
-            provider, modelId
-          );
-        },
-      });
-
-      return; // Path A done
-    }
-
-    // â”€â”€ Path B: Full-context fallback (original behaviour, unchanged) â”€â”€â”€â”€â”€â”€â”€â”€
-    await _agentProposeFixFullContext(
-      currentTask, existingFiles, errorContextText, fullMemory, historyContext,
-      provider, modelId
-    );
-    } finally {
-      agentProposFixRunning.current = false;
-    }
-  };
-
-// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-// â”€â”€ CHANGE 3: Add _agentProposeFixFullContext helper â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-//
-// Add this NEW function IMMEDIATELY AFTER the agentProposeFix function above.
-// It contains the original agentProposeFix body, unchanged.
-// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-
-  // Full-context fallback â€” original logic extracted into its own function
-  // so it can be called from agentProposeFix (Path B) and as an error fallback.
-  const _agentProposeFixFullContext = async (
-    currentTask: string,
-    existingFiles: ReturnType<typeof collectExistingFiles>,
-    errorContextText: string,
-    fullMemory: string,
-    historyContext: string,
-    provider: import("../utils/providers").AIProviderConfig,
-    modelId: string
-  ) => {
-    const errorFiles = getFilePathsFromText(errorContextText, existingFiles);
-
-    // Load relevant file snippets (error-referenced files + active file)
-    const snippets: string[] = [];
-    const AGENT_FILE_LIMIT = 20000;
-    for (const filePath of errorFiles.slice(0, 3)) {
-      try {
-        const content = await readFile(getProjectFilePath(projectPath, filePath));
-        if (content) {
-          const clipped = content.slice(0, AGENT_FILE_LIMIT);
-          const numbered = clipped.split("\n").map((line, i) => `${String(i + 1).padStart(4, " ")} | ${line}`).join("\n");
-          snippets.push(`## ${filePath}\n\`\`\`\n${numbered}\n\`\`\``);
-        }
-      } catch { /* skip */ }
-    }
-    if (activeFilePath) {
-      const relPath = getRelativePath(projectPath, activeFilePath);
-      if (!errorFiles.includes(relPath)) {
-        const content = await readFile(activeFilePath).catch(() => "");
-        if (content) {
-          const clipped = content.slice(0, AGENT_FILE_LIMIT);
-          const numbered = clipped.split("\n").map((line, i) => `${String(i + 1).padStart(4, " ")} | ${line}`).join("\n");
-          snippets.push(`## ${relPath}\n\`\`\`\n${numbered}\n\`\`\``);
-        }
-      }
-    }
-
     const payload = assemblePersistentPayload({
-      globalGoal: agentTask!.task,
-      currentSubtask: `${currentTask} (attempt ${agentTask!.attempt}/${agentTask!.maxAttempts})${historyContext ? "\n" + historyContext : ""}`,
+      globalGoal: agentTask.task,
+      currentSubtask: `${currentTask} (attempt ${agentTask.attempt}/${agentTask.maxAttempts})${historyContext ? "\n" + historyContext : ""}`,
       fullHistory: messages,
       activeFileSnippets: snippets,
       latestErrors: errorContextText.slice(-2000),
       projectMemory: fullMemory,
       projectPath,
-      toolLoopMode: false, // full-context path
     });
 
+    // ── Send to AI using the optimized payload ──────────────────────────────
     setLoading(true);
     try {
+      const enabledModels = getEnabledModels();
+      if (enabledModels.length === 0) {
+        setMessages(prev => [...prev, { role: "assistant", content: "No AI provider configured." }]);
+        setLoading(false);
+        return;
+      }
+
+      const { providerId, model: modelId } = enabledModels[0];
+      const provider = aiProviders.find(p => p.id === providerId);
+      if (!provider) {
+        setMessages(prev => [...prev, { role: "assistant", content: "Provider not found." }]);
+        setLoading(false);
+        return;
+      }
+
+      // Stream with batching
       const streamId = `stream-${Date.now()}`;
-      setMessages(prev => [...prev, { role: "assistant", content: "â–", mode: "chat", streamId } as any]);
+      setMessages(prev => [...prev, { role: "assistant", content: "▍", mode: "chat", streamId } as any]);
 
       const { listen } = await import("@tauri-apps/api/event");
       let streamedText = "";
@@ -1801,7 +1511,7 @@ export default function AiChat({
         flushTimer = null;
         const displayText = getStreamingTextBeforeActionBlocks(streamedText);
         setMessages(prev => prev.map(m =>
-          (m as any).streamId === streamId ? { ...m, content: displayText + "â–" } : m
+          (m as any).streamId === streamId ? { ...m, content: displayText + "▍" } : m
         ));
       };
 
@@ -1816,21 +1526,16 @@ export default function AiChat({
         }
       });
 
-      // Only take the first user turn â€” the context block
-      const contextBlock = payload.contents
-        .find(c => c.role === "user")
-        ?.parts[0].text ?? "";
-
-      const finalUserPrompt = `${contextBlock}\n\n# USER QUESTION:\n${currentTask}`;
-
+      // Send with the context engine's system instruction
       const resp = await sendToProviderStreaming(provider, modelId, {
         systemPrompt: payload.systemInstruction,
-        userPrompt: finalUserPrompt,
+        userPrompt: payload.contents.map(c => c.parts[0].text).join("\n\n"),
       });
       unlisten();
       if (flushTimer) { clearTimeout(flushTimer); flushTimer = null; }
       if (pendingFlush) flushStreamedText();
 
+      // Parse response
       const finalText = resp.success ? resp.text : (resp.error || "Unknown error");
       let parsed = resp.success ? await parseResponseAsync(finalText, existingFiles) : null;
       if (parsed && parsed.editOperations.length > 0) {
@@ -1839,24 +1544,27 @@ export default function AiChat({
       const hasActions = parsed ? hasParsedActions(parsed) : false;
       recordResponseUsage(resp.metrics);
 
+      // Finalize message
       setMessages(prev => prev.map(m => {
         if ((m as any).streamId !== streamId) return m;
         const { streamId: _sid, ...rest } = m as any;
         return { ...rest, content: finalText, parsed: hasActions ? parsed : undefined, applied: false, metrics: resp.metrics };
       }));
 
+      // Auto-extract memories from the response
       if (resp.success && parsed) {
         const changedFiles = parsed.fileChanges.map(f => f.path);
         extractMemoriesFromResponse(projectPath, currentTask, finalText, changedFiles);
       }
 
     } catch (err) {
-      const providerName = aiProviders.find(hasUsableProvider)?.name || "AI";
-      setMessages(prev => [...prev, { role: "assistant", content: `Currently using ${providerName}. Something went wrong â€” please try again.` }]);
+      const providerName = aiProviders.find(hasUsableProvider)?.name || config.provider || "AI";
+      setMessages(prev => [...prev, { role: "assistant", content: `Currently using ${providerName}. Something went wrong — please try again.` }]);
     } finally {
       setLoading(false);
     }
 
+    // Update step
     setAgentTask((prev) => prev ? { ...prev, step: "awaiting_approval" } : null);
   };
 
@@ -1908,7 +1616,7 @@ export default function AiChat({
       setAgentTask((prev) => prev ? { ...prev, step: "verifying" } : null);
       setMessages((msgs) => [...msgs, {
         role: "assistant",
-        content: "âœ“ **Command passed.** Checking for next stepsâ€¦",
+        content: "✓ **Command passed.** Checking for next steps…",
       }]);
       // Advance to next subtask after a brief pause
       setTimeout(() => advanceSubtask(), 800);
@@ -1918,7 +1626,7 @@ export default function AiChat({
 
       setMessages((msgs) => [...msgs, {
         role: "assistant",
-        content: `âœ• Command failed. Analyzing errors...`,
+        content: `✕ Command failed. Analyzing errors...`,
       }]);
 
       // Continue if under max attempts
@@ -1942,7 +1650,7 @@ export default function AiChat({
         if (newAttempt > prev.maxAttempts) {
           setMessages((msgs) => [...msgs, {
             role: "assistant",
-            content: `âš ï¸ **Max attempts reached (${prev.maxAttempts}).** Reverting changes to restore your code to its previous state.`,
+            content: `⚠️ **Max attempts reached (${prev.maxAttempts}).** Reverting changes to restore your code to its previous state.`,
           }]);
           // Auto-revert all changes made during this agent task
           if (onRevertLastApply) {
@@ -1979,14 +1687,14 @@ export default function AiChat({
         // All subtasks done
         setMessages((msgs) => [...msgs, {
           role: "assistant",
-          content: `âœ… **All ${prev.subtasks.length} task${prev.subtasks.length > 1 ? "s" : ""} completed.**`,
+          content: `✅ **All ${prev.subtasks.length} task${prev.subtasks.length > 1 ? "s" : ""} completed.**`,
         }]);
         return { ...prev, step: "completed", active: false };
       }
       // Move to next subtask
       setMessages((msgs) => [...msgs, {
         role: "assistant",
-        content: `âž¡ï¸ Moving to subtask ${nextIdx + 1}/${prev.subtasks.length}: **${prev.subtasks[nextIdx]}**`,
+        content: `➡️ Moving to subtask ${nextIdx + 1}/${prev.subtasks.length}: **${prev.subtasks[nextIdx]}**`,
       }]);
       return {
         ...prev,
@@ -2050,7 +1758,7 @@ export default function AiChat({
     }
   }, [runObservation?.id, loading]);
 
-  // Detect if the last AI response has commands and agent is active â†’ suggest running
+  // Detect if the last AI response has commands and agent is active → suggest running
   useEffect(() => {
     if (!agentTask?.active || agentTask.step !== "awaiting_approval") return;
 
@@ -2065,12 +1773,12 @@ export default function AiChat({
           if (lastMsg.parsed?.commands?.length) {
             agentSuggestCommand(lastMsg.parsed.commands[0]);
           } else {
-            // No commands â€” check if we should move to next subtask
+            // No commands — check if we should move to next subtask
             advanceSubtask();
           }
         }).catch(() => {});
       } else if (!lastMsg.applied && !agentTask?.autoApply) {
-        // Manual mode â€” wait for user to click Apply
+        // Manual mode — wait for user to click Apply
         setAgentTask((prev) => prev ? { ...prev, step: "awaiting_approval" } : null);
       } else if (lastMsg.applied && lastMsg.parsed.commands?.length) {
         agentSuggestCommand(lastMsg.parsed.commands[0]);
@@ -2117,11 +1825,11 @@ export default function AiChat({
 
       {/* Messages */}
       <div className="chat-messages">
-        {/* Proactive Error Detection â€” sticky at top so it doesn't scroll away (B008 fix) */}
+        {/* Proactive Error Detection — sticky at top so it doesn't scroll away (B008 fix) */}
         {proactiveError && (
           <div className="proactive-error-card" style={{ position: "sticky", top: 0, zIndex: 10 }}>
             <div className="proactive-error-header">
-              <span>âš ï¸ Command failed: <code>{proactiveError.command}</code></span>
+              <span>⚠️ Command failed: <code>{proactiveError.command}</code></span>
             </div>
             <p className="proactive-error-text">Build/command error detected. Want me to fix it?</p>
             <div className="proactive-error-actions">
@@ -2139,7 +1847,7 @@ export default function AiChat({
                   try {
                     const content = await readFile(getProjectFilePath(projectPath, filePath));
                     if (content) {
-                      inlineFileContext += `\n\n## Content of ${filePath} (DO NOT guess â€” use this exactly):\n\`\`\`\n${content.slice(0, 8000)}\n\`\`\``;
+                      inlineFileContext += `\n\n## Content of ${filePath} (DO NOT guess — use this exactly):\n\`\`\`\n${content.slice(0, 8000)}\n\`\`\``;
                     }
                   } catch { /* file read failed, buildProjectContext will try again */ }
                 }
@@ -2257,7 +1965,7 @@ export default function AiChat({
                             <div key={j} className="change-item command">$ {c}</div>
                           ))}
                           {!msg.applied ? (
-                            // In agent mode with autoApply, don't show buttons â€” they'll be auto-applied
+                            // In agent mode with autoApply, don't show buttons — they'll be auto-applied
                             agentTask?.active && agentTask?.autoApply ? (
                               <div className="applied-badge auto-applying"><Loader2 size={14} className="spin-inline" /> Auto-applying...</div>
                             ) : (
@@ -2336,17 +2044,17 @@ export default function AiChat({
           </div>
         )}
 
-        {/* Agent Task Card â€” at bottom so it's always visible */}
+        {/* Agent Task Card — at bottom so it's always visible */}
         {agentTask && agentTask.active && (
           <div className="agent-task-card">
             <div className="agent-task-header">
               <Zap size={14} />
               <strong>Agent Mode</strong>
-              <button className="agent-bg-btn" onClick={sendToBackground} title="Continue in background â€” keep coding while Punam works">
-                â†— Background
+              <button className="agent-bg-btn" onClick={sendToBackground} title="Continue in background — keep coding while Punam works">
+                ↗ Background
               </button>
               <button className="agent-stop-btn" onClick={stopAgent} title="Stop Agent">
-                â–  Stop
+                ■ Stop
               </button>
             </div>
             <div className="agent-task-body">
@@ -2373,7 +2081,7 @@ export default function AiChat({
                 <button
                   className={`agent-toggle-btn ${agentTask.autoApply ? "on" : "off"}`}
                   onClick={() => setAgentTask(prev => prev ? { ...prev, autoApply: !prev.autoApply } : null)}
-                  title={agentTask.autoApply ? "Auto-apply ON â€” edits apply without review" : "Auto-apply OFF â€” shows diff preview"}
+                  title={agentTask.autoApply ? "Auto-apply ON — edits apply without review" : "Auto-apply OFF — shows diff preview"}
                 >
                   {agentTask.autoApply ? "ON (autopilot)" : "OFF (review each)"}
                 </button>
@@ -2416,7 +2124,6 @@ export default function AiChat({
         handleFileAttach={handleFileAttach}
         handleFileInputChange={handleFileInputChange}
         fileInputRef={fileInputRef}
-        openTabs={openTabs}
         aiProviders={aiProviders}
         configModel={config.model}
         configProvider={config.provider}
@@ -2438,7 +2145,7 @@ export default function AiChat({
         onKeyDown={handleKeyDown}
         onRevert={onRevertLastApply ? async () => {
           await onRevertLastApply();
-          setMessages((prev) => [...prev, { role: "assistant", content: "â†©ï¸ Last AI edit reverted." }]);
+          setMessages((prev) => [...prev, { role: "assistant", content: "↩️ Last AI edit reverted." }]);
         } : undefined}
         hasAppliedMessages={checkpointCount}
         sendDisabled={loading || cooldown || (!input.trim() && attachments.length === 0)}
@@ -2447,6 +2154,5 @@ export default function AiChat({
     </div>
   );
 }
-
 
 

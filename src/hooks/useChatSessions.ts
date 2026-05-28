@@ -81,53 +81,47 @@ export function useChatSessions({ projectPath, messages, setMessages }: UseChatS
     setActiveSessionId(null);
     setSessions([]);
 
-    const initSession = async () => {
-      try {
-        await initChatDb();
-      } catch {
-        // DB init failed (e.g., running in browser dev mode) — skip session management
-        return;
-      }
+    (async () => {
+      await initChatDb();
       if (cancelled) return;
 
-      let loadedRecords: ChatSessionRecord[] = [];
-      try {
-        loadedRecords = await dbLoadSessions(50);
-      } catch {
-        // DB load failed — start fresh
-      }
+      let loadedRecords = await dbLoadSessions(50);
       if (cancelled) return;
 
-      // Always start a fresh session when project changes
-      // This prevents old project context from leaking into new projects
-      const newRecord: ChatSessionRecord = {
-        id: generateSessionId(),
-        title: "New Chat",
-        provider: "",
-        model: "",
-        messages: "[]",
-        token_count: 0,
-        cost: 0,
-        created_at: Date.now(),
-        updated_at: Date.now(),
-      };
-      try {
+      if (loadedRecords.length === 0) {
+        const newRecord: ChatSessionRecord = {
+          id: generateSessionId(),
+          title: "New Chat",
+          provider: "",
+          model: "",
+          messages: "[]",
+          token_count: 0,
+          cost: 0,
+          created_at: Date.now(),
+          updated_at: Date.now(),
+        };
         await saveChatSession(newRecord);
-      } catch {
-        // Save failed — continue with in-memory session only
+        if (cancelled) return;
+        loadedRecords = [newRecord];
+        setActiveSessionId(newRecord.id);
+      } else {
+        setActiveSessionId(loadedRecords[0].id);
       }
-      if (cancelled) return;
 
-      // Load existing sessions for the session list (user can switch back if needed)
-      const loadedSessions = loadedRecords.length > 0
-        ? [recordToSession(newRecord), ...loadedRecords.map(recordToSession)]
-        : [recordToSession(newRecord)];
+      const loadedSessions = loadedRecords.map(recordToSession);
       setSessions(loadedSessions);
-      setActiveSessionId(newRecord.id);
-      setMessages([]);
-    };
 
-    initSession();
+      const targetId = loadedSessions[0]?.id;
+      if (targetId) {
+        const targetRecord = loadedRecords.find((r) => r.id === targetId);
+        if (targetRecord) {
+          try {
+            const saved: PersistedChatMessage[] = JSON.parse(targetRecord.messages || "[]");
+            setMessages(saved.map(restorePersistedMessage));
+          } catch { /* empty messages */ }
+        }
+      }
+    })();
     return () => {
       cancelled = true;
     };

@@ -1,10 +1,7 @@
 import { useState, useRef, useEffect } from "react";
 import { Play, Pause, StepForward, StepBack, StopCircle, Variable, List, Code, ArrowDownToLine, ArrowUpFromLine } from "lucide-react";
 import DebugConfigPicker from "./DebugConfigPicker";
-import AiDebugAssistant from "./AiDebugAssistant";
 import type { DebugLaunchConfig } from "../utils/debugConfig";
-import type { AIProviderConfig } from "../utils/providers";
-import type { ReviewFileChange } from "./AiDiffPreview";
 
 interface DebuggerPanelProps {
   sessionId: string | null;
@@ -27,17 +24,6 @@ interface DebuggerPanelProps {
   onStop: () => void;
   onPause: () => void;
   onJumpToSource: (path: string, line: number) => void;
-  // AI Debug Assistant (Phase 5B)
-  currentSourceCode?: string;
-  fullFileContent?: string;
-  aiProvider: AIProviderConfig | null;
-  aiModel: string;
-  showToast: (message: string, type: "info" | "success" | "error" | "warning") => void;
-  // Phase 5D: Smart guidance actions
-  onToggleBreakpoint?: (path: string, line: number) => void;
-  onEvaluateExpression?: (expression: string) => void;
-  // Phase 5C: Fix suggestions
-  onProposeFix?: (changes: ReviewFileChange[]) => void;
 }
 
 export default function DebuggerPanel({
@@ -59,15 +45,6 @@ export default function DebuggerPanel({
   onStop,
   onPause,
   onJumpToSource,
-  currentSource,
-  currentSourceCode,
-  fullFileContent,
-  aiProvider,
-  aiModel,
-  showToast,
-  onToggleBreakpoint,
-  onEvaluateExpression,
-  onProposeFix,
 }: DebuggerPanelProps) {
   const [activeView, setActiveView] = useState<"stack" | "variables" | "console">("stack");
   const [evalInput, setEvalInput] = useState("");
@@ -264,29 +241,6 @@ export default function DebuggerPanel({
           </div>
         )}
       </div>
-
-      {/* AI Debug Assistant — Phase 5B + 5D + 5C */}
-      <AiDebugAssistant
-        isPaused={adapterStatus === "paused"}
-        stackFrames={stackFrames}
-        variables={variables}
-        consoleOutput={consoleOutput}
-        currentSourceCode={currentSourceCode}
-        fullFileContent={fullFileContent}
-        currentFilePath={currentSource?.path}
-        currentLine={currentSource?.line}
-        aiProvider={aiProvider}
-        aiModel={aiModel}
-        showToast={showToast}
-        onSetBreakpoint={onToggleBreakpoint}
-        onEvaluateExpression={(expression) => {
-          if (sessionId) {
-            onSendRequest("evaluate", { expression, context: "repl" });
-          }
-        }}
-        onJumpToSource={onJumpToSource}
-        onProposeFix={onProposeFix}
-      />
     </div>
   );
 }

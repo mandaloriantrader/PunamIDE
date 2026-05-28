@@ -7,9 +7,7 @@ import { useRef, useEffect, useState } from "react";
 import { Send, FileText, Layers, SearchCode, Wrench, MessageCircle, Paperclip, Plus, X, ChevronDown } from "lucide-react";
 import type { ChatAttachment } from "../../utils/tauri";
 import type { AIProviderConfig } from "../../utils/providers";
-import type { OpenTabContext } from "../../types";
 import { ModelSelector } from "./ChatComponents";
-import { TokenPill } from "./TokenPill";
 
 interface ChatInputAreaProps {
   input: string;
@@ -35,8 +33,6 @@ interface ChatInputAreaProps {
   handleFileAttach: () => void;
   handleFileInputChange: (e: React.ChangeEvent<HTMLInputElement>) => void;
   fileInputRef: React.RefObject<HTMLInputElement | null>;
-  // Open tabs for token estimator
-  openTabs: OpenTabContext[];
   // Model selector
   aiProviders: AIProviderConfig[];
   configModel: string;
@@ -80,7 +76,6 @@ export function ChatInputArea({
   handleFileAttach,
   handleFileInputChange,
   fileInputRef,
-  openTabs,
   aiProviders,
   configModel,
   configProvider,
@@ -296,12 +291,6 @@ export function ChatInputArea({
             isOpen={modelDropdownOpen}
             onToggle={() => setModelDropdownOpen(!modelDropdownOpen)}
             onSelect={(selection) => { setActiveModelOverride(selection); setModelDropdownOpen(false); }}
-          />
-          {/* Token estimator pill */}
-          <TokenPill
-            message={input}
-            tabs={openTabs}
-            activeTabPath={activeFileRelPath || null}
           />
           {adaptivePreview && (
             <div className="ai-adaptive-wrap">

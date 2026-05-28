@@ -28,8 +28,8 @@ export const PROJECT_RULES_FILES = [
   "AGENTS.md",
 ];
 
-export const MAX_CONTEXT_FILE_CHARS = 30000;
-export const MAX_TOTAL_CONTEXT_CHARS = 120000;
+export const MAX_CONTEXT_FILE_CHARS = 6000;
+export const MAX_TOTAL_CONTEXT_CHARS = 24000;
 
 // --- File Tree ---
 

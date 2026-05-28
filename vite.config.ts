@@ -6,10 +6,4 @@ import tailwindcss from '@tailwindcss/vite'
 export default defineConfig({
   base: './',
   plugins: [react(), tailwindcss()],
-  server: {
-    watch: {
-      // Ignore non-source folders so Punam editing test files doesn't trigger HMR reload
-      ignored: ['**/test-refactor/**', '**/files/**', '**/plans/**', '**/dist/**'],
-    },
-  },
 })
