@@ -1022,6 +1022,58 @@ export default function App() {
     }
   };
 
+  // Open file in tab (via file dialog) — bypasses project root restriction
+  const handleOpenFile = async () => {
+    try {
+      const selected = await open({
+        directory: false,
+        multiple: true,
+        filters: [
+          { name: "All Files", extensions: ["*"] },
+          { name: "Code", extensions: ["js", "ts", "jsx", "tsx", "py", "rs", "go", "java", "c", "cpp", "h", "cs", "rb", "php", "html", "css", "json", "yaml", "yml", "toml", "md", "txt", "sql", "sh", "bat"] },
+        ],
+      });
+      if (selected) {
+        const paths = Array.isArray(selected) ? selected : [selected];
+        for (const filePath of paths) {
+          const fp = filePath as string;
+          const normalizedPath = normalizeFsPath(fp);
+          const existing = tabs.find((t) => normalizeFsPath(t.path) === normalizedPath);
+          if (existing) {
+            setActiveTab(existing.id);
+            continue;
+          }
+          try {
+            // Try normal readFile first (works for files inside project)
+            let content: string;
+            try {
+              content = await readFile(fp);
+            } catch {
+              // If project security check blocks it, use Tauri FS plugin directly
+              const { readTextFile } = await import("@tauri-apps/plugin-fs");
+              content = await readTextFile(fp);
+            }
+            const name = fp.split(/[\\/]/).pop() || fp;
+            const tab: Tab = {
+              id: `tab-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+              path: fp,
+              name,
+              content,
+              modified: false,
+            };
+            setTabs((prev) => [...prev, tab]);
+            setActiveTab(tab.id);
+          } catch (err) {
+            const fileName = fp.split(/[\\/]/).pop() || fp;
+            showToast(`Failed to open "${fileName}": ${err}`, "error");
+          }
+        }
+      }
+    } catch (err) {
+      showToast(`Failed to open file: ${err}`, "error");
+    }
+  };
+
   // Open file in tab
   const handleFileSelect = async (path: string) => {
     const normalizedPath = normalizeFsPath(path);
@@ -1414,6 +1466,13 @@ export default function App() {
         setShowSearch(false);
         setShowGitPanel((visible) => !visible);
         setGitRefreshKey((key) => key + 1);
+        return;
+      }
+
+      // Ctrl+Shift+O = Open File
+      if (ctrl && e.shiftKey && e.key.toLowerCase() === "o") {
+        e.preventDefault();
+        handleOpenFile();
         return;
       }
 
@@ -1871,6 +1930,13 @@ export default function App() {
       run: handleOpenFolder,
     },
     {
+      id: "open-file",
+      title: "Open File",
+      detail: "Open a file in the editor",
+      shortcut: "Ctrl+Shift+O",
+      run: handleOpenFile,
+    },
+    {
       id: "quick-open",
       title: "Quick Open File",
       detail: "Fuzzy search project files",
@@ -2079,6 +2145,9 @@ export default function App() {
         <div className="titlebar-left">
           <button className="toolbar-btn" onClick={handleOpenFolder} title="Open Folder" aria-label="Open project folder">
             <FolderOpen size={15} />
+          </button>
+          <button className="toolbar-btn" onClick={handleOpenFile} title="Open File (Ctrl+Shift+O)" aria-label="Open file">
+            <FilePlus size={15} />
           </button>
           <button
             className={`toolbar-btn ${splitMode ? "active" : ""}`}
@@ -2456,6 +2525,31 @@ export default function App() {
                       onStop={handleStopDebug}
                       onPause={handleDebugPause}
                       onJumpToSource={handleDebuggerJumpToSource}
+                      currentSourceCode={(() => {
+                        if (!currentSource) return undefined;
+                        const tab = tabs.find(t => normalizeFsPath(t.path) === normalizeFsPath(currentSource.path));
+                        if (!tab) return undefined;
+                        const lines = tab.content.split("\n");
+                        const start = Math.max(0, currentSource.line - 10);
+                        const end = Math.min(lines.length, currentSource.line + 10);
+                        return lines.slice(start, end).map((l, i) => `${start + i + 1}${start + i + 1 === currentSource.line ? " →" : "  "} ${l}`).join("\n");
+                      })()}
+                      fullFileContent={(() => {
+                        if (!currentSource) return undefined;
+                        const tab = tabs.find(t => normalizeFsPath(t.path) === normalizeFsPath(currentSource.path));
+                        return tab?.content;
+                      })()}
+                      aiProvider={aiProviders.length > 0 ? aiProviders[0] : null}
+                      aiModel={config.model}
+                      showToast={showToast}
+                      onToggleBreakpoint={handleToggleBreakpoint}
+                      onEvaluateExpression={(expr: string) => sendDapRequest("evaluate", { expression: expr, context: "repl" })}
+                      onProposeFix={(changes) => {
+                        setPendingReview({
+                          changes: { fileChanges: changes, deletions: [], commands: [] },
+                          resolve: () => {},
+                        });
+                      }}
                     />
                   )}
                 </div>

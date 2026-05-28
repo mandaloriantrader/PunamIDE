@@ -17,6 +17,7 @@ pub mod lsp_manager;
 pub mod dap_manager;
 pub mod snapshot;
 pub mod github;
+pub mod agent_tools;
 
 #[cfg(target_os = "windows")]
 use std::os::windows::process::CommandExt;
@@ -2396,6 +2397,8 @@ pub fn run() {
             set_project_root,
             read_directory,
             read_file,
+            agent_tools::read_lines,
+            agent_tools::apply_patch,
             path_exists,
             write_file,
             create_file,

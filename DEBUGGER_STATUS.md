@@ -1,8 +1,8 @@
-# Debugger Integration — Status Report
+﻿# Debugger Integration â€” Status Report
 
-**Date:** 2026-05-26  
-**State:** Phases 1–4A complete. Phase 4B (adapter bundling) not started. Phase 5 (AI debugging) roadmap defined.  
-**TypeScript compilation:** ✅ Zero errors (`tsc --noEmit` passes clean)
+**Date:** 2026-05-27  
+**State:** Phases 1â€“5D complete. Phase 5E (semi-autonomous) deferred. Phase 5F (agentic) deferred.  
+**TypeScript compilation:** âœ… Zero errors (`tsc --noEmit` passes clean)
 
 ---
 
@@ -11,12 +11,12 @@
 ### Rust Backend (`src-tauri/src/dap_manager.rs`)
 - **DAP types:** `DapMessage`, `DapRequest`, `DapResponse`, `DapEvent`, `DebuggerEvent`
 - **Session management:** `DebuggerSessions` (Mutex<HashMap>) with `DapSession` struct holding `TokioChild` + `mpsc::Sender`
-- **Content-Length framing:** `encode_dap_message()` and `read_dap_message()` — proper DAP wire protocol
+- **Content-Length framing:** `encode_dap_message()` and `read_dap_message()` â€” proper DAP wire protocol
 - **Commands:**
-  - `dap_start` — spawns adapter process, wires stdin/stdout/stderr async tasks, emits `debugger-event`
-  - `dap_send_request` — encodes and sends request via channel to adapter stdin
-  - `dap_stop` — removes session, kills child process (after sending DAP disconnect)
-  - `shutdown_all` — non-async cleanup for app exit
+  - `dap_start` â€” spawns adapter process, wires stdin/stdout/stderr async tasks, emits `debugger-event`
+  - `dap_send_request` â€” encodes and sends request via channel to adapter stdin
+  - `dap_stop` â€” removes session, kills child process (after sending DAP disconnect)
+  - `shutdown_all` â€” non-async cleanup for app exit
 
 ### Rust Registration (`src-tauri/src/lib.rs`)
 - `pub mod dap_manager;`
@@ -26,7 +26,7 @@
 
 ### Frontend Utilities (`src/utils/tauri.ts`)
 - Types: `DapRequest`, `DapResponse`, `DapEvent`, `DapMessage`
-- Functions: `dapStart()`, `dapSendRequest()`, `dapStop()` — invoke wrappers
+- Functions: `dapStart()`, `dapSendRequest()`, `dapStop()` â€” invoke wrappers
 
 ### Debug Configuration System (`src/utils/debugConfig.ts`)
 - **Types:** `DebugLaunchConfig`, `LaunchJsonFile`
@@ -42,17 +42,17 @@
   - Core: `sendDapRequest`, `fetchStackFrames`, `fetchScopes`, `fetchVariables`
   - Debug Flow: `handleStartDebug`, `handleStopDebug`, `handleToggleBreakpoint`, `handleDebugContinue`, `handleDebugStepOver`, `handleDebugStepInto`, `handleDebugStepOut`, `handleDebugPause`, `handleDebuggerJumpToSource`
   - Config Management: `handleAddDebugConfig`, `handleEditLaunchJson`, `handleLoadLaunchConfigs`
-- **Event listener:** `debugger-event` in the main useEffect — handles `stopped`, `continued`, `exited`, `terminated`, `output`, `breakpoint`, `response_stackTrace`, `response_scopes`, `response_variables`, `response_evaluate`
+- **Event listener:** `debugger-event` in the main useEffect â€” handles `stopped`, `continued`, `exited`, `terminated`, `output`, `breakpoint`, `response_stackTrace`, `response_scopes`, `response_variables`, `response_evaluate`
 - **Keyboard shortcuts:** F5, Shift+F5, F6, F10, F11, Shift+F11
 
 ### Components
-- **`src/components/DebuggerPanel.tsx`** — Toolbar + Call Stack + Variables + Console tabs with evaluate input
-- **`src/components/BreakpointGlyphs.tsx`** — Monaco glyph margin decorations (red dots + yellow current line)
-- **`src/components/DebugConfigPicker.tsx`** — Compact dropdown for selecting debug configurations with Add/Edit actions
+- **`src/components/DebuggerPanel.tsx`** â€” Toolbar + Call Stack + Variables + Console tabs with evaluate input
+- **`src/components/BreakpointGlyphs.tsx`** â€” Monaco glyph margin decorations (red dots + yellow current line)
+- **`src/components/DebugConfigPicker.tsx`** â€” Compact dropdown for selecting debug configurations with Add/Edit actions
 
 ### CSS (`src/App.css`)
-- `.debug-breakpoint` — red circle glyph
-- `.debug-current-line` — yellow highlight
+- `.debug-breakpoint` â€” red circle glyph
+- `.debug-current-line` â€” yellow highlight
 - `.debugger-panel`, `.debugger-controls`, `.debugger-tabs`, `.debugger-content`
 - `.stack-frames-list`, `.variables-list`, `.debug-console`, `.debug-console-input`
 - `.debug-config-picker-*` styles for configuration selector
@@ -63,20 +63,20 @@
 
 | Removed | Details |
 |---------|---------|
-| 6× duplicate `handleToggleBreakpoint` | Identical copies with minor variations (one had `// TODO` instead of actual DAP call) |
-| 2× duplicate `sendDapRequest` | Both used `r#type` (Rust syntax) in TypeScript — replaced with single clean version using `type` |
-| 5× duplicate step handler blocks | `handleDebugContinue/StepOver/StepInto/StepOut/Pause` repeated with each toggle block |
-| 3× duplicate `handleDebuggerJumpToSource` | Identical copies |
-| 2× duplicate `handleStartDebug` / `handleStopDebug` | One before `showToast` definition (broken reference), one after |
-| 2× duplicate `useEffect(() => { tabsRef.current = tabs })` | Exact duplicates |
-| 1× duplicate `// Keep tabsRef in sync` comment block | Stale leftover |
-| 1× `showToast` ordering issue | Was defined AFTER code that used it — reordered correctly |
-| 1× `getProjectFilePath` ordering issue | Same — moved after `showToast` |
-| 1× `registerToastHandler` ordering issue | Same |
-| `r#type` in TypeScript | Rust raw identifier syntax leaked into TS `DapRequest` construction — replaced with `type` |
-| `is: true` typo in BreakpointGlyphs | Was `is: true` instead of `isWholeLine: true` — fixed |
-| Old broken stdout reader | Used `read_to_string` (reads until EOF) — replaced with proper Content-Length parser |
-| Old `BufReader`/`BufWriter` ownership issue | Stored stdout/stderr in struct after moving them to async tasks — removed, now uses channel pattern |
+| 6Ã— duplicate `handleToggleBreakpoint` | Identical copies with minor variations (one had `// TODO` instead of actual DAP call) |
+| 2Ã— duplicate `sendDapRequest` | Both used `r#type` (Rust syntax) in TypeScript â€” replaced with single clean version using `type` |
+| 5Ã— duplicate step handler blocks | `handleDebugContinue/StepOver/StepInto/StepOut/Pause` repeated with each toggle block |
+| 3Ã— duplicate `handleDebuggerJumpToSource` | Identical copies |
+| 2Ã— duplicate `handleStartDebug` / `handleStopDebug` | One before `showToast` definition (broken reference), one after |
+| 2Ã— duplicate `useEffect(() => { tabsRef.current = tabs })` | Exact duplicates |
+| 1Ã— duplicate `// Keep tabsRef in sync` comment block | Stale leftover |
+| 1Ã— `showToast` ordering issue | Was defined AFTER code that used it â€” reordered correctly |
+| 1Ã— `getProjectFilePath` ordering issue | Same â€” moved after `showToast` |
+| 1Ã— `registerToastHandler` ordering issue | Same |
+| `r#type` in TypeScript | Rust raw identifier syntax leaked into TS `DapRequest` construction â€” replaced with `type` |
+| `is: true` typo in BreakpointGlyphs | Was `is: true` instead of `isWholeLine: true` â€” fixed |
+| Old broken stdout reader | Used `read_to_string` (reads until EOF) â€” replaced with proper Content-Length parser |
+| Old `BufReader`/`BufWriter` ownership issue | Stored stdout/stderr in struct after moving them to async tasks â€” removed, now uses channel pattern |
 | `fix-app.cjs` temp script | Used for the surgery, deleted after |
 
 **Total lines removed:** ~280 lines of duplicated/orphaned code from App.tsx
@@ -85,47 +85,47 @@
 
 ## 3. Current Working Commands
 
-### Tauri Commands (Rust → Frontend)
+### Tauri Commands (Rust â†’ Frontend)
 | Command | Status | Notes |
 |---------|--------|-------|
-| `dap_start` | ✅ Compiles | Spawns adapter, wires I/O, emits events |
-| `dap_send_request` | ✅ Compiles | Encodes with Content-Length, sends via channel |
-| `dap_stop` | ✅ Compiles | Sends DAP disconnect, waits, then kills process, removes session |
+| `dap_start` | âœ… Compiles | Spawns adapter, wires I/O, emits events |
+| `dap_send_request` | âœ… Compiles | Encodes with Content-Length, sends via channel |
+| `dap_stop` | âœ… Compiles | Sends DAP disconnect, waits, then kills process, removes session |
 
 ### Frontend Actions
 | Action | Status | Trigger |
 |--------|--------|---------|
-| Start debug | ✅ | Button / F5 (uses selected launch config) |
-| Stop debug | ✅ | Button / Shift+F5 (sends disconnect first) |
-| Continue | ✅ | Button / F5 (when paused) |
-| Pause | ✅ | Button / F6 |
-| Step Over | ✅ | Button / F10 |
-| Step Into | ✅ | Button / F11 |
-| Step Out | ✅ | Button / Shift+F11 |
-| Toggle breakpoint | ✅ | Click glyph margin |
-| Jump to source | ✅ | Click stack frame |
-| Evaluate expression | ✅ | Console input (Enter) - shows response |
-| Select debug config | ✅ | Debug Config Picker toolbar button |
-| Add debug config | ✅ | "Add Configuration" button in picker |
-| Edit launch.json | ✅ | "Edit launch.json" button in picker/sidebar |
+| Start debug | âœ… | Button / F5 (uses selected launch config) |
+| Stop debug | âœ… | Button / Shift+F5 (sends disconnect first) |
+| Continue | âœ… | Button / F5 (when paused) |
+| Pause | âœ… | Button / F6 |
+| Step Over | âœ… | Button / F10 |
+| Step Into | âœ… | Button / F11 |
+| Step Out | âœ… | Button / Shift+F11 |
+| Toggle breakpoint | âœ… | Click glyph margin |
+| Jump to source | âœ… | Click stack frame |
+| Evaluate expression | âœ… | Console input (Enter) - shows response |
+| Select debug config | âœ… | Debug Config Picker toolbar button |
+| Add debug config | âœ… | "Add Configuration" button in picker |
+| Edit launch.json | âœ… | "Edit launch.json" button in picker/sidebar |
 
 ### Event Handling
 | Event | Status | Action |
 |-------|--------|--------|
-| `stopped` | ✅ | Sets paused, extracts threadId, fetches stack |
-| `continued` | ✅ | Sets running, clears source highlight |
-| `exited`/`terminated` | ✅ | Clears all debug state |
-| `output` | ✅ | Appends to console output |
-| `response_stackTrace` | ✅ | Populates frames, sets source, fetches scopes |
-| `response_scopes` | ✅ | Fetches variables for Locals scope |
-| `response_variables` | ✅ | Populates variables list |
-| `response_evaluate` | ✅ | Shows evaluate result in console |
+| `stopped` | âœ… | Sets paused, extracts threadId, fetches stack |
+| `continued` | âœ… | Sets running, clears source highlight |
+| `exited`/`terminated` | âœ… | Clears all debug state |
+| `output` | âœ… | Appends to console output |
+| `response_stackTrace` | âœ… | Populates frames, sets source, fetches scopes |
+| `response_scopes` | âœ… | Fetches variables for Locals scope |
+| `response_variables` | âœ… | Populates variables list |
+| `response_evaluate` | âœ… | Shows evaluate result in console |
 
 ---
 
 ## 4. Phase 4A Implementation Summary
 
-**Status:** ✅ COMPLETE
+**Status:** âœ… COMPLETE
 
 ### New Files Added:
 1. **`src/utils/debugConfig.ts`** - Complete launch configuration system:
@@ -147,7 +147,7 @@
    - Added `useEffect` to load launch.json on project open
    - Completely rewrote `handleStartDebug` to:
      - Use selected debug configuration
-     - Implement proper DAP handshake: initialize → wait for initialized → setBreakpoints → configurationDone → launch/attach
+     - Implement proper DAP handshake: initialize â†’ wait for initialized â†’ setBreakpoints â†’ configurationDone â†’ launch/attach
    - Rewrote `handleStopDebug` to send DAP disconnect before force-killing
    - Added `handleAddDebugConfig` and `handleEditLaunchJson` handlers
    - Enhanced `debugger-event` listener to handle `response_evaluate`
@@ -160,14 +160,14 @@
    - Added `.debug-config-picker-*` styles for configuration selector
 
 ### DAP Handshake Flow (Now Correct):
-1. User selects configuration → clicks Start Debugging
+1. User selects configuration â†’ clicks Start Debugging
 2. `dapStart()` spawns adapter from config's `adapterCommand` + `adapterArgs`
 3. Sends `initialize` request with capabilities
 4. On `initialized` event:
    - Sends `setBreakpoints` for all files with breakpoints
    - Sends `configurationDone`
    - Sends `launch` (or `attach`) with full configuration parameters
-5. On stop: sends `disconnect` → waits 500ms → `dapStop()` force kills process
+5. On stop: sends `disconnect` â†’ waits 500ms â†’ `dapStop()` force kills process
 
 ### Features Enabled:
 - Per-project debug configurations via `.punam/launch.json`
@@ -186,69 +186,80 @@
 
 | Issue | Severity | Details |
 |-------|----------|---------|
-| **No adapter bundled** | 🔴 High | No debug adapter binary ships with the app. User must have one installed (e.g., `node-debug2`, `debugpy`, `codelldb`). |
-| **`threads` state unused** | 🟡 Medium | State exists but never populated from `threads` response. No threads panel in UI. |
-| **No disconnect request on stop** | 🟡 Low | `dap_stop` kills the process directly instead of sending DAP `disconnect` request first. *(NOTE: Partially addressed - disconnect is now sent before kill)* |
-| **Console auto-scroll edge case** | 🟢 Low | If user scrolls up manually, new output still forces scroll to bottom. |
+| **No adapter bundled** | ðŸ”´ High | No debug adapter binary ships with the app. User must have one installed (e.g., `node-debug2`, `debugpy`, `codelldb`). |
+| **`threads` state unused** | ðŸŸ¡ Medium | State exists but never populated from `threads` response. No threads panel in UI. |
+| **No disconnect request on stop** | ðŸŸ¡ Low | `dap_stop` kills the process directly instead of sending DAP `disconnect` request first. *(NOTE: Partially addressed - disconnect is now sent before kill)* |
+| **Console auto-scroll edge case** | ðŸŸ¢ Low | If user scrolls up manually, new output still forces scroll to bottom. |
 
 ---
 
-## 6. Phase 5: AI-Assisted Debugging Roadmap
+## 6. Phase 5: AI-Assisted Debugging
 
-**Status:** ⏳ NOT STARTED
+### Phase 5A: Context Sanitizer â€” COMPLETE
+- **File:** `src/utils/debugSanitizer.ts`
+- Strips secrets (API keys, tokens, JWTs, connection strings, private keys) from debug context before AI calls
+- Redacts variable values when the variable name suggests sensitivity (password, token, api_key, etc.)
+- Sanitizes console output and source code
+- Replaces home directory paths with `~` in stack traces
 
-### Overview
-Phase 5 introduces AI-powered debugging assistance while maintaining strict user control and safety boundaries. All AI features require explicit user initiation and operate on sanitized debug context.
+### Phase 5B: "Ask Punam" â€” Explain What Happened â€” COMPLETE
+- **File:** `src/components/AiDebugAssistant.tsx`
+- "Explain" button visible when debugger is paused
+- Collects stack frames, variables, source code (plus/minus 10 lines), console output
+- Sanitizes context then sends to configured AI provider
+- Shows plain-language explanation in collapsible panel below debug tabs
+- Supports multiple queries (timestamped), copy, clear
 
-### Phase 5A: Guardrails
-- **Token throttle**: Rate limiting for AI API calls to prevent excessive usage
-- **Loop breaker**: Detection and prevention of infinite AI reasoning loops
-- **Debug context sanitizer**: Automatic removal of sensitive data before AI processing
-- **Secret/env stripping**: Removal of API keys, passwords, and environment variables
-- **No automatic AI calls**: All AI features require explicit user action
+### Phase 5C: Fix Suggestions â€” COMPLETE
+- "Fix it" button sends full file content + debug context to AI
+- AI responds with fix blocks containing complete fixed file
+- Parsed fix triggers existing `MultiFileDiffBoard` review flow
+- User must explicitly accept/reject each change â€” nothing auto-applies
+- Falls back to showing analysis text if AI cannot produce parseable fix
 
-### Phase 5B: Manual “Ask Punam” button
-- User clicks when debugger pauses
-- AI receives sanitized stack trace + variables + current source
-- AI explains what likely happened (root cause hypothesis)
-- Response appears in debug console or dedicated AI panel
+### Phase 5D: Smart Debug Guidance â€” COMPLETE
+- "Guide me" button asks AI for actionable debugging suggestions
+- AI responds with structured JSON suggestions parsed into clickable cards:
+  - **Breakpoint** â€” click "Set" to call `handleToggleBreakpoint`
+  - **Watch** â€” click "Watch" to evaluate expression via DAP
+  - **Inspect** â€” click "Eval" to run expression evaluation
+  - **Tip** â€” click "Copy" to copy debugging tip to clipboard
+- Graceful fallback if AI does not return valid JSON
 
-### Phase 5C: Fix suggestions
-- AI suggests code change to fix identified issue
-- Presents as diff review (no auto-apply)
-- User must explicitly accept/reject each suggestion
-- Includes explanation of why the fix addresses the issue
+### Phase 5E: Semi-Autonomous Debugging â€” DEFERRED
+- AI chains actions: fetch variables, evaluate, set breakpoint, continue
+- Each AI-initiated action requires explicit user approval
+- **Why deferred:** 5B/5C/5D need real-world testing first. The approval UX needs proper design. Value curve flattens â€” 5B-5D covers 90% of developer needs.
+- **When to revisit:** After 5B-5D are battle-tested on real debugging sessions.
 
-### Phase 5D: Smart debug assistant
-- Explain stack trace in plain language
-- Suggest next breakpoint location based on code flow
-- Recommend variables to inspect for better understanding
-- Suggest reproduction steps for intermittent issues
+### Phase 5F: Full Agentic Debugging â€” DEFERRED
+- Multi-step autonomous debugging with periodic checkpoints
+- Only after 5E is stable and validated
+- Requires comprehensive logging, undo capability, kill switch
 
-### Phase 5E: Semi-autonomous debugging
-- AI can request additional stack frames or variable inspections
-- AI can suggest temporary breakpoints for hypothesis testing
-- All AI-initiated actions require explicit user approval
-- Maintains human-in-the-loop for all decisions
-
-### Phase 5F: Full agentic debugging
-- Only enabled after all previous phases are stable and validated
-- AI can execute multi-step debugging sequences with supervision
-- Still requires periodic user checkpoints and approvals
-- Comprehensive logging of all AI actions for auditability
-
-### Safety Principles
-1. **Explicit Consent**: No AI action occurs without user initiation or approval
-2. **Context Sanitization**: All data sent to AI is stripped of secrets and sensitive information
-3. **Transparency**: Users see exactly what data is sent to AI and what actions AI proposes
-4. **Reversibility**: All AI-suggested changes can be reviewed before application
-5. **Progressive Disclosure**: Advanced features unlocked only after foundational stability
-
-This phase will be implemented only after Phase 4 (adapter bundling and immediate improvements) reaches stability.
+### Safety Principles (Implemented)
+1. **Explicit Consent**: No AI action occurs without user clicking a button
+2. **Context Sanitization**: All data stripped of secrets before AI calls
+3. **Transparency**: Users see AI responses before any action is taken
+4. **Reversibility**: Fix suggestions go through diff review â€” accept/reject per hunk
+5. **Read-Only by Default**: Explain and Guide modes never modify files or debug state
 
 ---
 
-## 7. Files Touched During Phase 4A Implementation
+## 7. Files Touched During Phase 5 Implementation
+
+| File | Changes |
+|------|---------|
+| `src/utils/debugSanitizer.ts` | **NEW** - Secret/sensitive data stripping for debug context |
+| `src/components/AiDebugAssistant.tsx` | **NEW** - AI debug panel with Explain, Guide, Fix buttons |
+| `src/components/DebuggerPanel.tsx` | Added AiDebugAssistant integration, new props for AI provider/model/actions |
+| `src/App.tsx` | Passes source code context, full file content, AI provider, breakpoint/evaluate/fix callbacks to DebuggerPanel |
+| `src/styles/debugger.css` | Added styles for AI debug assistant, suggestion cards, fix button |
+
+
+---
+
+## 8. Files Touched During Phase 4A Implementation
 
 | File | Changes |
 |------|---------|
@@ -259,3 +270,4 @@ This phase will be implemented only after Phase 4 (adapter bundling and immediat
 | `src/App.css` | Added `.debug-config-picker-*` styles |
 | `src/utils/tauri.ts` | Enhanced `dap_stop` to send DAP disconnect before process termination |
 | `fix-app.cjs` | Temporary script used for bulk line replacement — **deleted** |
+

@@ -71,6 +71,14 @@ You can include multiple SEARCH/REPLACE pairs in one EDIT block.
 The SEARCH text must match EXACTLY (including whitespace and indentation).
 Use EDIT blocks when changing a few lines in a large file. Use FILE blocks for new files or when rewriting most of the file.
 
+### For refactoring large files (CRITICAL):
+When refactoring a file that is more than 100 lines, you MUST use EDIT blocks with multiple SEARCH/REPLACE pairs — NEVER rewrite the entire file with a FILE block. Break the refactoring into targeted edits:
+1. Add new helper functions/classes ABOVE the code that uses them (use EDIT to insert at a specific location)
+2. Replace the duplicated/messy code with calls to the new helpers (use EDIT search/replace)
+3. If you need to add imports or constants, use a separate EDIT pair for the top of the file
+
+This approach avoids output truncation and makes each change reviewable. If the refactoring requires many changes, do 5-8 EDIT pairs per response and tell the user you will continue in the next message.
+
 ### For creating new files:
 \`\`\`
 ===FILE: path/to/new_file.py===
@@ -91,7 +99,8 @@ Use EDIT blocks when changing a few lines in a large file. Use FILE blocks for n
 
 ## Rules
 - For EXISTING files with small changes, prefer EDIT blocks (search/replace) over FILE blocks — they are more precise and use fewer tokens
-- For NEW files or complete rewrites, use FILE blocks with the COMPLETE file content
+- For EXISTING files being refactored, you MUST use EDIT blocks — NEVER rewrite a 100+ line file as a FILE block. The output will be truncated and the refactoring will be incomplete.
+- For NEW files or complete rewrites of SHORT files (<100 lines), use FILE blocks with the COMPLETE file content
 - Use the correct relative file paths as shown in the project structure
 - You can include multiple FILE blocks, DELETE blocks, and CMD blocks in one response
 - Before the FILE/CMD/DELETE blocks, briefly explain what you're doing and why (2-3 sentences max)
