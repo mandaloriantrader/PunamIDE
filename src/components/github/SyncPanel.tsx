@@ -3,18 +3,15 @@
  * Integrates Phase 6 (Safety) + Phase 3 (Sync) into a single UI.
  */
 
-import { useCallback, useState } from "react";
+import { useState } from "react";
 import {
   Upload,
   Download,
   RefreshCw,
   AlertTriangle,
-  CheckCircle2,
   Shield,
   Undo2,
-  GitBranch,
   Plus,
-  Trash2,
   Archive,
   Check,
 } from "lucide-react";
@@ -30,17 +27,11 @@ import {
   githubStash,
   githubStashPop,
   githubCreateBranch,
-  githubSwitchBranch,
-  githubDeleteBranch,
 } from "../../services/githubService";
 import { runTerminalCommand } from "../../utils/tauri";
 import type {
-  PrePushStatus,
-  PrePullStatus,
   DryRunPushResult,
   SafetySnapshot,
-  PushResult,
-  PullResult,
 } from "../../services/githubService";
 import { showToast } from "../../utils/toast";
 

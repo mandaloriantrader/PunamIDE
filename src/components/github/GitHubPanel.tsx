@@ -15,7 +15,6 @@ import {
   CloudOff,
   LogIn,
   LogOut,
-  User,
   Eye,
   EyeOff,
 } from "lucide-react";
@@ -32,7 +31,6 @@ import {
   clearPersistedGitHubToken,
   githubGetRepoSlug,
 } from "../../services/githubService";
-import type { GitCoreStatus, GitHubUser, BranchInfo } from "../../services/githubService";
 import { showToast } from "../../utils/toast";
 import RepoManager from "./RepoManager";
 import SyncPanel from "./SyncPanel";

@@ -37,9 +37,6 @@ const CLOSE_TAGS: Record<string, string> = {
 const ALL_OPEN_TAGS = Object.entries(OPEN_TAGS).sort(
   (a, b) => b[1].length - a[1].length
 );
-const ALL_CLOSE_TAGS = Object.entries(CLOSE_TAGS).sort(
-  (a, b) => b[1].length - a[1].length
-);
 
 // ── Internal State ────────────────────────────────────────────────────────
 
@@ -197,7 +194,7 @@ export function parseStreamBlocks(rawText: string): BlockParseResult {
 
     if (closeIdx !== -1) {
       // ── Block is complete ───────────────────────────────────────────────
-      let content = _state.buffer.slice(_state.contentStart!, closeIdx).trim();
+      const content = _state.buffer.slice(_state.contentStart!, closeIdx).trim();
 
       // If inside tool_params, capture that content first
       if (_state.inToolParams) {
@@ -240,7 +237,7 @@ export function parseStreamBlocks(rawText: string): BlockParseResult {
     _state.contentStart !== null &&
     _state.cursor < _state.buffer.length
   ) {
-    let content = _state.buffer.slice(_state.contentStart).trim();
+    const content = _state.buffer.slice(_state.contentStart).trim();
 
     switch (_state.openBlock) {
       case "thinking":

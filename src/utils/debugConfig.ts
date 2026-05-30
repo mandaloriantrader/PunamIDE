@@ -428,10 +428,10 @@ export async function autoGenerateLaunchJson(projectPath: string, rootFileNames:
   if (detected.length === 0) return [];
 
   // Use the highest-confidence detection
-  const best = detected.sort((a, b) => {
+  detected.sort((a, b) => {
     const order = { high: 0, medium: 1, low: 2 };
     return order[a.confidence] - order[b.confidence];
-  })[0];
+  });
 
   // Merge all suggested configs from all detections (deduplicate by id)
   const allConfigs: DebugLaunchConfig[] = [];

@@ -10,7 +10,6 @@ import {
   Merge,
   X,
   ExternalLink,
-  MessageSquare,
   Send,
 } from "lucide-react";
 import {
@@ -21,7 +20,7 @@ import {
   githubPrListComments,
   githubPrAddComment,
 } from "../../services/githubService";
-import type { PullRequest, Comment, MergeResult } from "../../services/githubService";
+import type { PullRequest, Comment } from "../../services/githubService";
 import { showToast } from "../../utils/toast";
 
 interface Props {

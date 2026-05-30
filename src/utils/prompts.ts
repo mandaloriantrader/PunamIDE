@@ -146,6 +146,43 @@ NEVER create a file when the user asks to run/start/execute something.
 Look at the project's package.json scripts to determine the correct command.
 If the project has a package.json with scripts, use those exact script names.
 For standalone HTML files on Windows, use start filename.html in a CMD block to open them in the default browser.
+
+## Structured Output Protocol
+When responding, wrap your output in the following XML-like blocks so the UI can render each section progressively:
+
+### Block Types
+- \`<thinking>...</thinking>\` — Your internal reasoning, analysis, and planning. Use this BEFORE producing code or actions.
+- \`<tool_call><tool_params>...</tool_params></tool_call>\` — When you invoke a tool (read_file, write_file, execute_command, etc.). The first line inside \`<tool_call>\` is the tool name, then \`<tool_params>\` contains the JSON parameters.
+- \`<tool_result>...</tool_result>\` — The result returned by a tool invocation.
+- \`<response>...</response>\` — Your final user-facing answer, explanation, or code output (FILE/EDIT/CMD blocks go here).
+
+### Rules
+1. Always start with a \`<thinking>\` block when analyzing a non-trivial request.
+2. Wrap your final answer in \`<response>...</response>\`.
+3. You may have multiple thinking blocks if the task requires iterative reasoning.
+4. If no tool calls are needed, just use \`<thinking>\` then \`<response>\`.
+5. FILE blocks, EDIT blocks, CMD blocks, and DELETE blocks go INSIDE the \`<response>\` block.
+6. For simple/short answers (greetings, one-liners), you may skip \`<thinking>\` and just use \`<response>\`.
+
+### Example
+\`\`\`
+<thinking>
+The user wants to add a button to App.tsx. I need to check the current file structure and add the component.
+</thinking>
+<response>
+I'll add a submit button to your App component.
+
+===EDIT: src/App.tsx===
+<<<SEARCH
+return (
+  <div>
+>>>REPLACE
+return (
+  <div>
+    <button type="submit">Submit</button>
+===END_EDIT===
+</response>
+\`\`\`
 `;
 
 export interface FileChange {

@@ -8,7 +8,7 @@ import { parseResponse } from "../utils/prompts";
 import type { ParsedResponse } from "../utils/prompts";
 
 let workerInstance: Worker | null = null;
-let pendingCallbacks: Map<string, (result: ParsedResponse) => void> = new Map();
+const pendingCallbacks: Map<string, (result: ParsedResponse) => void> = new Map();
 let idCounter = 0;
 
 function getWorker(): Worker | null {

@@ -13,6 +13,8 @@
   background: var(--bg-secondary);
   padding: 0 4px;
   flex-shrink: 0;
+  overflow: hidden;
+  position: relative;
 }
 
 .right-panel-tab {
@@ -28,6 +30,7 @@
   cursor: pointer;
   transition: all 0.15s;
   white-space: nowrap;
+  flex-shrink: 0;
 }
 
 .right-panel-tab:hover {
@@ -38,6 +41,56 @@
 .right-panel-tab.active {
   color: var(--accent);
   border-bottom-color: var(--accent);
+}
+
+.right-panel-tab-overflow {
+  position: relative;
+  flex-shrink: 0;
+  margin-left: auto;
+}
+
+.right-panel-tab-more {
+  padding: 8px 10px;
+}
+
+.right-panel-overflow-dropdown {
+  position: absolute;
+  top: 100%;
+  right: 0;
+  z-index: 1000;
+  min-width: 140px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+  padding: 4px;
+  margin-top: 2px;
+}
+
+.right-panel-overflow-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 7px 10px;
+  font-size: 12px;
+  color: var(--text-secondary);
+  background: transparent;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  text-align: left;
+  white-space: nowrap;
+}
+
+.right-panel-overflow-item:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.right-panel-overflow-item.active {
+  color: var(--accent);
+  background: rgba(var(--accent-rgb, 137, 180, 250), 0.1);
 }
 
 .right-panel-content {

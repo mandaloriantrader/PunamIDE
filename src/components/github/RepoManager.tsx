@@ -7,15 +7,12 @@ import {
   Plus,
   RefreshCw,
   Link,
-  Unlink,
   Lock,
   Unlock,
   Star,
   GitFork,
   ExternalLink,
   FolderGit2,
-  ChevronDown,
-  ChevronRight,
 } from "lucide-react";
 import {
   githubCreateRepo,
@@ -34,7 +31,7 @@ interface Props {
   onRefresh: () => void;
 }
 
-export default function RepoManager({ projectPath, remoteOrigin, isGitRepo, onRefresh }: Props) {
+export default function RepoManager({ projectPath: _projectPath, remoteOrigin, isGitRepo, onRefresh }: Props) {
   const [repos, setRepos] = useState<RepoInfo[]>([]);
   const [loading, setLoading] = useState(false);
   const [showCreateForm, setShowCreateForm] = useState(false);

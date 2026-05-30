@@ -1,7 +1,7 @@
 import { useState, useEffect } from "react";
 import { saveChatSession, loadChatSessions as dbLoadSessions, deleteChatSession as dbDeleteSession, initChatDb } from "../services/persistence/chatDb";
 import type { ChatSessionRecord } from "../services/persistence/chatDb";
-import type { ChatMessage, AgentMode } from "../types";
+import type { ChatMessage, AgentMode, ToolEvent } from "../types";
 import type { ChatAttachment } from "../utils/tauri";
 import type { ParsedResponse } from "../utils/prompts";
 import type { ResponseMetrics } from "../utils/providers";
@@ -10,8 +10,16 @@ import type { ResponseMetrics } from "../utils/providers";
 function normalizeMode(mode: string | undefined): AgentMode | undefined {
   if (!mode) return undefined;
   if (mode === "chat" || mode === "agent") return mode;
-  // Old modes: ask, edit, fix, explain, refactor → map to "chat"
   return "chat";
+}
+
+/** Split <thinking> blocks from raw AI output so they stay as metadata. */
+function splitAssistantContent(raw: string): { thinking: string; content: string } {
+  const thinkingMatch = raw.match(/<thinking>([\s\S]*?)<\/thinking>/i);
+  return {
+    thinking: thinkingMatch?.[1]?.trim() || "",
+    content: raw.replace(/<thinking>[\s\S]*?<\/thinking>/gi, "").trim(),
+  };
 }
 
 interface UseChatSessionsOptions {
@@ -31,6 +39,8 @@ interface PersistedChatMessage {
   metrics?: ResponseMetrics;
   multiResponses?: ChatMessage["multiResponses"];
   checkResult?: ChatMessage["checkResult"];
+  thinking?: string;
+  toolEvents?: ToolEvent[];
 }
 
 interface ChatSession {
@@ -56,10 +66,22 @@ function recordToSession(rec: ChatSessionRecord): ChatSession {
 }
 
 function restorePersistedMessage(message: PersistedChatMessage): ChatMessage {
+  // Sanitize: if thinking wasn't stored separately, extract <thinking> from old content
+  let content = message.content;
+  let thinking = message.thinking;
+
+  if (message.role === "assistant" && !thinking && content.includes("<thinking>")) {
+    const parsed = splitAssistantContent(content);
+    content = parsed.content || content;
+    thinking = parsed.thinking || undefined;
+  }
+
   return {
     role: message.role,
-    content: message.content,
+    content,
     mode: normalizeMode(message.mode),
+    thinking,
+    toolEvents: message.toolEvents,
     attachments: message.attachments,
     parsed: message.parsed,
     applied: message.applied,
@@ -131,20 +153,32 @@ export function useChatSessions({ projectPath, messages, setMessages }: UseChatS
     if (!projectPath || messages.length === 0 || !activeSessionId) return;
     const timer = setTimeout(async () => {
       const toSave: PersistedChatMessage[] = messages
-        .filter((m) => (m.content && m.content.length > 0) || m.parsed || m.multiResponses)
+        .filter((m) => (m.content && m.content.length > 0) || m.parsed || m.multiResponses || m.thinking)
         .slice(-30)
-        .map((m) => ({
-          role: m.role,
-          content: m.content.slice(0, 200000),
-          mode: m.mode,
-          timestamp: Date.now(),
-          attachments: m.attachments,
-          parsed: m.parsed,
-          applied: m.applied,
-          metrics: m.metrics,
-          multiResponses: m.multiResponses,
-          checkResult: m.checkResult,
-        }));
+        .map((m) => {
+          // Before saving: strip <thinking> from content into metadata
+          let cleanContent = m.content.slice(0, 200000);
+          let thinking = m.thinking;
+          if (m.role === "assistant" && !thinking && cleanContent.includes("<thinking>")) {
+            const parsed = splitAssistantContent(cleanContent);
+            cleanContent = parsed.content || cleanContent;
+            thinking = parsed.thinking || undefined;
+          }
+          return {
+            role: m.role,
+            content: cleanContent,
+            thinking,
+            toolEvents: m.toolEvents,
+            mode: m.mode,
+            timestamp: Date.now(),
+            attachments: m.attachments,
+            parsed: m.parsed,
+            applied: m.applied,
+            metrics: m.metrics,
+            multiResponses: m.multiResponses,
+            checkResult: m.checkResult,
+          };
+        });
 
       const existing = await dbLoadSessions(1);
       const existingRec = existing.find((r) => r.id === activeSessionId);

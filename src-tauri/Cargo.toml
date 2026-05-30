@@ -32,6 +32,7 @@ notify-debouncer-mini = "0.5"
 git2 = "0.19"
 portable-pty = "0.8"
 rusqlite = { version = "0.31", features = ["bundled"] }
+regex-lite = "0.1"
 dirs = "5"
 walkdir = "2"
 zip = { version = "2.1", default-features = false, features = ["deflate"] }

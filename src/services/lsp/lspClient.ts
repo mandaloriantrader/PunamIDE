@@ -2,7 +2,7 @@
  * LSP Client — Frontend service for communicating with language servers.
  * Uses dedicated Tauri commands (lsp_completion, lsp_hover, etc.)
  * and listens for diagnostics/response events.
- * Includes debounced didChange support.
+ * Includes debounced didChange support and auto-install capabilities.
  */
 
 import { invoke } from "@tauri-apps/api/core";
@@ -40,6 +40,14 @@ export interface LspLocation {
 
 export type LspStatus = "starting" | "ready" | "crashed" | "restarting" | "stopped";
 
+export interface LspInstalledStatus {
+  language_id: string;
+  installed: boolean;
+  path: string | null;
+  install_command: string | null;
+  error: string | null;
+}
+
 // --- Event Payloads ---
 
 interface LspResponsePayload {
@@ -76,6 +84,8 @@ export class LspService {
   private debounceTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private connected = false;
   private defaultLanguageId: string;
+  /** Cache install checks per session to avoid repeated `where`/`which` calls. */
+  private installCache = new Map<string, LspInstalledStatus>();
 
   constructor(defaultLanguageId = "typescript") {
     this.defaultLanguageId = normalizeLanguageId(defaultLanguageId);
@@ -148,6 +158,33 @@ export class LspService {
   onStatus(listener: StatusListener): () => void {
     this.statusListeners.push(listener);
     return () => { this.statusListeners = this.statusListeners.filter((l) => l !== listener); };
+  }
+
+  // --- Install Check (cached per session) ---
+
+  /** Check if a language server binary is installed on the system. Results are cached per session. */
+  async checkInstalled(languageId: string): Promise<LspInstalledStatus> {
+    const cached = this.installCache.get(languageId);
+    if (cached) return cached;
+
+    const status = await invoke<LspInstalledStatus>("lsp_check_installed", { languageId });
+    this.installCache.set(languageId, status);
+    return status;
+  }
+
+  /** One-click install for a language server. Runs the recommended install command. */
+  async installServer(languageId: string, workspaceRoot: string): Promise<{ stdout: string; stderr: string; exit_code: number }> {
+    const status = await this.checkInstalled(languageId);
+    if (!status.install_command) {
+      return { stdout: "", stderr: "No install command available", exit_code: 1 };
+    }
+    const result = await invoke<{ stdout: string; stderr: string; exit_code: number }>("run_terminal_command", {
+      command: status.install_command,
+      cwd: workspaceRoot,
+    });
+    // Invalidate cache after install so re-check picks up the new binary
+    this.installCache.delete(languageId);
+    return result;
   }
 
   // --- Server Lifecycle ---

@@ -20,6 +20,7 @@ import type { ParsedResponse } from "../utils/prompts";
 import { sendToMultipleModels, sendToProviderStreaming, estimateTokens } from "../utils/providers";
 import type { AIProviderConfig, ResponseMetrics } from "../utils/providers";
 import { recordUsage } from "./UsageDashboard";
+import { buildMemoryContext } from "../services/memory/MemoryManager";
 import { detectFrameworks } from "../utils/contextGathering";
 import { indexProject, searchCodebase, isIndexed } from "../utils/codebaseIndex";
 
@@ -44,6 +45,9 @@ import {
   MAX_TOTAL_CONTEXT_CHARS,
 } from "../utils/chatHelpers";
 import { MarkdownMessage, PunamAvatar, ResponseMetricsDisplay, getActionLabel, formatAgentStep } from "./chat/ChatComponents";
+import { getAgentOrchestrator } from "../services/agent/AgentOrchestrator";
+import { getConflictResolver } from "../services/agent/ConflictResolver";
+import { validateApply } from "../services/agent/AgentApplyGuard";
 import { ChatHeader } from "./chat/ChatHeader";
 import { ChatInputArea } from "./chat/ChatInputArea";
 import { useChatSessions } from "../hooks/useChatSessions";
@@ -57,13 +61,14 @@ import {
   extractMemoriesFromResponse,
 } from "../utils/contextEngine";
 import { runJsonToolLoop } from "../utils/jsonToolLoop";
-import { resolveMentions, buildSuggestions } from "../utils/mentionResolver";
+import { resolveMentions } from "../utils/mentionResolver";
 import { detectTaskType } from "../lib/ai/taskDetection";
 import { selectAdaptiveProvider } from "../lib/ai/adaptiveRouter";
 import type { AdaptiveStrategy } from "../lib/ai/providerCapabilities";
 import { classifyProviderError, describeHealthStatus, markProviderHealthy, setProviderHealth } from "../lib/ai/providerHealth";
 import type { RunObservation } from "../services/run/verifiedRun";
 import { parseStreamBlocks, resetParseState } from "../utils/streamBlocks";
+import ThinkingBlock from "./chat/ThinkingBlock";
 import MessageBubble from "./chat/MessageBubble";
 
 // Background agent store
@@ -112,13 +117,6 @@ function hasParsedActions(parsed: ParsedResponse): boolean {
   );
 }
 
-function getStreamingTextBeforeActionBlocks(text: string): string {
-  const actionMarker = text.match(/(^|\n)===(FILE|EDIT|DELETE|CMD):/);
-  if (!actionMarker) return text.trim();
-
-  const markerIndex = actionMarker.index ?? 0;
-  return text.slice(0, markerIndex).trim() || "Preparing code changes...";
-}
 
 function ParsedActionsView({
   parsed,
@@ -336,9 +334,7 @@ export default function AiChat({
 
   // --- Stream abort + tracking ---
   const activeStreamRef = useRef<{ cancel: () => void; streamId: string } | null>(null);
-  const [streamProgress, setStreamProgress] = useState<{ tokens: number; startedAt: number } | null>(null);
-  // Prevents duplicate sends while streaming
-  const isStreamingRef = useRef(false);
+  const [_streamProgress, _setStreamProgress] = useState<{ tokens: number; startedAt: number } | null>(null);
 
   // --- Auto-send forcePrompt from right-click context menu ---
   useEffect(() => {
@@ -384,6 +380,7 @@ export default function AiChat({
     setSessionTokens({ totalIn, totalOut, totalCostInr, requestCount });
   }, [messages]);
   const bottomRef = useRef<HTMLDivElement>(null);
+  const isInitialLoad = useRef(true);
 
   // --- Agent Task State ---
   const [agentTask, setAgentTask] = useState<AgentTaskState | null>(null);
@@ -445,6 +442,16 @@ export default function AiChat({
   };
 
   useEffect(() => {
+    if (isInitialLoad.current) {
+      // Skip scroll entirely during initial session hydration.
+      // Only flip the flag once we actually have messages loaded.
+      if (messages.length > 0) {
+        // Jump to bottom without animation on first real load
+        bottomRef.current?.scrollIntoView();
+        isInitialLoad.current = false;
+      }
+      return;
+    }
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages, loading]);
 
@@ -831,7 +838,8 @@ export default function AiChat({
         ? `\n\n# ⚠️ Non-Existent File References\nThe user mentioned the following file(s) that do NOT exist in the project:\n${unresolvedFiles.map((f) => `- ${f}`).join("\n")}\nIMPORTANT: Before proposing to create these files, explicitly tell the user that the file does not exist and ask if they want you to create it. Do NOT silently create files that the user may have assumed already existed.`
         : "";
 
-      const prompt = `# Agent Mode\n${modeInstruction}${contextInstruction}${mcpSection}${workspaceSection}\n\n# User Request\n${userPrompt}${editorStateSection}${selectionSection}${searchSection}${problemsSection}${terminalSection}${unresolvedSection}${historySection}\n\n# Project Structure\n\`\`\`\n${fileTree}\`\`\`\n\n# Attached File Context\n${attachedContext || "No file contents attached."}`;
+      const memoryContext = await buildMemoryContext(activeRelPath).catch(() => "");
+      const prompt = `# Agent Mode\n${modeInstruction}${contextInstruction}${mcpSection}${workspaceSection}${memoryContext}\n\n# User Request\n${userPrompt}${editorStateSection}${selectionSection}${searchSection}${problemsSection}${terminalSection}${unresolvedSection}${historySection}\n\n# Project Structure\n\`\`\`\n${fileTree}\`\`\`\n\n# Attached File Context\n${attachedContext || "No file contents attached."}`;
 
       // Collect current image attachments from the last user message
       const lastUserMsg = messages[messages.length - 1];
@@ -906,10 +914,11 @@ export default function AiChat({
               resetParseState();
               const result = parseStreamBlocks(streamedText);
               const blocks = [...result.completed, ...(result.inProgress ? [result.inProgress] : [])];
-              const displayText = "";
               setMessages((prev) => prev.map((m) =>
                 (m as any).streamId === streamId
-                  ? { ...m, content: `${[firstNotice, ...fallbackNotices].join("\n")}\n`, blocks, isComplete: false }
+                  ? blocks.length > 0
+                    ? { ...m, content: "", blocks, isComplete: false }
+                    : { ...m, content: `${[firstNotice, ...fallbackNotices].join("\n")}\n${streamedText}`, isComplete: false }
                   : m
               ));
             };
@@ -969,19 +978,20 @@ export default function AiChat({
           const hasActions = parsed ? hasParsedActions(parsed) : false;
           recordResponseUsage(finalResp?.metrics);
 
+          resetParseState();
           const finalBlocks = parseStreamBlocks(finalText).completed;
           setMessages((prev) => prev.map((m) => {
             if ((m as any).streamId !== streamId) return m;
             const { streamId: _sid, ...rest } = m as any;
-            return {
+            const base = {
               ...rest,
               content: responseText,
-              blocks: finalBlocks,
               isComplete: true,
               parsed: hasActions ? parsed : undefined,
               applied: false,
               metrics: finalResp?.metrics,
             };
+            return finalBlocks.length > 0 ? { ...base, blocks: finalBlocks } : base;
           }));
           return;
         }
@@ -1014,7 +1024,9 @@ export default function AiChat({
               const tps = elapsed > 0 ? Math.round(tokenCount / elapsed) : 0;
               setMessages((prev) => prev.map((m) =>
                 (m as any).streamId === streamId
-                  ? { ...m, content: "", blocks, isComplete: false, streamProgress: `${tps} t/s` }
+                  ? blocks.length > 0
+                    ? { ...m, content: "", blocks, isComplete: false, streamProgress: `${tps} t/s` }
+                    : { ...m, content: streamedText, isComplete: false, streamProgress: `${tps} t/s` }
                   : m
               ));
             };
@@ -1082,19 +1094,21 @@ export default function AiChat({
               }
             }
 
+            resetParseState();
             const finalBlocks = parseStreamBlocks(effectiveFinalText).completed;
             setMessages((prev) => prev.map((m) => {
               if ((m as any).streamId !== streamId) return m;
               const { streamId: _sid, ...rest } = m as any;
-              return {
+              const base = {
                 ...rest,
                 content: effectiveFinalText,
-                blocks: finalBlocks,
                 isComplete: true,
                 parsed: hasActions ? parsed : undefined,
                 applied: false,
                 metrics: resp.metrics,
               };
+              // Only attach blocks if there are actual parsed blocks — otherwise let MarkdownMessage render
+              return finalBlocks.length > 0 ? { ...base, blocks: finalBlocks } : base;
             }));
             recordResponseUsage(resp.metrics);
           }
@@ -1465,13 +1479,30 @@ export default function AiChat({
       maxAttempts: 15,
       history: [],
       suggestedCommand: null,
-      autoApply: true,  // Agent mode defaults to auto-apply
+      autoApply: false,  // Require user approval before applying changes
       subtasks,
       currentSubtask: 0,
     });
+
+    // Register foreground agent with orchestrator
+    try {
+      const provider = aiProviders.find(p => p.apiKey && p.models.some(m => m.enabled));
+      const model = provider?.models.find(m => m.enabled);
+      getAgentOrchestrator().spawnAgent({
+        id: "foreground-agent",
+        type: "implementation",
+        provider: provider?.name || "unknown",
+        model: model?.id || "unknown",
+        apiKey: "redacted",
+      });
+    } catch { /* agent may already exist */ }
   };
 
   const stopAgent = () => {
+    // Unregister from orchestrator
+    try {
+      getAgentOrchestrator().removeAgent("foreground-agent");
+    } catch { /* ignore */ }
     setAgentTask(null);
     setMessages((prev) => [...prev, {
       role: "assistant",
@@ -1566,8 +1597,11 @@ export default function AiChat({
           return;
         }
 
-        // Show thinking indicator
-        setMessages(prev => [...prev, { role: "assistant", content: "🔧 Tool mode: reading files...", mode: "chat" } as any]);
+        // Show streaming indicator
+        const streamMsgId = `tool-${Date.now()}`;
+        setMessages(prev => [...prev, { role: "assistant", content: "🔧 Tool mode: thinking...", mode: "chat", blocks: [], isComplete: false, streamId: streamMsgId } as any]);
+
+        const accumulatedBlocks: any[] = [];
 
         const result = await runJsonToolLoop({
           provider,
@@ -1575,27 +1609,38 @@ export default function AiChat({
           task: agentTask.task,
           projectPath,
           activeFilePath,
-          onToolCall: (toolName) => {
-            setMessages(prev => {
-              const last = prev[prev.length - 1];
-              if (last?.role === "assistant" && last.content.startsWith("🔧")) {
-                return [...prev.slice(0, -1), { ...last, content: `🔧 Tool mode: ${toolName}...` }];
-              }
-              return prev;
-            });
+          onToolCall: (toolName, input) => {
+            setMessages(prev => prev.map(m =>
+              (m as any).streamId === streamMsgId
+                ? { ...m, content: `🔧 Tool mode: ${toolName}(${JSON.stringify(input || {}).slice(0, 60)})...` }
+                : m
+            ));
+          },
+          onToken: (token) => {
+            setMessages(prev => prev.map(m =>
+              (m as any).streamId === streamMsgId
+                ? { ...m, content: (m.content || "").replace("🔧 Tool mode: thinking...", "") + token }
+                : m
+            ));
+          },
+          onBlock: (block) => {
+            resetParseState();
+            const parsed = parseStreamBlocks(block);
+            accumulatedBlocks.push(...parsed.completed);
+            setMessages(prev => prev.map(m =>
+              (m as any).streamId === streamMsgId
+                ? { ...m, blocks: [...accumulatedBlocks], isComplete: false }
+                : m
+            ));
           },
         });
 
-        // Replace thinking indicator with final answer
-        setMessages(prev => {
-          const filtered = prev.filter(m => !(m.role === "assistant" && m.content.startsWith("🔧")));
-          return [...filtered, {
-            role: "assistant",
-            content: result.text,
-            mode: "chat",
-            metrics: result.metrics,
-          } as any];
-        });
+        // Replace indicator with final answer
+        setMessages(prev => prev.map(m =>
+          (m as any).streamId === streamMsgId
+            ? { ...m, content: result.text || m.content || "No response", blocks: [], isComplete: true, metrics: result.metrics, streamId: undefined }
+            : m
+        ));
 
         console.log(`[TOOL MODE] Done in ${result.rounds} round(s). Tools: ${result.toolsCalled.join(", ") || "none"}. Saved ~${result.tokensSaved} tokens.`);
 
@@ -1698,7 +1743,11 @@ export default function AiChat({
         const result = parseStreamBlocks(streamedText);
         const blocks = [...result.completed, ...(result.inProgress ? [result.inProgress] : [])];
         setMessages(prev => prev.map(m =>
-          (m as any).streamId === streamId ? { ...m, content: "", blocks, isComplete: false } : m
+          (m as any).streamId === streamId
+            ? blocks.length > 0
+              ? { ...m, content: "", blocks, isComplete: false }
+              : { ...m, content: streamedText, isComplete: false }
+            : m
         ));
       };
 
@@ -1748,12 +1797,15 @@ export default function AiChat({
       const hasActions = parsed ? hasParsedActions(parsed) : false;
       recordResponseUsage(resp.metrics);
 
-      // Finalize message with blocks
+      // Finalize message with blocks (only set blocks if there are parsed blocks)
+      resetParseState();
       const finalBlocks = parseStreamBlocks(finalText).completed;
       setMessages(prev => prev.map(m => {
         if ((m as any).streamId !== streamId) return m;
         const { streamId: _sid, ...rest } = m as any;
-        return { ...rest, content: finalText, blocks: finalBlocks, isComplete: true, parsed: hasActions ? parsed : undefined, applied: false, metrics: resp.metrics };
+        const base = { ...rest, content: finalText, isComplete: true, parsed: hasActions ? parsed : undefined, applied: false, metrics: resp.metrics };
+        // Only attach blocks if there are actual parsed blocks (non-XML text returns [])
+        return finalBlocks.length > 0 ? { ...base, blocks: finalBlocks } : base;
       }));
 
       // Auto-extract memories from the response
@@ -1994,17 +2046,57 @@ export default function AiChat({
     if (lastMsg?.role === "assistant" && lastMsg.parsed) {
       // Auto-apply in agent mode (when autoApply is enabled)
       if (!lastMsg.applied && agentTask?.autoApply && onApplyDirect) {
-        const msgIdx = messages.length - 1;
-        onApplyDirect(lastMsg.parsed).then(() => {
-          setMessages((prev) => prev.map((m, i) => (i === msgIdx ? { ...m, applied: true } : m)));
-          // If there are commands, suggest running them
-          if (lastMsg.parsed?.commands?.length) {
-            agentSuggestCommand(lastMsg.parsed.commands[0]);
-          } else {
-            // No commands — check if we should move to next subtask
-            advanceSubtask();
+        // Check file locks before applying
+        const resolver = getConflictResolver();
+        const blockedFiles: string[] = [];
+        for (const fc of lastMsg.parsed.fileChanges) {
+          const result = resolver.attemptEdit("foreground-agent", fc.path, fc.content);
+          if (result.hasConflict) {
+            blockedFiles.push(`${fc.path}: ${result.message}`);
           }
-        }).catch(() => {});
+        }
+        if (blockedFiles.length > 0) {
+          setMessages(prev => [...prev, {
+            role: "assistant",
+            content: `⚠️ File lock conflict — cannot apply:\n${blockedFiles.join("\n")}`,
+          }]);
+          return; // Don't apply
+        }
+
+        // Run architecture + security guardrails (Phase 1 + Phase 6)
+        (async () => {
+          for (const fc of lastMsg.parsed!.fileChanges) {
+            try {
+              const guardResult = await validateApply("foreground-agent", fc.path, fc.content);
+              if (!guardResult.allowed) {
+                setMessages(prev => [...prev, {
+                  role: "assistant",
+                  content: `⚠️ Guardrails blocked ${fc.path}: ${guardResult.reason}`,
+                }]);
+                resolver.releaseAndFlush("foreground-agent", fc.path);
+                return;
+              }
+            } catch { /* guard unavailable — allow */ }
+          }
+
+          const msgIdx = messages.length - 1;
+          if (lastMsg.parsed) {
+            onApplyDirect(lastMsg.parsed).then(() => {
+              // Release locks after successful apply
+              for (const fc of lastMsg.parsed!.fileChanges) {
+                resolver.releaseAndFlush("foreground-agent", fc.path);
+              }
+              setMessages((prev) => prev.map((m, i) => (i === msgIdx ? { ...m, applied: true } : m)));
+              // If there are commands, suggest running them
+              if (lastMsg.parsed?.commands?.length) {
+                agentSuggestCommand(lastMsg.parsed.commands[0]);
+              } else {
+                // No commands — check if we should move to next subtask
+                advanceSubtask();
+              }
+            }).catch(() => {});
+          }
+          })();
       } else if (!lastMsg.applied && !agentTask?.autoApply) {
         // Manual mode — wait for user to click Apply
         setAgentTask((prev) => prev ? { ...prev, step: "awaiting_approval" } : null);
@@ -2209,6 +2301,7 @@ export default function AiChat({
                           )}
                         </div>
                       )}
+                      {msg.thinking && <ThinkingBlock content={msg.thinking} />}
                       {!msg.parsed && !msg.blocks && <MarkdownMessage text={msg.content} />}
                       {msg.blocks && msg.blocks.length > 0 && (
                         <MessageBubble blocks={msg.blocks} isStreaming={!msg.isComplete} />

@@ -14,6 +14,11 @@ import {
   compressMemories,
 } from "../utils/contextEngine";
 import { showToast } from "../utils/toast";
+import { getAgentOrchestrator } from "./agent/AgentOrchestrator";
+import type { AgentConfig } from "./agent/AgentOrchestrator";
+import { getConflictResolver } from "./agent/ConflictResolver";
+import { getAgentCoordinator } from "./agent/AgentCoordinator";
+import { validateApply } from "./agent/AgentApplyGuard";
 
 interface ExecutorConfig {
   projectPath: string;
@@ -34,6 +39,24 @@ export async function startBackgroundExecution(config: ExecutorConfig): Promise<
   executorRunning = true;
   executorCancelled = false;
 
+  // Register this agent with the orchestrator
+  const orchestrator = getAgentOrchestrator();
+  const bgAgentId = `bg-agent-${Date.now()}`;
+  const provider = config.aiProviders.find(p => p.apiKey && p.models.some(m => m.enabled));
+  const model = provider?.models.find(m => m.enabled);
+
+  try {
+    orchestrator.spawnAgent({
+      id: bgAgentId,
+      type: "implementation",
+      provider: provider?.name || "unknown",
+      model: model?.id || "unknown",
+      apiKey: "redacted",
+    });
+  } catch (err) {
+    console.warn("[BG-Agent] Failed to register with orchestrator:", err);
+  }
+
   const store = useBackgroundAgentStore.getState();
   const session = store.session;
   if (!session) {
@@ -44,6 +67,9 @@ export async function startBackgroundExecution(config: ExecutorConfig): Promise<
 
   const { projectPath, openTabPaths } = config;
   console.log("[BG-Agent] Starting execution:", { task: session.task, projectPath, subtasks: session.subtasks });
+
+  // Track files already written this session (deduplication)
+  const writtenFiles = new Map<string, string>(); // path → content hash
 
   try {
     // Execute each subtask
@@ -95,7 +121,7 @@ export async function startBackgroundExecution(config: ExecutorConfig): Promise<
         continue;
       }
 
-      // Step 2: Apply file changes
+      // Step 2: Apply file changes (through ConflictResolver)
       if (result.fileChanges && result.fileChanges.length > 0) {
         // Auto-snapshot before AI agent edits (Ghost Restore safety net)
         try {
@@ -109,40 +135,91 @@ export async function startBackgroundExecution(config: ExecutorConfig): Promise<
           console.warn("[BG-Agent] Auto-snapshot failed:", err);
         }
 
+        const resolver = getConflictResolver();
+
         for (const change of result.fileChanges) {
           if (executorCancelled) break;
 
           const fullPath = buildFullPath(projectPath, change.path);
-          console.log("[BG-Agent] Applying file:", { path: change.path, fullPath, isNew: change.isNew });
+          console.log("[BG-Agent] Attempting file write:", { path: change.path, fullPath, isNew: change.isNew });
 
-          const isConflicting = openTabPaths.some(
+          // Check open tabs conflict
+          const isOpenInEditor = openTabPaths.some(
             (tabPath) => normalizePath(tabPath) === normalizePath(fullPath)
           );
+
+          // Check via ConflictResolver (permission + lock)
+          const conflictResult = resolver.attemptEdit(bgAgentId, change.path, change.content);
 
           store.addFileChange({
             path: change.path,
             content: change.content,
             isNew: change.isNew,
             applied: false,
-            conflicting: isConflicting,
+            conflicting: conflictResult.hasConflict || isOpenInEditor,
           });
 
-          if (isConflicting) {
-            store.addLog("verifying", `Conflict: ${change.path} is open in editor — skipped`);
+          if (conflictResult.hasConflict) {
+            store.addLog("verifying", `Blocked: ${change.path} — ${conflictResult.message}`);
             continue;
           }
 
-          // Apply directly
+          if (isOpenInEditor) {
+            store.addLog("verifying", `Conflict: ${change.path} is open in editor — skipped`);
+            resolver.releaseAndFlush(bgAgentId, change.path);
+            continue;
+          }
+
+          // Deduplication: skip if we already wrote identical content to this file
+          const contentHash = simpleHash(change.content);
+          const previousHash = writtenFiles.get(change.path);
+          if (previousHash === contentHash) {
+            store.addLog("verifying", `Skipped (duplicate): ${change.path} — already written with same content`);
+            resolver.releaseAndFlush(bgAgentId, change.path);
+            continue;
+          }
+
+          // Validate against architecture + security guardrails (Phase 1 + Phase 6)
+          const guardResult = await validateApply(bgAgentId, change.path, change.content, projectPath);
+          if (!guardResult.allowed) {
+            store.addLog("failed", `Blocked by guardrails: ${change.path} — ${guardResult.reason}`);
+            resolver.releaseAndFlush(bgAgentId, change.path);
+            if (guardResult.architectureViolations.length > 0) {
+              store.addLog("verifying", `Architecture violations: ${guardResult.architectureViolations.map(v => v.description).join("; ")}`);
+            }
+            continue;
+          }
+
+          // Write the file
           try {
             await writeFile(fullPath, change.content);
             store.markFileApplied(change.path);
             store.addLog("verifying", `Applied: ${change.path}`);
             console.log("[BG-Agent] File written successfully:", fullPath);
+            writtenFiles.set(change.path, contentHash);
           } catch (err) {
             console.error("[BG-Agent] File write failed:", fullPath, err);
             store.addLog("failed", `Failed to write ${change.path}: ${err}`);
+          } finally {
+            // Always release the lock after write attempt
+            resolver.releaseAndFlush(bgAgentId, change.path);
           }
         }
+      }
+
+      // Completion detection: if we wrote files AND ran commands successfully, task is done
+      const allFilesApplied = result.fileChanges?.every(fc => {
+        const hash = simpleHash(fc.content);
+        return writtenFiles.has(fc.path) && writtenFiles.get(fc.path) === hash;
+      }) ?? false;
+
+      const allCommandsPassed = !result.commands?.length ||
+        useBackgroundAgentStore.getState().session?.logs
+          .filter(l => l.step === "verifying" && l.message.startsWith("Command passed"))
+          .length === result.commands.length;
+
+      if (allFilesApplied && allCommandsPassed && result.fileChanges && result.fileChanges.length > 0) {
+        store.addLog("verifying", "Task complete — all files written and commands passed. Stopping loop.");
       }
 
       // Step 3: Run commands if any
@@ -190,6 +267,10 @@ export async function startBackgroundExecution(config: ExecutorConfig): Promise<
       showToast("⚠️ Background task crashed", "error");
     }
   } finally {
+    // Unregister from orchestrator
+    try {
+      orchestrator.removeAgent(bgAgentId);
+    } catch { /* ignore */ }
     executorRunning = false;
     console.log("[BG-Agent] Executor stopped");
   }
@@ -290,7 +371,11 @@ Rules:
 - If you cannot safely act, explain why and do not claim completion.
 `;
 
-    const systemPrompt = `${SYSTEM_PROMPT}\n\n${payload.systemInstruction}\n\n${backgroundExecutionRules}`;
+    // Get shared context from coordinator (architecture advice, security concerns)
+    const coordinator = getAgentCoordinator();
+    const agentContext = coordinator.buildAgentContext("implementation");
+
+    const systemPrompt = `${SYSTEM_PROMPT}\n\n${payload.systemInstruction}\n\n${backgroundExecutionRules}${agentContext ? `\n\n## Multi-Agent Context\n${agentContext}` : ""}`;
     const baseUserPrompt = payload.contents.map((c) => c.parts[0].text).join("\n\n");
 
     let resp = await sendToProviderStreaming(provider, model.id, {
@@ -388,6 +473,16 @@ function buildFullPath(projectPath: string, relativePath: string): string {
 
 function normalizePath(p: string): string {
   return p.replace(/\\/g, "/").toLowerCase();
+}
+
+function simpleHash(str: string): string {
+  let hash = 0;
+  for (let i = 0; i < str.length; i++) {
+    const char = str.charCodeAt(i);
+    hash = ((hash << 5) - hash) + char;
+    hash |= 0; // Convert to 32-bit integer
+  }
+  return hash.toString(36);
 }
 
 function sleep(ms: number): Promise<void> {

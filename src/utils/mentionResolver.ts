@@ -12,11 +12,10 @@
  * Returns { resolvedPrompt, contextBlocks } where contextBlocks are appended to the prompt.
  */
 
-import { readFile, runTerminalCommand, searchProject } from "./tauri";
+import { readFile, runTerminalCommand } from "./tauri";
 import type { FileEntry } from "./tauri";
 import type { ChatMessage } from "../store/aiStore";
 import { getProjectFilePath } from "./chatHelpers";
-import { detectFrameworks } from "./contextGathering";
 
 // ── Types ────────────────────────────────────────────────────────────────────
 

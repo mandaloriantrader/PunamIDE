@@ -605,7 +605,7 @@ function setupInlineCompletion(monaco: typeof import("monaco-editor"), aiProvide
         });
         if (token.isCancellationRequested || lastCompletionRequest !== now) return { items: [] };
         if (resp.success && resp.text.trim()) {
-          let completion = resp.text.replace(/^```[\w]*\n?/, "").replace(/\n?```$/, "").replace(/^\n/, "");
+          const completion = resp.text.replace(/^```[\w]*\n?/, "").replace(/\n?```$/, "").replace(/^\n/, "");
           if (completion.length > 500 || /^(Here|This|The|I |Note)/i.test(completion)) return { items: [] };
           return { items: [{ insertText: completion, range: { startLineNumber: position.lineNumber, startColumn: position.column, endLineNumber: position.lineNumber, endColumn: position.column } }] };
         }

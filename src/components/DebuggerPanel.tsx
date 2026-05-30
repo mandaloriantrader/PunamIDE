@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from "react";
-import { Play, Pause, StepForward, StepBack, StopCircle, Variable, List, Code, ArrowDownToLine, ArrowUpFromLine } from "lucide-react";
+import { Play, Pause, StepForward, StopCircle, Variable, List, Code, ArrowDownToLine, ArrowUpFromLine } from "lucide-react";
 import DebugConfigPicker from "./DebugConfigPicker";
 import type { DebugLaunchConfig } from "../utils/debugConfig";
 

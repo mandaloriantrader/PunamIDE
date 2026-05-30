@@ -19,10 +19,21 @@ export interface Checkpoint {
   files: Array<{ path: string; previousContent: string }>;
 }
 
+// --- Tool Events (for message metadata) ---
+
+export interface ToolEvent {
+  kind: "tool_call" | "tool_result" | "command";
+  name: string;
+  input?: Record<string, unknown>;
+  output?: string;
+  timestamp?: number;
+}
+
 // --- Chat Messages ---
 
 export interface ChatMessage {
   role: "user" | "assistant";
+  /** Final user-visible answer (never contains <thinking> tags). */
   content: string;
   mode?: AgentMode;
   parsed?: ParsedResponse;
@@ -40,6 +51,10 @@ export interface ChatMessage {
   blocks?: StreamBlock[];
   /** True when the AI has finished streaming its full response. */
   isComplete?: boolean;
+  /** Agent reasoning — extracted from <thinking> tags, never mixed into content. */
+  thinking?: string;
+  /** Tool execution events — stored separately from user-visible content. */
+  toolEvents?: ToolEvent[];
 }
 
 // --- Project Check ---

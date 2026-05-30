@@ -64,6 +64,8 @@ const DockerPanel       = lazy(() => import("./components/DockerPanel"));
 const NotepadsPanel     = lazy(() => import("./components/NotepadsPanel"));
 const GitHubPanel       = lazy(() => import("./components/github/GitHubPanel"));
 
+// Phase 3-9 panels loaded via RightPanel tabs (lazy-loaded there)
+
 // loadNotes is a small utility — import directly, not lazily
 import { loadNotes } from "./components/NotesPanel";
 
@@ -99,7 +101,7 @@ import {
   dapSendRequest,
   dapStop,
 } from "./utils/tauri";
-import type { AppConfig, FileEntry, RunProfile, SearchResult, DapMessage, DapRequest, DapEvent, DapResponse } from "./utils/tauri";
+import type { AppConfig, FileEntry, RunProfile, SearchResult, DapRequest } from "./utils/tauri";
 import type { ParsedResponse } from "./utils/prompts";
 import { parseProblemsFromOutput } from "./utils/problems";
 import type { DebugLaunchConfig } from "./utils/debugConfig";
@@ -116,6 +118,9 @@ import type { RunObservation } from "./services/run/verifiedRun";
 // LSP integration
 import { lspManager } from "./services/lsp/lspManager";
 
+// Agent safety guard — intercepts file writes and browser opens
+import { checkFileWrite, checkBrowserOpen, registerBrowser } from "./services/agent/AgentApplyGuard";
+
 // Auto-save hook
 import { useAutoSave } from "./hooks/useAutoSave";
 
@@ -123,8 +128,6 @@ import { useAutoSave } from "./hooks/useAutoSave";
 import BackgroundAgentPanel from "./components/BackgroundAgentPanel";
 
 // Keyboard shortcuts
-import { useKeyboardShortcuts } from "./hooks/useKeyboardShortcuts";
-import type { Keybinding, ShortcutHandler } from "./hooks/useKeyboardShortcuts";
 
 const isAbsolutePath = (path: string) => /^[A-Za-z]:[\\/]/.test(path) || path.startsWith("/");
 const normalizeFsPath = (path: string) => path.replace(/\\/g, "/").replace(/\/+/g, "/").toLowerCase();
@@ -169,7 +172,7 @@ export default function App() {
   const [currentVariables, setCurrentVariables] = useState<any[]>([]); // Simplified for now
   const [currentSource, setCurrentSource] = useState<{ path: string; line: number; } | null>(null);
   const [debugConsoleOutput, setDebugConsoleOutput] = useState<string[]>([]);
-  const [threads, setThreads] = useState<{ id: number; name: string }[]>([]);
+  const [_threads, _setThreads] = useState<{ id: number; name: string }[]>([]);
   const [debugLaunchConfigs, setDebugLaunchConfigs] = useState<DebugLaunchConfig[]>([]);
   const [selectedDebugConfigId, setSelectedDebugConfigId] = useState<string | null>(null);
 
@@ -736,15 +739,10 @@ export default function App() {
           fetchStackFrames(threadId);
           break;
         }
-        case "response_initialize":
+        case "response_initialize": {
           // DAP handshake: we received the initialize response (capabilities).
-          // For debugpy and many adapters, this IS the signal to proceed.
-          // Fall through to the "initialized" handler logic.
           console.log("[DEBUG] Received initialize response — proceeding with handshake");
           setDebugConsoleOutput(prev => [...prev, `[PunamIDE] Initialize response received. Proceeding...`]);
-          // Fall through intentionally — treat response_initialize same as initialized
-        // eslint-disable-next-line no-fallthrough
-        case "initialized":
           // DAP handshake step 2: adapter is ready
           console.log("[DEBUG] Adapter initialized — sending breakpoints + configurationDone + launch/attach");
           // Clear the init timeout
@@ -800,6 +798,64 @@ export default function App() {
             debugSequencingRef.current.step = "ready";
           }
           break;
+        }
+        case "initialized": {
+          // DAP handshake step 2: adapter is ready
+          console.log("[DEBUG] Adapter initialized — sending breakpoints + configurationDone + launch/attach");
+          // Clear the init timeout
+          if ((debugSequencingRef.current as any)?._initTimeout) {
+            clearTimeout((debugSequencingRef.current as any)._initTimeout);
+          }
+          setDebugConsoleOutput(prev => [...prev, `[PunamIDE] Adapter ready. Configuring...`]);
+
+          if (debugSequencingRef.current.step === "initializing") {
+            debugSequencingRef.current.step = "initialized";
+
+            // Send breakpoints for all files that have them
+            const bpCount2 = Object.values(breakpoints).reduce((sum, lines) => sum + lines.length, 0);
+            for (const [filePath, lines] of Object.entries(breakpoints)) {
+              if (lines.length > 0) {
+                sendDapRequestRaw("setBreakpoints", {
+                  source: { path: filePath },
+                  breakpoints: lines.map(l => ({ line: l })),
+                });
+              }
+            }
+            if (bpCount2 > 0) {
+              setDebugConsoleOutput(prev => [...prev, `[PunamIDE] Sent ${bpCount2} breakpoint(s)`]);
+            }
+
+            // Signal that configuration is done
+            sendDapRequestRaw("configurationDone", {});
+
+            // Send launch or attach request based on config
+            const config = debugSequencingRef.current.config;
+            debugSequencingRef.current.step = "launching";
+
+            if (config?.request === "attach") {
+              setDebugConsoleOutput(prev => [...prev, `[PunamIDE] Attaching to ${config.host || "127.0.0.1"}:${config.port}...`]);
+              sendDapRequestRaw("attach", {
+                ...(config.host ? { host: config.host } : {}),
+                ...(config.port ? { port: config.port } : {}),
+                ...(config.launchArgs || {}),
+              });
+            } else {
+              setDebugConsoleOutput(prev => [...prev, `[PunamIDE] Launching: ${config?.program || "unknown"}`]);
+              sendDapRequestRaw("launch", {
+                noDebug: false,
+                program: config?.program || projectPath + "/index.js",
+                args: config?.args || [],
+                cwd: config?.cwd || projectPath,
+                env: config?.env || {},
+                stopOnEntry: config?.stopOnEntry || false,
+                ...(config?.launchArgs || {}),
+              });
+            }
+
+            debugSequencingRef.current.step = "ready";
+          }
+          break;
+        }
         case "continued":
           setDebugAdapterStatus("running");
           setCurrentSource(null);
@@ -1885,6 +1941,7 @@ export default function App() {
   const themeClass = zenMode ? "zen-mode" : "";
   const projectCheckCommand = detectProjectCheckCommand();
   const activeBottomPanel =
+    showDebug && bottomPanelActive === "debug" ? "debug" :
     showProblems && (bottomPanelActive === "problems" || !showTerminal) ? "problems" : "terminal";
   const hasBottomPanel = showTerminal || showProblems || showDebug;
 

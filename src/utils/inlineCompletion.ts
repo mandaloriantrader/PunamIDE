@@ -9,7 +9,7 @@
  * to the configured AI provider and renders the response as ghost text.
  */
 
-import type { IDisposable, languages, editor } from "monaco-editor";
+import type { IDisposable } from "monaco-editor";
 import { sendToProviderStreaming } from "./providers";
 import type { AIProviderConfig } from "./providers";
 
@@ -48,7 +48,7 @@ export function registerInlineCompletionProvider(
   for (const langId of languageIds) {
     const provider = monaco.languages.registerInlineCompletionsProvider(langId, {
       provideInlineCompletions: async (
-        model,
+        _model,
         position,
         _context,
         _token,

@@ -9,6 +9,7 @@ export type BackgroundAgentStep =
   | "queued"
   | "planning"
   | "proposing_fix"
+  | "awaiting_approval"
   | "running_command"
   | "analyzing_output"
   | "verifying"
@@ -70,6 +71,8 @@ interface BackgroundAgentState {
   cancel: () => void;
   complete: () => void;
   fail: (error: string) => void;
+  approveChanges: () => void;
+  rejectChanges: () => void;
   togglePanel: () => void;
   clearSession: () => void;
 }
@@ -252,6 +255,33 @@ export const useBackgroundAgentStore = create<BackgroundAgentState>((set, get) =
         completedAt: Date.now(),
         error,
         logs: [...session.logs, { timestamp: Date.now(), step: "failed", message: error }],
+      },
+    });
+  },
+
+  approveChanges: () => {
+    const { session } = get();
+    if (!session || session.step !== "awaiting_approval") return;
+    set({
+      session: {
+        ...session,
+        step: "verifying",
+        logs: [...session.logs, { timestamp: Date.now(), step: "verifying", message: "Changes approved by user" }],
+      },
+    });
+  },
+
+  rejectChanges: () => {
+    const { session } = get();
+    if (!session || session.step !== "awaiting_approval") return;
+    // Remove unapplied file changes from this round
+    const cleaned = session.fileChanges.filter(fc => fc.applied);
+    set({
+      session: {
+        ...session,
+        step: "analyzing_output",
+        fileChanges: cleaned,
+        logs: [...session.logs, { timestamp: Date.now(), step: "analyzing_output", message: "Changes rejected by user — will retry with different approach" }],
       },
     });
   },
