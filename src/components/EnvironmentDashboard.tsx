@@ -24,9 +24,11 @@ import {
 import { getToolOrchestrator } from "../services/tooling/ToolOrchestrator";
 import { getEnvironmentManager } from "../services/tooling/EnvironmentManager";
 import { getDependencyResolver } from "../services/tooling/DependencyResolver";
+import { getInstallationEngine } from "../services/tooling/InstallationEngine";
 import type { ToolInfo, EnvironmentScanResult, EnvironmentSummary, DockerContainerInfo } from "../services/tooling/ToolOrchestrator";
 import type { EnvironmentState, DependencyAlert, ToolCategory } from "../services/tooling/EnvironmentManager";
 import type { DependencyHealth, ProjectManifestInfo } from "../services/tooling/DependencyResolver";
+import type { InstallResult } from "../services/tooling/InstallationEngine";
 
 // ── Styles ────────────────────────────────────────────────────────────────────
 
@@ -85,6 +87,26 @@ export default function EnvironmentDashboard() {
   const [showRuntimes, setShowRuntimes] = useState(true);
   const [showPkgMgrs, setShowPkgMgrs] = useState(true);
   const [showOther, setShowOther] = useState(true);
+  const [installing, setInstalling] = useState<string | null>(null);
+  const [installResult, setInstallResult] = useState<InstallResult | null>(null);
+
+  const handleInstall = useCallback(async (toolName: string) => {
+    setInstalling(toolName);
+    setInstallResult(null);
+    try {
+      const engine = await getInstallationEngine();
+      const result = await engine.installTool(toolName);
+      setInstallResult(result);
+      if (result.success) {
+        // Re-scan after successful install
+        handleScan();
+      }
+    } catch (err) {
+      setInstallResult({ success: false, toolName, output: String(err), command: "", durationMs: 0 });
+    } finally {
+      setInstalling(null);
+    }
+  }, []);
 
   const handleScan = useCallback(async () => {
     setLoading(true);
@@ -297,19 +319,52 @@ export default function EnvironmentDashboard() {
                 <AlertTriangle size={14} />
                 Missing Tools
               </div>
-              {scan.summary.missing_recommendations.map((rec, i) => (
+              {scan.tools.filter((t) => !t.installed).map((tool) => (
                 <div
-                  key={i}
+                  key={tool.name}
                   style={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: "8px",
                     fontSize: "11px",
                     color: "var(--text-secondary, #a0a0b0)",
-                    padding: "2px 0",
+                    padding: "4px 0",
                     lineHeight: 1.5,
                   }}
                 >
-                  • {rec}
+                  <XCircle size={12} color="#6b7280" />
+                  <span style={{ flex: 1 }}>{tool.display_name}</span>
+                  <button
+                    onClick={() => handleInstall(tool.name)}
+                    disabled={installing === tool.name}
+                    style={{
+                      padding: "2px 8px",
+                      background: "#065f4620",
+                      border: "1px solid #34d39940",
+                      borderRadius: "4px",
+                      color: "#34d399",
+                      fontSize: "10px",
+                      cursor: installing === tool.name ? "not-allowed" : "pointer",
+                      fontFamily: "inherit",
+                      opacity: installing === tool.name ? 0.5 : 1,
+                    }}
+                  >
+                    {installing === tool.name ? "Installing..." : "Install"}
+                  </button>
                 </div>
               ))}
+              {installResult && (
+                <div style={{
+                  marginTop: "8px",
+                  padding: "6px 8px",
+                  borderRadius: "4px",
+                  fontSize: "10px",
+                  background: installResult.success ? "#065f4620" : "#7f1d1d20",
+                  color: installResult.success ? "#34d399" : "#f87171",
+                }}>
+                  {installResult.success ? "✓" : "✗"} {installResult.toolName}: {installResult.output.slice(0, 150)}
+                </div>
+              )}
             </div>
           )}
         </>

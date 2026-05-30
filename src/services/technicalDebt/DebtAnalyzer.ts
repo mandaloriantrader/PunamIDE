@@ -53,11 +53,19 @@ export class DebtAnalyzer {
 
   /**
    * Analyze a single file for technical debt.
+   * Uses incremental caching — skips re-analysis if content hasn't changed.
    */
   async analyzeFile(filePath: string): Promise<FileDebtMetrics> {
     const content = await readFile(filePath).catch(() => "");
     if (!content) {
       return this.emptyMetrics(filePath);
+    }
+
+    // Check cache — skip if content hash matches
+    const contentHash = simpleContentHash(content);
+    const cached = fileScoreCache.get(filePath);
+    if (cached && cached.contentHash === contentHash) {
+      return cached.metrics;
     }
 
     const lines = content.split("\n");
@@ -117,7 +125,7 @@ export class DebtAnalyzer {
     if (duplicationScore > 50) fileScore -= 10;
     fileScore = Math.max(0, fileScore);
 
-    return {
+    const metrics: FileDebtMetrics = {
       filePath,
       linesOfCode: loc,
       commentLines,
@@ -132,28 +140,119 @@ export class DebtAnalyzer {
       dependencyDepth,
       fileScore,
     };
+
+    // Store in cache
+    fileScoreCache.set(filePath, { filePath, metrics, contentHash, timestamp: Date.now() });
+
+    return metrics;
   }
 
   /**
    * Analyze all files in a project.
+   * Uses Web Worker for large file sets to avoid blocking the UI.
    */
   async analyzeProject(filePaths: string[]): Promise<ProjectDebtAnalysis> {
     const metrics: FileDebtMetrics[] = [];
+    const limitedPaths = filePaths.slice(0, 200);
 
-    for (const fp of filePaths.slice(0, 200)) { // limit to 200 files for performance
-      // Only analyze source files
+    // For large projects (50+ files), offload to Web Worker
+    if (limitedPaths.length >= 50) {
+      return this.analyzeProjectInWorker(limitedPaths);
+    }
+
+    for (const fp of limitedPaths) {
       if (!this.isSourceFile(fp)) continue;
-
       const m = await this.analyzeFile(fp).catch(() => this.emptyMetrics(fp));
       if (m.linesOfCode > 0) {
         metrics.push(m);
       }
     }
 
-    // Sort by score (lowest = most debt)
+    return this.buildAnalysisResult(metrics);
+  }
+
+  /**
+   * Offload analysis to Web Worker for large projects.
+   */
+  private analyzeProjectInWorker(filePaths: string[]): Promise<ProjectDebtAnalysis> {
+    return new Promise(async (resolve) => {
+      // Read file contents for the worker
+      const files: Record<string, string> = {};
+      for (const fp of filePaths) {
+        if (!this.isSourceFile(fp)) continue;
+        const content = await readFile(fp).catch(() => "");
+        if (content) files[fp] = content;
+      }
+
+      try {
+        const worker = new Worker(
+          new URL("../../workers/debt-analyzer.worker.ts", import.meta.url),
+          { type: "module" },
+        );
+
+        worker.onmessage = (event) => {
+          const { report } = event.data;
+          worker.terminate();
+
+          // Convert worker report to ProjectDebtAnalysis format
+          const metrics: FileDebtMetrics[] = (report.fileScores || []).map((fs: any) => ({
+            filePath: fs.path,
+            linesOfCode: 0,
+            commentLines: 0,
+            commentRatio: 0,
+            functionCount: 0,
+            avgFunctionLength: 0,
+            maxFunctionLength: 0,
+            todoCount: 0,
+            fixmeCount: 0,
+            hackCount: 0,
+            duplicationScore: fs.scores?.duplication || 0,
+            dependencyDepth: fs.scores?.dependencyDepth || 0,
+            fileScore: Math.max(0, 100 - fs.totalScore),
+          }));
+
+          resolve(this.buildAnalysisResult(metrics));
+        };
+
+        worker.onerror = () => {
+          worker.terminate();
+          // Fallback to main thread
+          this.analyzeProjectMainThread(filePaths).then(resolve);
+        };
+
+        worker.postMessage({
+          type: "analyze",
+          files,
+          archMapData: {
+            moduleFiles: {},
+            fileDependencies: {},
+            fileDependents: {},
+            classifyFileModule: {},
+          },
+        });
+      } catch {
+        // Worker not available, fallback to main thread
+        resolve(await this.analyzeProjectMainThread(filePaths));
+      }
+    });
+  }
+
+  /**
+   * Main-thread fallback for when Web Worker is unavailable.
+   */
+  private async analyzeProjectMainThread(filePaths: string[]): Promise<ProjectDebtAnalysis> {
+    const metrics: FileDebtMetrics[] = [];
+    for (const fp of filePaths.slice(0, 200)) {
+      if (!this.isSourceFile(fp)) continue;
+      const m = await this.analyzeFile(fp).catch(() => this.emptyMetrics(fp));
+      if (m.linesOfCode > 0) metrics.push(m);
+    }
+    return this.buildAnalysisResult(metrics);
+  }
+
+  private buildAnalysisResult(metrics: FileDebtMetrics[]): ProjectDebtAnalysis {
     metrics.sort((a, b) => a.fileScore - b.fileScore);
 
-    // Generate hotspots (top 10 worst files)
     const hotspots: DebtHotspot[] = metrics.slice(0, 10).map((m) => ({
       filePath: m.filePath,
       score: m.fileScore,
@@ -161,7 +260,6 @@ export class DebtAnalyzer {
       recommendation: this.generateRecommendation(m),
     }));
 
-    // Overall project score (weighted average)
     const totalScore = metrics.reduce((sum, m) => sum + m.fileScore, 0);
     const overallScore = metrics.length > 0 ? Math.round(totalScore / metrics.length) : 100;
     const totalLoc = metrics.reduce((sum, m) => sum + m.linesOfCode, 0);
@@ -217,6 +315,27 @@ export class DebtAnalyzer {
       fileScore: 100,
     };
   }
+}
+
+// ── Incremental Cache (Phase 10, E4) ───────────────────────────────────────
+
+interface CachedFileScore {
+  filePath: string;
+  metrics: FileDebtMetrics;
+  contentHash: number;
+  timestamp: number;
+}
+
+const fileScoreCache = new Map<string, CachedFileScore>();
+
+function simpleContentHash(content: string): number {
+  let hash = 0;
+  for (let i = 0; i < content.length; i++) {
+    const char = content.charCodeAt(i);
+    hash = ((hash << 5) - hash) + char;
+    hash |= 0;
+  }
+  return hash;
 }
 
 // ── Singleton ──────────────────────────────────────────────────────────────────

@@ -15,6 +15,8 @@
  */
 
 import type { AIProviderConfig } from "../../utils/providers";
+import { getTaskScheduler } from "./TaskScheduler";
+import type { ScheduledTask } from "./TaskScheduler";
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
@@ -359,43 +361,52 @@ export class AgentOrchestrator {
     this.emitChange();
   }
 
-  /** Assign the next task from the queue to an idle agent. */
+  /** Assign the next task from the queue to an idle agent. Uses TaskScheduler for Layer 6 ordering. */
   assignNextTask(): AgentTask | null {
-    // Sort queue by priority, then by dependency satisfaction
-    const sorted = [...this.state.taskQueue]
-      .filter((t) => t.status === "pending")
-      .sort((a, b) => {
-        // Priority first
-        if (a.priority !== b.priority) return a.priority - b.priority;
-        // Then dependency count (fewer dependencies first)
-        return a.dependencies.length - b.dependencies.length;
-      });
+    const scheduler = getTaskScheduler();
 
-    for (const task of sorted) {
-      // Check dependencies are complete
-      const depsMet = task.dependencies.every((depId) => {
-        const depTask = this.state.tasks.find((t) => t.id === depId);
-        return depTask?.status === "completed";
-      });
-      if (!depsMet) continue;
-
-      // Find an idle agent of matching type
-      const agent = this.findIdleAgent();
-      if (!agent) return null;
-
-      task.status = "running";
-      task.assignedTo = agent.config.id;
-      agent.status = "running";
-      agent.currentTask = task;
-      agent.startedAt = Date.now();
-
-      // Remove from queue, keep in tasks list
-      this.state.taskQueue = this.state.taskQueue.filter((t) => t.id !== task.id);
-      this.emitChange();
-      return task;
+    // Sync queue into TaskScheduler if it has pending tasks not yet enqueued
+    for (const task of this.state.taskQueue.filter((t) => t.status === "pending")) {
+      const scheduled: ScheduledTask = {
+        id: task.id,
+        description: task.description,
+        agentType: this.state.agents.get(task.assignedTo)?.config.type ?? "implementation",
+        files: task.files,
+        priority: task.priority,
+        dependsOn: task.dependencies,
+        estimatedComplexity: 5,
+        maxRetries: 1,
+        retryCount: 0,
+      };
+      scheduler.enqueue(scheduled);
     }
 
-    return null;
+    // Ask scheduler for the next task respecting Layer 6 ordering
+    const scheduleResult = scheduler.getNextTask();
+    if (!scheduleResult.nextTask) {
+      return null; // All tasks blocked or queue empty
+    }
+
+    // Find the matching task in our queue
+    const taskId = scheduleResult.nextTask.id;
+    const task = this.state.taskQueue.find((t) => t.id === taskId)
+      || this.state.tasks.find((t) => t.id === taskId);
+    if (!task) return null;
+
+    // Find an idle agent of matching type
+    const agent = this.findIdleAgent();
+    if (!agent) return null;
+
+    task.status = "running";
+    task.assignedTo = agent.config.id;
+    agent.status = "running";
+    agent.currentTask = task;
+    agent.startedAt = Date.now();
+
+    // Remove from queue, keep in tasks list
+    this.state.taskQueue = this.state.taskQueue.filter((t) => t.id !== task.id);
+    this.emitChange();
+    return task;
   }
 
   /** Mark the current task of an agent as completed or failed. */
@@ -406,6 +417,11 @@ export class AgentOrchestrator {
     session.currentTask.status = success ? "completed" : "failed";
     session.currentTask.result = result;
     session.completedTasks.push(session.currentTask.id);
+
+    // Notify TaskScheduler so dependent tasks can proceed
+    const scheduler = getTaskScheduler();
+    scheduler.completeTask(session.currentTask.id);
+
     session.currentTask = null;
     session.status = "idle";
 

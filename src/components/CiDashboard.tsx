@@ -25,6 +25,9 @@ import {
   X,
 } from "lucide-react";
 import { getCiMonitor } from "../services/ci/CiMonitor";
+import { getLogAnalyzer } from "../services/ci/LogAnalyzer";
+import { getPatchGenerator } from "../services/ci/PatchGenerator";
+import { getVerificationRunner } from "../services/ci/VerificationRunner";
 import type { CiWorkflowRun, CiFailureAnalysis, CiFixProposal, CiPipelineStatus } from "../services/ci/CiMonitor";
 
 // ── Styles ────────────────────────────────────────────────────────────────────
@@ -93,8 +96,28 @@ export default function CiDashboard({ projectPath }: { projectPath?: string }) {
     const key = `${run.id}`;
     setAnalyzing(key);
     try {
-      const analysis = await ciMonitor.analyzeFailure(run);
+      const logAnalyzer = getLogAnalyzer();
+      const fullAnalysis = await logAnalyzer.analyzeCiFailure(run);
+      // Map to CiFailureAnalysis for display
+      const analysis: CiFailureAnalysis = {
+        runId: run.id,
+        workflowName: run.name,
+        rootCause: fullAnalysis.rootCause,
+        failingStep: fullAnalysis.failingStep,
+        errorLog: fullAnalysis.errorLog,
+        failingFile: fullAnalysis.failingFile,
+        suggestedFix: fullAnalysis.suggestions[0] || null,
+        confidence: fullAnalysis.confidence,
+        requiresHumanReview: true,
+      };
       setAnalyses((prev) => new Map(prev).set(key, analysis));
+
+      // Auto-generate fix proposal using PatchGenerator
+      const patchGen = getPatchGenerator();
+      const candidate = await patchGen.generateFixCandidate(analysis);
+      const validation = await patchGen.validatePatch(candidate);
+      const proposal = patchGen.createProposal(analysis, candidate, validation);
+      setPatches((prev) => new Map(prev).set(key, proposal));
     } catch {
       // Handle error
     } finally {
@@ -108,8 +131,32 @@ export default function CiDashboard({ projectPath }: { projectPath?: string }) {
     setExpandedFailure(next);
   };
 
-  const handleApprove = (key: string) => {
-    setApprovals((prev) => new Set(prev).add(key));
+  const handleApprove = async (key: string) => {
+    // Run sandbox verification before approving
+    const proposal = patches.get(key);
+    if (proposal) {
+      const runner = getVerificationRunner();
+      const sandboxResult = await runner.runInSandbox(proposal);
+      if (sandboxResult.passed) {
+        setPatches((prev) => {
+          const next = new Map(prev);
+          const p = next.get(key);
+          if (p) next.set(key, { ...p, testResults: { passed: true, output: sandboxResult.output }, status: "applied" });
+          return next;
+        });
+        setApprovals((prev) => new Set(prev).add(key));
+      } else {
+        // Sandbox failed — show output but don't approve
+        setPatches((prev) => {
+          const next = new Map(prev);
+          const p = next.get(key);
+          if (p) next.set(key, { ...p, testResults: { passed: false, output: sandboxResult.output }, status: "rejected" });
+          return next;
+        });
+      }
+    } else {
+      setApprovals((prev) => new Set(prev).add(key));
+    }
   };
 
   const handleReject = (key: string) => {

@@ -4,7 +4,7 @@
  */
 
 import { useState, useRef, useEffect, useCallback } from "react";
-import { MessageSquare, Layers, StickyNote, BarChart3, FileCode, ShieldCheck, Monitor, Bot, TrendingUp, Activity, MoreHorizontal } from "lucide-react";
+import { MessageSquare, Layers, StickyNote, BarChart3, FileCode, ShieldCheck, Monitor, Bot, TrendingUp, Activity, MoreHorizontal, Brain } from "lucide-react";
 import { PanelErrorBoundary } from "./ErrorBoundary";
 import AiChat from "./AiChat";
 import NotepadsPanel from "./NotepadsPanel";
@@ -20,8 +20,9 @@ const EnvironmentDashboard = lazy(() => import("./EnvironmentDashboard"));
 const MultiAgentDashboard = lazy(() => import("./MultiAgentDashboard"));
 const TechnicalDebtDashboard = lazy(() => import("./TechnicalDebtDashboard"));
 const CiDashboard = lazy(() => import("./CiDashboard"));
+const RagWorkbenchPanel = lazy(() => import("./RagWorkbenchPanel"));
 
-export type RightPanelTab = "chat" | "composer" | "notepads" | "usage" | "impact" | "security" | "environment" | "agents" | "debt" | "cicd";
+export type RightPanelTab = "chat" | "composer" | "notepads" | "usage" | "impact" | "security" | "environment" | "agents" | "debt" | "cicd" | "rag";
 
 interface RightPanelProps {
   // AiChat props (pass-through)
@@ -63,6 +64,7 @@ const TABS: { id: RightPanelTab; label: string; icon: typeof MessageSquare }[] =
   { id: "agents", label: "Agents", icon: Bot },
   { id: "debt", label: "Debt", icon: TrendingUp },
   { id: "cicd", label: "CI/CD", icon: Activity },
+  { id: "rag", label: "RAG", icon: Brain },
 ];
 
 export default function RightPanel(props: RightPanelProps) {
@@ -276,6 +278,14 @@ export default function RightPanel(props: RightPanelProps) {
           <PanelErrorBoundary fallbackLabel="CI/CD">
             <Suspense fallback={null}>
               <CiDashboard projectPath={props.projectPath} />
+            </Suspense>
+          </PanelErrorBoundary>
+        )}
+
+        {activeTab === "rag" && (
+          <PanelErrorBoundary fallbackLabel="RAG Workbench">
+            <Suspense fallback={null}>
+              <RagWorkbenchPanel />
             </Suspense>
           </PanelErrorBoundary>
         )}

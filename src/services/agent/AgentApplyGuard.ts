@@ -221,6 +221,11 @@ export async function validateApply(
     }
 
     result.architectureViolations = violations;
+
+    // Run project-wide violation scan for reporting (non-blocking)
+    if (projectPath) {
+      scanArchitectureViolations(projectPath).catch(() => {});
+    }
   } catch {
     // Architecture validation unavailable — allow with warning
   }

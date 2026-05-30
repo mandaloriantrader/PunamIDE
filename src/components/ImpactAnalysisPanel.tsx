@@ -42,6 +42,8 @@ import { createImpactAnalyzer } from "../services/architecture/ImpactAnalyzer";
 import { createChangePredictor } from "../services/architecture/ChangePredictor";
 import { createDependencyExplorer } from "../services/architecture/DependencyExplorer";
 import { buildArchitectureMap } from "../services/architecture/ArchitectureMap";
+import { getRuleValidator } from "../services/architecture/RuleValidator";
+import { getCachedDependencyGraph } from "../services/architecture/DependencyGraph";
 import type { ArchitectureMap } from "../services/architecture/ArchitectureMap";
 
 // ── Styles ────────────────────────────────────────────────────────────────────
@@ -204,6 +206,10 @@ export default function ImpactAnalysisPanel() {
     buildArchitectureMap()
       .then((map) => setArchMap(map))
       .catch(() => {});
+
+    // Pre-load dependency graph and rule validator for faster analysis
+    getCachedDependencyGraph().catch(() => {});
+    getRuleValidator().loadRules().catch(() => {});
   }, []);
 
   const handleAnalyze = useCallback(async () => {
