@@ -1,0 +1,33 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" fill="none">
+  <!-- Outer glow ring -->
+  <circle cx="32" cy="32" r="30" fill="url(#bgGrad)"/>
+  <circle cx="32" cy="32" r="29" stroke="url(#ringGrad)" stroke-width="2.5" fill="none"/>
+  <!-- Inner dark circle -->
+  <circle cx="32" cy="32" r="24" fill="#0f0f1a"/>
+  <circle cx="32" cy="32" r="24" stroke="url(#innerRing)" stroke-width="1.5" fill="none" opacity="0.6"/>
+  <!-- Terminal prompt > -->
+  <path d="M20 24l9 8-9 8" stroke="url(#promptGrad)" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"/>
+  <!-- Cursor _ -->
+  <path d="M33 40h11" stroke="#cba6f7" stroke-width="3.5" stroke-linecap="round"/>
+  <!-- Shine highlight -->
+  <ellipse cx="26" cy="22" rx="8" ry="4" fill="white" opacity="0.06"/>
+  <defs>
+    <radialGradient id="bgGrad" cx="32" cy="32" r="30" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#1e1e3a"/>
+      <stop offset="100%" stop-color="#0a0a14"/>
+    </radialGradient>
+    <linearGradient id="ringGrad" x1="4" y1="4" x2="60" y2="60">
+      <stop offset="0%" stop-color="#89b4fa"/>
+      <stop offset="40%" stop-color="#cba6f7"/>
+      <stop offset="100%" stop-color="#74c7ec"/>
+    </linearGradient>
+    <linearGradient id="innerRing" x1="8" y1="8" x2="56" y2="56">
+      <stop offset="0%" stop-color="#89b4fa" stop-opacity="0.5"/>
+      <stop offset="100%" stop-color="#cba6f7" stop-opacity="0.3"/>
+    </linearGradient>
+    <linearGradient id="promptGrad" x1="20" y1="24" x2="29" y2="40">
+      <stop offset="0%" stop-color="#74c7ec"/>
+      <stop offset="100%" stop-color="#89b4fa"/>
+    </linearGradient>
+  </defs>
+</svg>
