@@ -7,7 +7,7 @@
 
 export interface AIProviderConfig {
   id: string;
-  type: "gemini" | "openai-compatible";
+  type: "gemini" | "openai-compatible" | "anthropic";
   name: string;
   apiKey: string;
   baseUrl?: string; // Optional for OpenAI-compatible

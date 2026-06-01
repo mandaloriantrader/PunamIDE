@@ -215,6 +215,76 @@ export interface ToolResult {
   is_error: boolean;
 }
 
+function firstDefined(input: Record<string, any>, keys: string[]) {
+  for (const key of keys) {
+    if (input[key] !== undefined && input[key] !== null && input[key] !== "") {
+      return input[key];
+    }
+  }
+  return undefined;
+}
+
+function requireField(tool: AgentToolName, input: Record<string, any>, field: string): void {
+  if (input[field] === undefined || input[field] === null || input[field] === "") {
+    throw new Error(`${tool} requires "${field}".`);
+  }
+}
+
+export function normalizeAgentToolCall(
+  toolCall: ToolCall | ParsedJsonToolCall
+): ToolCall | ParsedJsonToolCall {
+  const name = "tool" in toolCall ? toolCall.tool : toolCall.name;
+  const input = { ...(toolCall.input || {}) };
+
+  const assignAlias = (target: string, aliases: string[]) => {
+    if (input[target] === undefined || input[target] === null || input[target] === "") {
+      const value = firstDefined(input, aliases);
+      if (value !== undefined) input[target] = value;
+    }
+    for (const alias of aliases) {
+      if (alias !== target) delete input[alias];
+    }
+  };
+
+  switch (name) {
+    case "read_file":
+      assignAlias("path", ["file", "filename", "filepath", "filePath"]);
+      requireField(name, input, "path");
+      break;
+    case "read_lines":
+      assignAlias("path", ["file", "filename", "filepath", "filePath"]);
+      assignAlias("start_line", ["start", "from", "line_start", "startLine"]);
+      assignAlias("end_line", ["end", "to", "line_end", "endLine"]);
+      requireField(name, input, "path");
+      input.start_line = Number(input.start_line ?? 1);
+      input.end_line = Number(input.end_line ?? 0);
+      break;
+    case "search_in_project":
+      assignAlias("query", ["pattern", "term", "text", "search", "keyword"]);
+      requireField(name, input, "query");
+      break;
+    case "apply_patch":
+      assignAlias("path", ["file", "filename", "filepath", "filePath"]);
+      assignAlias("start_line", ["start", "from", "line_start", "startLine"]);
+      assignAlias("end_line", ["end", "to", "line_end", "endLine"]);
+      requireField(name, input, "path");
+      requireField(name, input, "new_content");
+      input.start_line = Number(input.start_line);
+      input.end_line = Number(input.end_line);
+      break;
+    case "write_file":
+      assignAlias("path", ["file", "filename", "filepath", "filePath"]);
+      requireField(name, input, "path");
+      requireField(name, input, "content");
+      break;
+    case "run_command":
+      assignAlias("command", ["cmd", "shell", "script"]);
+      requireField(name, input, "command");
+      break;
+  }
+
+  return { ...toolCall, input };
+}
 // ── Provider detection ────────────────────────────────────────────────────────
 
 /**
@@ -309,9 +379,10 @@ export async function executeAgentTool(
   toolCall: ToolCall | ParsedJsonToolCall,
   projectPath: string
 ): Promise<ToolResult> {
-  const name = "tool" in toolCall ? toolCall.tool : toolCall.name;
-  const input = toolCall.input;
-  const id = "id" in toolCall ? toolCall.id : `fallback-${Date.now()}`;
+  const normalizedToolCall = normalizeAgentToolCall(toolCall);
+  const name = "tool" in normalizedToolCall ? normalizedToolCall.tool : normalizedToolCall.name;
+  const input = normalizedToolCall.input;
+  const id = "id" in normalizedToolCall ? normalizedToolCall.id : `fallback-${Date.now()}`;
 
   try {
     let resultText: string;

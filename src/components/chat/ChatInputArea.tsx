@@ -53,6 +53,7 @@ interface ChatInputAreaProps {
   hasAppliedMessages: number;
   sendDisabled: boolean;
   isAgentMode?: boolean;
+  providerReady?: boolean;
 }
 
 export function ChatInputArea({
@@ -93,6 +94,7 @@ export function ChatInputArea({
   hasAppliedMessages,
   sendDisabled,
   isAgentMode,
+  providerReady = true,
 }: ChatInputAreaProps) {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const shouldRestoreFocusRef = useRef(false);
@@ -248,6 +250,13 @@ export function ChatInputArea({
             <span>{selectedProjectFiles.length} selected</span>
             <button className="btn-secondary compact" onClick={() => setShowFilePicker(false)}>Done</button>
           </div>
+        </div>
+      )}
+
+      {!providerReady && (
+        <div className="ai-provider-empty-state">
+          <strong>No model is ready</strong>
+          <span>Add an API key or enable a local provider in Settings before sending a prompt.</span>
         </div>
       )}
 

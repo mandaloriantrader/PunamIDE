@@ -89,7 +89,7 @@ export class DeadCodeAnalyzer {
     let totalExports = 0, totalImports = 0
     for (const node of graph.nodes.values()) {
       totalExports += node.exports.length
-      totalImports += node.imports.length
+      totalImports += node.rawImports.length
     }
 
     const filesWithDead = new Map<string, number>()
@@ -124,7 +124,7 @@ export class DeadCodeAnalyzer {
     const usedExports = new Set<string>()
 
     for (const node of graph.nodes.values()) {
-      for (const imp of node.imports) {
+      for (const imp of node.rawImports) {
         if (!imp.resolvedPath) continue
         for (const name of imp.importedNames) {
           if (name === '*') {
@@ -142,12 +142,12 @@ export class DeadCodeAnalyzer {
       if (this.isEntryPoint(filePath) || this.isTestFile(filePath) || this.isBarrelFile(node)) continue
 
       for (const exp of node.exports) {
-        if (FRAMEWORK_EXPORTS.has(exp.name) || exp.isReExport) continue
+        if (FRAMEWORK_EXPORTS.has(exp.name) || exp.isReexport) continue
         if (!usedExports.has(`${filePath}::${exp.name}`)) {
           unused.push({
             filePath, exportName: exp.name, line: exp.line,
-            confidence: node.dependedBy.length === 0 ? 'high' : 'medium',
-            reason: node.dependedBy.length === 0
+            confidence: node.importedBy.length === 0 ? 'high' : 'medium',
+            reason: node.importedBy.length === 0
               ? 'File has no importers — export is unreachable'
               : `Export '${exp.name}' is not imported by any project file`,
           })
@@ -174,7 +174,7 @@ export class DeadCodeAnalyzer {
 
       const usedIds = this.collectUsedIdentifiers(tree.rootNode)
 
-      for (const imp of node.imports) {
+      for (const imp of node.rawImports) {
         if (imp.importedNames.length === 0 || imp.importedNames[0] === '*') continue
         for (const name of imp.importedNames) {
           if (name === 'default' || name === '*') continue
@@ -288,7 +288,7 @@ export class DeadCodeAnalyzer {
   private isTestFile(fp: string): boolean { return TEST_FILES.some(p => p.test(fp)) }
   private isBarrelFile(node: FileNode): boolean {
     if (node.exports.length === 0) return false
-    return node.exports.filter(e => e.isReExport).length / node.exports.length > 0.7
+    return node.exports.filter(e => e.isReexport).length / node.exports.length > 0.7
   }
   private isConventionUsed(name: string): boolean {
     return /^use[A-Z]/.test(name) || /^handle[A-Z]/.test(name) || name.startsWith('_')

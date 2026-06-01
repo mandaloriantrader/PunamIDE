@@ -121,7 +121,11 @@ export default function MultiAgentDashboard() {
 
   const toggleAgent = (id: string) => {
     const next = new Set(expandedAgents);
-    next.has(id) ? next.delete(id) : next.add(id);
+    if (next.has(id)) {
+      next.delete(id);
+    } else {
+      next.add(id);
+    }
     setExpandedAgents(next);
   };
 

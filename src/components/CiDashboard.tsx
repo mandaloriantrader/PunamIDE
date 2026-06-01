@@ -127,7 +127,11 @@ export default function CiDashboard({ projectPath }: { projectPath?: string }) {
 
   const toggleExpand = (id: string) => {
     const next = new Set(expandedFailure);
-    next.has(id) ? next.delete(id) : next.add(id);
+    if (next.has(id)) {
+      next.delete(id);
+    } else {
+      next.add(id);
+    }
     setExpandedFailure(next);
   };
 

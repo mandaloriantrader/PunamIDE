@@ -22,7 +22,7 @@
  *   // graph is passed to CircularDepDetector and CouplingAnalyzer
  */
 
-import type { FileImportExportMap, ImportEdge } from './ImportExtractor'
+import type { ExportEntry, FileImportExportMap, ImportEdge } from './ImportExtractor'
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
@@ -31,8 +31,16 @@ export interface GraphNode {
   filePath: string
   /** Files this node imports (outgoing edges). */
   imports: string[]
+  /** Import metadata extracted from source, used by dead-code analysis. */
+  rawImports: ImportEdge[]
+  /** Named exports extracted from source. */
+  exports: ExportEntry[]
   /** Files that import this node (incoming edges = fan-in). */
   importedBy: string[]
+  /** Compatibility alias for graph visualizations. */
+  dependsOn: string[]
+  /** Compatibility alias for older analyzers. */
+  dependedBy: string[]
   /** External package names used by this file. */
   externalDeps: string[]
   /** Number of unique outgoing workspace edges (fan-out). */
@@ -54,6 +62,15 @@ export interface DependencyGraph {
 
   /** Total number of workspace-local edges. */
   totalEdges: number
+}
+
+export type FileNode = GraphNode
+
+export interface DependencyAnalysis {
+  graph: DependencyGraph
+  hubFiles: { filePath: string }[]
+  circularDependencies: { cycle: string[] }[]
+  couplingScores: Map<string, number>
 }
 
 // ── DependencyGraphEngine ──────────────────────────────────────────────────────
@@ -79,7 +96,11 @@ export class DependencyGraphEngine {
       nodes.set(fp, {
         filePath:     fp,
         imports:      [],
+        rawImports:   [],
+        exports:      [],
         importedBy:   [],
+        dependsOn:    [],
+        dependedBy:   [],
         externalDeps: [],
         fanOut:       0,
         fanIn:        0,
@@ -94,6 +115,8 @@ export class DependencyGraphEngine {
       const fromNode = nodes.get(map.filePath)
       if (!fromNode) continue
 
+      fromNode.exports = map.exports
+
       // External deps
       fromNode.externalDeps = [...new Set([
         ...fromNode.externalDeps,
@@ -102,6 +125,7 @@ export class DependencyGraphEngine {
 
       // Intra-workspace import edges
       for (const edge of map.imports) {
+        fromNode.rawImports.push(edge)
         if (edge.isExternal || !edge.resolvedPath) continue
 
         // Reconcile path (extension guessing, index files, etc.)
@@ -120,6 +144,7 @@ export class DependencyGraphEngine {
           fromNode.imports.push(canonical)
           edges.push([map.filePath, canonical])
         }
+        fromNode.rawImports[fromNode.rawImports.length - 1] = { ...edge, resolvedPath: canonical }
 
         // Add reverse edge on target
         let toNode = nodes.get(canonical)
@@ -127,7 +152,11 @@ export class DependencyGraphEngine {
           toNode = {
             filePath:     canonical,
             imports:      [],
+            rawImports:   [],
+            exports:      [],
             importedBy:   [],
+            dependsOn:    [],
+            dependedBy:   [],
             externalDeps: [],
             fanOut:       0,
             fanIn:        0,
@@ -144,6 +173,8 @@ export class DependencyGraphEngine {
     for (const node of nodes.values()) {
       node.fanOut = node.imports.length
       node.fanIn  = node.importedBy.length
+      node.dependsOn = node.imports
+      node.dependedBy = node.importedBy
     }
 
     return {

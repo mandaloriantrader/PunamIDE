@@ -40,6 +40,42 @@
   border-color: var(--border);
 }
 
+.terminal-guidance {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 27px;
+  padding: 5px 10px;
+  border-bottom: 1px solid var(--border);
+  background: color-mix(in srgb, var(--bg-secondary) 82%, var(--bg-primary));
+  color: var(--text-muted);
+  font-size: 11px;
+  flex-shrink: 0;
+  min-width: 0;
+}
+
+.terminal-guidance.warning {
+  color: #f9e2af;
+  background: rgba(249, 226, 175, 0.07);
+}
+
+.terminal-guidance-mode {
+  flex: 0 0 auto;
+  color: var(--text-secondary);
+  font-weight: 750;
+}
+
+.terminal-guidance.warning .terminal-guidance-mode {
+  color: #f9e2af;
+}
+
+.terminal-guidance-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .terminal-mode-content {
   flex: 1;
   overflow: hidden;

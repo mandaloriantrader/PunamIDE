@@ -11,6 +11,7 @@ import type { AIProviderConfig, ResponseMetrics } from "./providers";
 import {
   AGENT_TOOL_DEFINITIONS,
   executeAgentTool,
+  normalizeAgentToolCall,
   buildToolSystemPrompt,
   parseJsonToolCall,
   type AgentToolName,
@@ -390,26 +391,26 @@ async function runAnthropicToolLoop(opts: ToolLoopOptions): Promise<string> {
     await Promise.all(
       toolUseBlocks.map(async (block) => {
         throwIfCancelled(opts);
-        const input = block.input as Record<string, unknown>;
-        const key = toolCallKey(block.name, input);
+        const normalized = normalizeAgentToolCall(
+          { id: block.id, name: block.name as ToolCall["name"], input: block.input }
+        ) as ToolCall;
+        const input = normalized.input as Record<string, unknown>;
+        const key = toolCallKey(normalized.name, input);
         if (seenToolCalls.has(key)) {
           toolResults.push({
             type: "tool_result",
             tool_use_id: block.id,
-            content: duplicateToolResult(block.name),
+            content: duplicateToolResult(normalized.name),
             is_error: false,
           });
           return;
         }
         seenToolCalls.add(key);
-        onToolCall?.(block.name, input);
+        onToolCall?.(normalized.name, input);
         throwIfCancelled(opts);
-        const result: ToolResult = await executeAgentTool(
-          { id: block.id, name: block.name as ToolCall["name"], input },
-          projectPath
-        );
+        const result: ToolResult = await executeAgentTool(normalized, projectPath);
         throwIfCancelled(opts);
-        recordToolObservation(observations, block.name, input, result);
+        recordToolObservation(observations, normalized.name, input, result);
         toolResults.push({
           type: "tool_result",
           tool_use_id: result.tool_use_id,
@@ -500,26 +501,29 @@ async function runJsonFallbackToolLoop(opts: ToolLoopOptions): Promise<string> {
 
     // Execute the tool
     throwIfCancelled(opts);
-    const key = toolCallKey(toolCall.tool, toolCall.input);
+    const normalizedToolCall = normalizeAgentToolCall(toolCall);
+    const normalizedName = "tool" in normalizedToolCall ? normalizedToolCall.tool : normalizedToolCall.name;
+    const normalizedInput = normalizedToolCall.input as Record<string, unknown>;
+    const key = toolCallKey(normalizedName, normalizedInput);
     if (seenToolCalls.has(key)) {
       conversationParts.push(
         `Assistant:\n${responseText}`,
-        `Tool result (${toolCall.tool}):\n${duplicateToolResult(toolCall.tool)}`
+        `Tool result (${normalizedName}):\n${duplicateToolResult(normalizedName)}`
       );
       userTurn = "Do not repeat the same tool call. Write the final answer now if you have enough information, or choose a different useful tool.";
       continue;
     }
     seenToolCalls.add(key);
-    onToolCall?.(toolCall.tool, toolCall.input);
+    onToolCall?.(normalizedName, normalizedInput);
     throwIfCancelled(opts);
-    const result = await executeAgentTool(toolCall, projectPath);
+    const result = await executeAgentTool(normalizedToolCall, projectPath);
     throwIfCancelled(opts);
-    recordToolObservation(observations, toolCall.tool, toolCall.input, result);
+    recordToolObservation(observations, normalizedName, normalizedInput, result);
 
     // Append to conversation history
     conversationParts.push(
       `Assistant:\n${responseText}`,
-      `Tool result (${toolCall.tool}):\n${result.content}`
+      `Tool result (${normalizedName}):\n${result.content}`
     );
 
     // Next user turn is empty (continue reasoning)
@@ -655,32 +659,31 @@ async function runGeminiToolLoop(opts: ToolLoopOptions): Promise<string> {
     await Promise.all(
       fnCalls.map(async (fc) => {
         throwIfCancelled(opts);
-        const input = fc.functionCall.args;
-        const key = toolCallKey(fc.functionCall.name, input);
+        const normalized = normalizeAgentToolCall({
+          tool: fc.functionCall.name as ToolCall["name"],
+          input: fc.functionCall.args,
+        });
+        const normalizedName = "tool" in normalized ? normalized.tool : normalized.name;
+        const input = normalized.input as Record<string, unknown>;
+        const key = toolCallKey(normalizedName, input);
         if (seenToolCalls.has(key)) {
           responseParts.push({
             functionResponse: {
-              name: fc.functionCall.name,
-              response: { content: duplicateToolResult(fc.functionCall.name) },
+              name: normalizedName,
+              response: { content: duplicateToolResult(normalizedName) },
             },
           });
           return;
         }
         seenToolCalls.add(key);
-        onToolCall?.(fc.functionCall.name, input);
+        onToolCall?.(normalizedName, input);
         throwIfCancelled(opts);
-        const result = await executeAgentTool(
-          {
-            tool: fc.functionCall.name as ToolCall["name"],
-            input,
-          },
-          projectPath
-        );
+        const result = await executeAgentTool(normalized, projectPath);
         throwIfCancelled(opts);
-        recordToolObservation(observations, fc.functionCall.name, input, result);
+        recordToolObservation(observations, normalizedName, input, result);
         responseParts.push({
           functionResponse: {
-            name: fc.functionCall.name,
+            name: normalizedName,
             response: { content: result.content },
           },
         });
@@ -763,14 +766,17 @@ export async function runAgentToolLoop(opts: ToolLoopOptions): Promise<void> {
     throwIfCancelled(loopOpts);
     const explicitReadOnlyToolCall = buildExplicitReadOnlyToolCall(opts.task);
     if (explicitReadOnlyToolCall) {
-      loopOpts.onToolCall?.(explicitReadOnlyToolCall.tool, explicitReadOnlyToolCall.input);
-      const result = await executeAgentTool(explicitReadOnlyToolCall, opts.projectPath);
+      const normalized = normalizeAgentToolCall(explicitReadOnlyToolCall);
+      const normalizedName = "tool" in normalized ? normalized.tool : normalized.name;
+      const normalizedInput = normalized.input as Record<string, unknown>;
+      loopOpts.onToolCall?.(normalizedName, normalizedInput);
+      const result = await executeAgentTool(normalized, opts.projectPath);
       throwIfCancelled(loopOpts);
       const observations: ToolObservation[] = [];
       recordToolObservation(
         observations,
-        explicitReadOnlyToolCall.tool,
-        explicitReadOnlyToolCall.input,
+        normalizedName,
+        normalizedInput,
         result
       );
       const finalText = await synthesizeFinalAnswer(loopOpts, observations, "");

@@ -156,6 +156,36 @@
   flex-shrink: 0;
 }
 
+.workspace-strip {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 28px;
+  padding: 5px 10px;
+  border-bottom: 1px solid var(--border);
+  background: color-mix(in srgb, var(--bg-secondary) 82%, var(--bg-primary));
+  color: var(--text-muted);
+  font-size: 11px;
+  flex-shrink: 0;
+  min-width: 0;
+}
+
+.workspace-strip-name {
+  color: var(--text-secondary);
+  font-weight: 650;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+.workspace-strip-count {
+  margin-left: auto;
+  flex: 0 0 auto;
+  color: var(--text-muted);
+  font-size: 10px;
+}
+
 .file-tree {
   flex: 1;
   overflow-y: auto;
@@ -169,6 +199,30 @@
   padding: 16px 12px;
   color: var(--text-muted);
   font-size: 12px;
+}
+
+.file-tree-empty {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 22px 18px;
+  text-align: center;
+  color: var(--text-muted);
+}
+
+.file-tree-empty strong {
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.file-tree-empty span {
+  max-width: 220px;
+  font-size: 11px;
+  line-height: 1.45;
 }
 
 .file-tree-loading .loading-spinner {

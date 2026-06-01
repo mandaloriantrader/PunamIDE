@@ -905,7 +905,7 @@ export default function BugHunt({
       setPhase("analyzing");
       setProgress(70);
 
-      let analysisInput = "";
+      let analysisInput: string;
       if (lintOutput.trim()) {
         analysisInput = `Lint/typecheck output for [${resolvedFiles.join(", ")}]:\n${lintOutput.slice(0, 8000)}`;
       } else {

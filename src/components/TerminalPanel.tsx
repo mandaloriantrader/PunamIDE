@@ -27,6 +27,8 @@ interface Props {
 
 export default function TerminalPanel(props: Props) {
   const [mode, setMode] = useState<TerminalMode>("command");
+  const workspaceName = props.cwd?.replace(/[\\/]+$/, "").split(/[\\/]/).pop() || "";
+  const hasWorkspace = Boolean(props.cwd && props.cwd.trim());
 
   return (
     <div className="terminal-panel-wrapper">
@@ -35,19 +37,32 @@ export default function TerminalPanel(props: Props) {
         <button
           className={`terminal-mode-btn ${mode === "command" ? "active" : ""}`}
           onClick={() => setMode("command")}
-          title="PowerShell Mode - Run one-shot commands with AI-friendly output"
+          title="Command Mode - Run one-shot PowerShell commands with AI-friendly output"
         >
           <Zap size={12} />
-          <span>PowerShell</span>
+          <span>Command</span>
         </button>
         <button
           className={`terminal-mode-btn ${mode === "shell" ? "active" : ""}`}
           onClick={() => setMode("shell")}
-          title="Interactive Shell - Full PTY terminal"
+          title="Shell Mode - Full interactive PTY terminal"
         >
           <Monitor size={12} />
-          <span>Interactive</span>
+          <span>Shell</span>
         </button>
+      </div>
+
+      <div className={`terminal-guidance ${hasWorkspace ? "" : "warning"}`} title={props.cwd || "No workspace selected"}>
+        <span className="terminal-guidance-mode">{mode === "command" ? "Command" : "Shell"}</span>
+        <span className="terminal-guidance-text">
+          {mode === "command"
+            ? hasWorkspace
+              ? `One-shot PowerShell from ${workspaceName}. Directory changes do not persist between runs.`
+              : "No workspace selected. Open a project folder before running project commands."
+            : hasWorkspace
+              ? `Interactive shell in ${workspaceName}. Session state persists while this tab stays open.`
+              : "Interactive shell is available, but no project workspace is selected."}
+        </span>
       </div>
 
       {/* Terminal content */}

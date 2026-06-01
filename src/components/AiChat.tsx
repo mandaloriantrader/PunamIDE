@@ -9,6 +9,9 @@ import {
   FileText,
   Zap,
   Image,
+  Route,
+  ListChecks,
+  AlertCircle,
 } from "lucide-react";
 import { callLlm, readFile, searchProject } from "../utils/tauri";
 import type { AppConfig, FileEntry } from "../utils/tauri";
@@ -116,6 +119,104 @@ function hasParsedActions(parsed: ParsedResponse): boolean {
     parsed.deletions.length > 0 ||
     parsed.commands.length > 0 ||
     parsed.editOperations.length > 0
+  );
+}
+
+const getWorkspaceName = (path: string) => {
+  const normalized = path.replace(/[\\/]+$/, "");
+  return normalized.split(/[\\/]/).pop() || "No workspace";
+};
+
+const countFileEntries = (entries: FileEntry[]): number =>
+  entries.reduce((total, entry) => total + 1 + (entry.children ? countFileEntries(entry.children) : 0), 0);
+
+interface AgentTrace {
+  routeType: string;
+  reason: string;
+  tools: string[];
+  status: string;
+  finalText: string;
+}
+
+function parseAgentTraceMessage(content: string): AgentTrace | null {
+  if (!content.startsWith("Agent route")) return null;
+
+  const traceEnd = content.indexOf("\n\n");
+  const traceText = traceEnd >= 0 ? content.slice(0, traceEnd) : content;
+  const finalText = traceEnd >= 0 ? content.slice(traceEnd + 2).replace(/â–$/, "").trim() : "";
+  const lines = traceText.split("\n").map((line) => line.trim());
+  const toolsIndex = lines.findIndex((line) => line === "Tools used");
+  const statusLine = lines.find((line) => line.startsWith("Status:"));
+  const tools = toolsIndex >= 0
+    ? lines.slice(toolsIndex + 1)
+        .filter((line) => line.startsWith("- "))
+        .map((line) => line.slice(2))
+    : [];
+
+  return {
+    routeType: lines.find((line) => line.startsWith("Type:"))?.replace("Type:", "").trim() || "agent",
+    reason: lines.find((line) => line.startsWith("Reason:"))?.replace("Reason:", "").trim() || "Using internal tools.",
+    tools,
+    status: statusLine?.replace("Status:", "").trim() || "Running...",
+    finalText,
+  };
+}
+
+function AgentTraceCard({ trace, isStreaming, showFinal }: { trace: AgentTrace; isStreaming?: boolean; showFinal?: boolean }) {
+  const status = trace.status.toLowerCase();
+  const isComplete = status.includes("completed");
+  const isStopped = status.includes("stopped");
+  const isWaiting = status.includes("needs") || status.includes("waiting");
+  const isError = status.includes("error") || status.includes("unavailable");
+
+  return (
+    <div className={`agent-trace-card ${isComplete ? "complete" : ""} ${isError ? "error" : ""} ${isStopped ? "stopped" : ""}`}>
+      <div className="agent-trace-header">
+        <div className="agent-trace-title">
+          <Route size={14} />
+          <span>Agent route</span>
+        </div>
+        <span className={`agent-trace-status ${isComplete ? "complete" : isError ? "error" : isStopped ? "stopped" : isWaiting ? "waiting" : "running"}`}>
+          {isStreaming && !isComplete && !isStopped && !isError ? <Loader2 size={11} className="spin-inline" /> : null}
+          {trace.status.replace(/\.$/, "")}
+        </span>
+      </div>
+      <div className="agent-trace-grid">
+        <div className="agent-trace-row">
+          <span className="agent-trace-label">Type</span>
+          <span className="agent-trace-value">{trace.routeType}</span>
+        </div>
+        <div className="agent-trace-row">
+          <span className="agent-trace-label">Reason</span>
+          <span className="agent-trace-value">{trace.reason}</span>
+        </div>
+      </div>
+      <details className="agent-trace-tools" open={trace.tools.length > 0 && !isComplete}>
+        <summary>
+          <ListChecks size={13} />
+          <span>Tools used</span>
+          <span className="agent-trace-count">{trace.tools.length}</span>
+        </summary>
+        <div className="agent-trace-tool-list">
+          {trace.tools.length > 0 ? trace.tools.map((tool, index) => (
+            <div className="agent-trace-tool" key={`${tool}-${index}`}>
+              <Check size={11} />
+              <span>{tool}</span>
+            </div>
+          )) : (
+            <div className="agent-trace-tool muted">
+              <AlertCircle size={11} />
+              <span>Waiting for first tool...</span>
+            </div>
+          )}
+        </div>
+      </details>
+      {showFinal && trace.finalText && (
+        <div className="agent-trace-final">
+          <MarkdownMessage text={trace.finalText} />
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -744,11 +845,11 @@ export default function AiChat({
 
   const requestPunam = async (userPrompt: string, mode: AgentMode = agentMode) => {
     // Check if any API key is available (new provider system OR legacy config)
-    const hasProviderKey = aiProviders.some((p) => p.apiKey && p.models.some((m) => m.enabled));
-    if (!config.api_key && !hasProviderKey) {
+    const providerReady = Boolean(config.api_key) || aiProviders.some(hasUsableProvider);
+    if (!providerReady) {
       setMessages((prev) => [
         ...prev,
-        { role: "assistant", content: "Please set your API key in Settings first." },
+        { role: "assistant", content: "No model is ready yet. Add an API key or enable a local provider in Settings, then try again." },
       ]);
       return;
     }
@@ -1904,15 +2005,22 @@ export default function AiChat({
           onError: (err) => {
             if (!isCurrentAgentRun()) return;
             console.warn("[Tool loop] Error:", err);
-            setAgentActivityText("Recovering from tool error...");
+            const needsToolInput = /\brequires\s+"[^"]+"/i.test(err);
+            const traceStatus = needsToolInput
+              ? "Tool request needs more information."
+              : "Tool loop stopped with an error.";
+            const userMessage = needsToolInput
+              ? `Tool request needs more information.\n\n${err}`
+              : `⚠️ Tool loop unavailable. Using standard mode.\n\n${err}`;
+            setAgentActivityText(needsToolInput ? "Waiting for required tool input..." : "Recovering from tool error...");
             setMessages(prev => prev.map(m => {
               if ((m as any).streamId !== toolStreamId) return m;
               const { streamId: _sid, streamProgress: _sp, ...rest } = m as any;
-              return { ...rest, content: formatToolTrace("Tool loop stopped with an error."), isComplete: true };
+              return { ...rest, content: formatToolTrace(traceStatus), isComplete: true };
             }));
             setLoading(false);
             setAgentActivityText("");
-            setMessages(prev => [...prev, { role: "assistant", content: `⚠️ Tool loop unavailable. Using standard mode.\n\n${err}` }]);
+            setMessages(prev => [...prev, { role: "assistant", content: userMessage }]);
           },
           onCancelled: () => {
             if (activeStreamRef.current?.streamId === toolStreamId) {
@@ -2300,6 +2408,10 @@ export default function AiChat({
     }
   };
 
+  const workspaceName = getWorkspaceName(projectPath);
+  const visibleFileCount = countFileEntries(files);
+  const providerReady = Boolean(config.api_key) || aiProviders.some(hasUsableProvider);
+
   return (
     <div className="ai-chat" onDragOver={handleDragOver} onDragLeave={handleDragLeave} onDrop={handleDrop}>
       {/* Drag overlay */}
@@ -2329,6 +2441,12 @@ export default function AiChat({
         onDeleteSession={handleDeleteSession}
         onCloseSessionList={() => setShowSessionList(false)}
       />
+
+      <div className="chat-workspace-strip" title={projectPath || "No workspace open"}>
+        <span className="chat-workspace-label">Workspace</span>
+        <span className="chat-workspace-name">{workspaceName}</span>
+        <span className="chat-workspace-count">{visibleFileCount} visible</span>
+      </div>
 
       {/* Messages — virtualized: browser skips rendering off-screen messages */}
       <div className="chat-messages" style={{ contentVisibility: "auto", containIntrinsicSize: "auto 500px" }}>
@@ -2386,7 +2504,9 @@ export default function AiChat({
           </div>
         )}
 
-        {messages.map((msg, i) => (
+        {messages.map((msg, i) => {
+          const agentTrace = msg.role === "assistant" ? parseAgentTraceMessage(msg.content) : null;
+          return (
           <div key={i} className={`chat-message ${msg.role}`}>
             <div className="chat-message-icon">
               {msg.role === "user" ? <User size={14} /> : <PunamAvatar />}
@@ -2438,6 +2558,13 @@ export default function AiChat({
                     </div>
                   ) : (
                     <>
+                      {agentTrace && (
+                        <AgentTraceCard
+                          trace={agentTrace}
+                          isStreaming={!msg.isComplete}
+                          showFinal={!msg.parsed && !msg.blocks}
+                        />
+                      )}
                       {msg.parsed?.explanation && <MarkdownMessage text={msg.parsed.explanation} />}
                       {msg.parsed && (
                         <div className="chat-changes">
@@ -2489,7 +2616,7 @@ export default function AiChat({
                         </div>
                       )}
                       {msg.thinking && <ThinkingBlock content={msg.thinking} />}
-                      {!msg.parsed && !msg.blocks && <MarkdownMessage text={msg.content} />}
+                      {!agentTrace && !msg.parsed && !msg.blocks && <MarkdownMessage text={msg.content} />}
                       {msg.blocks && msg.blocks.length > 0 && (
                         <MessageBubble blocks={msg.blocks} isStreaming={!msg.isComplete} />
                       )}
@@ -2521,7 +2648,8 @@ export default function AiChat({
               )}
             </div>
           </div>
-        ))}
+          );
+        })}
 
         {loading && (
           <div className="chat-message assistant working">
@@ -2623,8 +2751,9 @@ export default function AiChat({
           setMessages((prev) => [...prev, { role: "assistant", content: "↩️ Last AI edit reverted." }]);
         } : undefined}
         hasAppliedMessages={checkpointCount}
-        sendDisabled={loading || cooldown || (!input.trim() && attachments.length === 0)}
+        sendDisabled={!providerReady || loading || cooldown || (!input.trim() && attachments.length === 0)}
         isAgentMode={agentMode === "agent"}
+        providerReady={providerReady}
       />
     </div>
   );

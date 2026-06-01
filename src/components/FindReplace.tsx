@@ -88,7 +88,11 @@ export default function FindReplace({ projectPath, onOpenResult, onClose }: Prop
   const toggleFile = (path: string) => {
     setExpandedFiles(prev => {
       const next = new Set(prev);
-      next.has(path) ? next.delete(path) : next.add(path);
+      if (next.has(path)) {
+        next.delete(path);
+      } else {
+        next.add(path);
+      }
       return next;
     });
   };
@@ -98,7 +102,7 @@ export default function FindReplace({ projectPath, onOpenResult, onClose }: Prop
 
   // Replace all
   const handleReplaceAll = useCallback(async () => {
-    if (!replaceText === undefined || !query.trim() || results.length === 0) return;
+    if (!query.trim() || results.length === 0) return;
     setReplacing(true);
     setReplaced(null);
     setError(null);
@@ -325,19 +329,20 @@ export default function FindReplace({ projectPath, onOpenResult, onClose }: Prop
 // ── Highlight matching text ────────────────────────────────────────────────────
 function HighlightMatch({ text, query }: { text: string; query: string }) {
   if (!query.trim()) return <>{text}</>;
+  let parts: string[];
   try {
     const escaped = query.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-    const parts = text.split(new RegExp(`(${escaped})`, "gi"));
-    return (
-      <>
-        {parts.map((part, i) =>
-          part.toLowerCase() === query.toLowerCase()
-            ? <mark key={i} className="fr-highlight">{part}</mark>
-            : <span key={i}>{part}</span>
-        )}
-      </>
-    );
+    parts = text.split(new RegExp(`(${escaped})`, "gi"));
   } catch {
     return <>{text}</>;
   }
+  return (
+    <>
+      {parts.map((part, i) =>
+        part.toLowerCase() === query.toLowerCase()
+          ? <mark key={i} className="fr-highlight">{part}</mark>
+          : <span key={i}>{part}</span>
+      )}
+    </>
+  );
 }

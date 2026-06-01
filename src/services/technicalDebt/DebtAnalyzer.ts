@@ -186,7 +186,7 @@ const memCache = new Map<string, CachedFileScore>();
 let storePromise: Promise<Awaited<ReturnType<typeof load>>> | null = null;
 
 function getStore() {
-  if (!storePromise) storePromise = load("punamide-debt-cache.json", { autoSave: true });
+  if (!storePromise) storePromise = load("punamide-debt-cache.json", { autoSave: true, defaults: {} });
   return storePromise;
 }
 
@@ -579,7 +579,8 @@ export class DebtAnalyzer {
     filePaths: string[],
     cfg: Required<AnalysisConfig>,
   ): Promise<ProjectDebtAnalysis> {
-    return new Promise(async (resolve) => {
+    return new Promise((resolve) => {
+      void (async () => {
       const discovery: DiscoveryMetrics = {
         discovered: filePaths.length,
         analyzed: 0, skipped: 0, failed: 0, fromCache: 0,
@@ -615,6 +616,7 @@ export class DebtAnalyzer {
       } catch {
         resolve(await this.analyzeFromContents(files, cfg, discovery));
       }
+      })();
     });
   }
 
@@ -711,5 +713,3 @@ export function getDebtAnalyzer(): DebtAnalyzer {
   if (!instance) instance = new DebtAnalyzer();
   return instance;
 }
-
-

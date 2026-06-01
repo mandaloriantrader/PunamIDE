@@ -120,7 +120,12 @@ function ChunkTab() {
   const handleChunk = useCallback(() => {
     if (!text.trim()) return;
     const inspector = new ChunkInspector();
-    const config: ChunkConfig = { chunkSize, overlap, strategy: "fixed" };
+    const config: ChunkConfig = {
+      chunkSize,
+      chunkOverlap: overlap,
+      splitByHeading: false,
+      splitByFunction: false,
+    };
     const result = inspector.chunkDocument(text, config);
     setAnalysis(result);
   }, [text, chunkSize, overlap]);

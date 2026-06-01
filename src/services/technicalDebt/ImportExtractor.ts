@@ -54,6 +54,8 @@ export interface ImportEdge {
   isExternal: boolean
   /** Import kind — used for dead code analysis in Phase 5. */
   kind: 'static' | 'dynamic' | 'require' | 'reexport'
+  importedNames: string[]
+  line: number
 }
 
 /** A named export from a file. */
@@ -62,6 +64,7 @@ export interface ExportEntry {
   isDefault: boolean
   isReexport: boolean             // true for `export { x } from './foo'`
   reexportSource: string | null   // raw specifier of re-export source
+  line: number
 }
 
 /** All import/export data extracted from a single file. */
@@ -183,6 +186,8 @@ export class ImportExtractor {
             resolvedPath,
             isExternal,
             kind: 'static',
+            importedNames: [],
+            line: node.startPosition.row + 1,
           })
           if (isExternal) externalDeps.add(this.packageName(specifier))
         }
@@ -282,18 +287,20 @@ export class ImportExtractor {
         resolvedPath,
         isExternal,
         kind: 'reexport',
+        importedNames: [],
+        line: node.startPosition.row + 1,
       }
     }
 
     // export default
     if (node.children.some((c) => c.text === 'default')) {
-      entries.push({ name: 'default', isDefault: true, isReexport: !!specifier, reexportSource: specifier })
+      entries.push({ name: 'default', isDefault: true, isReexport: !!specifier, reexportSource: specifier, line: node.startPosition.row + 1 })
       return { entries, reexportEdge }
     }
 
     // export * from './foo' or export * as ns from './foo'
     if (node.children.some((c) => c.text === '*')) {
-      entries.push({ name: '*', isDefault: false, isReexport: true, reexportSource: specifier })
+      entries.push({ name: '*', isDefault: false, isReexport: true, reexportSource: specifier, line: node.startPosition.row + 1 })
       return { entries, reexportEdge }
     }
 
@@ -304,7 +311,7 @@ export class ImportExtractor {
         if (child.type === 'export_specifier' || child.type === 'shorthand_property_identifier') {
           const name = child.children.find((c) => c.isNamed)?.text ?? child.text
           if (name && name !== ',' && name !== '{' && name !== '}') {
-            entries.push({ name, isDefault: false, isReexport: !!specifier, reexportSource: specifier })
+            entries.push({ name, isDefault: false, isReexport: !!specifier, reexportSource: specifier, line: node.startPosition.row + 1 })
           }
         }
       }
@@ -320,7 +327,7 @@ export class ImportExtractor {
     if (declaration) {
       const name = this.extractDeclaredName(declaration)
       if (name) {
-        entries.push({ name, isDefault: false, isReexport: false, reexportSource: null })
+        entries.push({ name, isDefault: false, isReexport: false, reexportSource: null, line: node.startPosition.row + 1 })
       }
     }
 
@@ -357,7 +364,7 @@ export class ImportExtractor {
     const specifier = this.unquote(strArg.text)
     const { resolvedPath, isExternal } = resolveImportPath(filePath, specifier)
 
-    return { fromFile: filePath, rawSpecifier: specifier, resolvedPath, isExternal, kind: 'dynamic' }
+    return { fromFile: filePath, rawSpecifier: specifier, resolvedPath, isExternal, kind: 'dynamic', importedNames: [], line: node.startPosition.row + 1 }
   }
 
   // ── require() ────────────────────────────────────────────────────────────────
@@ -375,7 +382,7 @@ export class ImportExtractor {
     const specifier = this.unquote(strArg.text)
     const { resolvedPath, isExternal } = resolveImportPath(filePath, specifier)
 
-    return { fromFile: filePath, rawSpecifier: specifier, resolvedPath, isExternal, kind: 'require' }
+    return { fromFile: filePath, rawSpecifier: specifier, resolvedPath, isExternal, kind: 'require', importedNames: [], line: node.startPosition.row + 1 }
   }
 
   // ── Utilities ─────────────────────────────────────────────────────────────────

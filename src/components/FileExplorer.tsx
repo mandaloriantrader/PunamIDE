@@ -54,6 +54,14 @@ const joinPath = (base: string, name: string) => {
   return `${base.replace(/[\\/]+$/, "")}${separator}${name}`;
 };
 
+const getWorkspaceName = (path: string) => {
+  const normalized = path.replace(/[\\/]+$/, "");
+  return normalized.split(/[\\/]/).pop() || "No workspace";
+};
+
+const countEntries = (entries: FileEntry[]): number =>
+  entries.reduce((total, entry) => total + 1 + (entry.children ? countEntries(entry.children) : 0), 0);
+
 // ── Flatten visible tree ─────────────────────────────────────────────────────
 
 function flattenVisibleTree(
@@ -240,6 +248,9 @@ export default function FileExplorer({
     () => flattenVisibleTree(files, expandedSet),
     [files, expandedSet],
   );
+  const visibleEntryCount = useMemo(() => countEntries(files), [files]);
+  const workspaceName = getWorkspaceName(projectPath);
+  const hasWorkspace = Boolean(projectPath && projectPath.trim());
 
   const closeContextMenu = () => setContextMenu(null);
 
@@ -338,6 +349,10 @@ export default function FileExplorer({
       <div className="panel-header">
         <span>EXPLORER</span>
       </div>
+      <div className="workspace-strip" title={projectPath || "No workspace open"}>
+        <span className="workspace-strip-name">{workspaceName}</span>
+        <span className="workspace-strip-count">{visibleEntryCount} visible</span>
+      </div>
 
       {loading && files.length === 0 && (
         <div className="file-tree-loading">
@@ -356,8 +371,13 @@ export default function FileExplorer({
           onContextMenu={handleContextMenu}
         />
       ) : !loading ? (
-        <div className="file-tree-empty">
-          <span>No files found</span>
+        <div className={`file-tree-empty ${hasWorkspace ? "empty-folder" : "no-workspace"}`}>
+          <strong>{hasWorkspace ? "No files found" : "No folder open"}</strong>
+          <span>
+            {hasWorkspace
+              ? "This workspace is empty or the current filter/index has no visible files."
+              : "Open a project folder to show files here and give Punam workspace context."}
+          </span>
         </div>
       ) : null}
 
