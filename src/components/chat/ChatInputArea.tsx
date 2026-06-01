@@ -53,9 +53,6 @@ interface ChatInputAreaProps {
   hasAppliedMessages: number;
   sendDisabled: boolean;
   isAgentMode?: boolean;
-  // Tool mode toggle
-  toolModeEnabled: boolean;
-  onToggleToolMode: () => void;
 }
 
 export function ChatInputArea({
@@ -96,10 +93,9 @@ export function ChatInputArea({
   hasAppliedMessages,
   sendDisabled,
   isAgentMode,
-  toolModeEnabled,
-  onToggleToolMode,
 }: ChatInputAreaProps) {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const shouldRestoreFocusRef = useRef(false);
   const [adaptiveDropdownOpen, setAdaptiveDropdownOpen] = useState(false);
   const activeModelIds = aiProviders.flatMap((provider) =>
     provider.models.filter((model) => model.enabled && model.id).map((model) => model.id)
@@ -112,6 +108,30 @@ export function ChatInputArea({
     ta.style.height = "auto";
     ta.style.height = `${Math.min(ta.scrollHeight, 320)}px`;
   }, [input]);
+
+  useEffect(() => {
+    if (!loading && !cooldown && shouldRestoreFocusRef.current) {
+      shouldRestoreFocusRef.current = false;
+      requestAnimationFrame(() => textareaRef.current?.focus());
+    }
+  }, [loading, cooldown]);
+
+  const handleSendClick = () => {
+    shouldRestoreFocusRef.current = true;
+    onSend();
+  };
+
+  const handleSendBackgroundClick = () => {
+    shouldRestoreFocusRef.current = true;
+    onSendBackground?.();
+  };
+
+  const handleTextareaKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
+      shouldRestoreFocusRef.current = true;
+    }
+    onKeyDown(e);
+  };
 
   return (
     <div className="ai-input-area">
@@ -263,7 +283,7 @@ export function ChatInputArea({
           className="ai-textarea"
           value={input}
           onChange={(e) => setInput(e.target.value)}
-          onKeyDown={onKeyDown}
+          onKeyDown={handleTextareaKeyDown}
           placeholder={agentModePlaceholder}
           rows={3}
           disabled={loading || cooldown}
@@ -297,16 +317,6 @@ export function ChatInputArea({
             onToggle={() => setModelDropdownOpen(!modelDropdownOpen)}
             onSelect={(selection) => { setActiveModelOverride(selection); setModelDropdownOpen(false); }}
           />
-          {/* Tool Mode toggle */}
-          <button
-            className={`ai-tool-mode-btn ${toolModeEnabled ? "active" : ""}`}
-            onClick={onToggleToolMode}
-            title={toolModeEnabled ? "Tool Mode ON — reads files on demand (saves tokens)" : "Tool Mode OFF — sends full file context"}
-            type="button"
-          >
-            <Wrench size={12} />
-            <span className="tool-mode-label">{toolModeEnabled ? "Tool Mode" : "Full Context"}</span>
-          </button>
           {adaptivePreview && (
             <div className="ai-adaptive-wrap">
               <button
@@ -346,7 +356,7 @@ export function ChatInputArea({
           )}
           <button
             className="ai-send-btn"
-            onClick={onSend}
+            onClick={handleSendClick}
             disabled={sendDisabled}
             aria-label="Send message"
           >
@@ -355,7 +365,7 @@ export function ChatInputArea({
           {isAgentMode && onSendBackground && (
             <button
               className="ai-send-bg-btn"
-              onClick={onSendBackground}
+              onClick={handleSendBackgroundClick}
               disabled={sendDisabled}
               title="Run in background — keep coding while Punam works"
               aria-label="Send to background"

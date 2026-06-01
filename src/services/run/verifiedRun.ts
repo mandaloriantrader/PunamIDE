@@ -1,7 +1,7 @@
 export interface RunObservation {
   id: string;
   command: string;
-  status: "running" | "failed" | "ready";
+  status: "running" | "failed" | "ready" | "completed";
   output: string;
   url?: string;
   reason?: string;

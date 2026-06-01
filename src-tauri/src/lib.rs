@@ -411,6 +411,7 @@ async fn call_gemini_stream(
 
     // Final done signal
     let _ = app.emit("llm-stream", LlmStreamEvent { token: String::new(), done: true });
+    tokio::task::yield_now().await;
 
     if full_text.is_empty() {
         return Ok(LlmResponse {

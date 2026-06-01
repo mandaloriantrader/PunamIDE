@@ -55,6 +55,7 @@ export interface ContextInputs {
   projectMemory: string;
   projectPath: string;
   activeFilePath?: string; // currently open file in editor
+  projectFiles?: Array<{ name: string; path: string; is_dir: boolean; children?: any[] }>;
 }
 
 // ── Core: Assemble Persistent Payload ─────────────────────────────────────────
@@ -74,7 +75,7 @@ export function assemblePersistentPayload(inputs: ContextInputs): ContextPayload
   } = inputs;
 
   // 1. System instruction with global goal + rules
-  const systemInstruction = buildSystemInstruction(globalGoal, currentSubtask, projectMemory, inputs.activeFilePath);
+  const systemInstruction = buildSystemInstruction(globalGoal, currentSubtask, projectMemory, inputs.activeFilePath, inputs.projectFiles);
 
   // 2. Relevant code context + errors as the first "user" turn
   const contextBlock = buildContextBlock(activeFileSnippets, latestErrors);
@@ -115,13 +116,31 @@ function buildSystemInstruction(
   globalGoal: string,
   currentSubtask: string,
   projectMemory: string,
-  activeFilePath?: string
+  activeFilePath?: string,
+  projectFiles?: Array<{ name: string; path: string; is_dir: boolean; children?: any[] }>
 ): string {
   const activeFileName = activeFilePath
     ? activeFilePath.replace(/.*[\/\\]/, "")
     : null;
 
-  return `You are Punam IDE Autopilot.
+  const projectFilePaths: string[] = [];
+  const walkProjectFiles = (entries: Array<{ name: string; path: string; is_dir: boolean; children?: any[] }> = []) => {
+    for (const entry of entries) {
+      if (projectFilePaths.length >= 120) return;
+      if (entry.is_dir) {
+        if (entry.children?.length) walkProjectFiles(entry.children);
+      } else {
+        projectFilePaths.push(entry.path);
+      }
+    }
+  };
+  walkProjectFiles(projectFiles);
+  const fileCount = projectFilePaths.length;
+  const workspaceSection = fileCount > 0
+    ? `\n\nWORKSPACE: ${fileCount} source files in project.\nFor workspace-wide tasks — analyze, audit, architecture, dependencies, project overview, codebase review — use list_files before making conclusions.\n`
+    : "";
+
+  return `You are Punam IDE Autopilot.${workspaceSection}
 
 GLOBAL OBJECTIVE: ${globalGoal || "Help the user with their coding task."}
 

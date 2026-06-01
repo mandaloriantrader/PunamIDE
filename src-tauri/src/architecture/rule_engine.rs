@@ -6,25 +6,46 @@ use super::graph_builder::{DependencyGraph, DependencyViolation};
 
 // ── Data Types ─────────────────────────────────────────────────────────────────
 
+/// A custom rule predicate — enables rules beyond the built-in naming conventions.
+///
+/// Supported types:
+///   - "forbidden_import":     { "from_layer": "X", "to_layer": "Y" }
+///   - "allowed_import":       { "from_layer": "X", "to_layer": "Y" }
+///   - "must_have_test":       { "target_layer": "X", "test_pattern": "*.test.ts" }
+///   - "max_dependents":       { "target_layer": "X", "max_count": 15 }
+///   - "forbidden_file_import": { "from_file": "src/utils/auth.ts", "to_layer": "X" }
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct CustomRule {
+    #[serde(rename = "type")]
+    pub predicate_type: String,
+    #[serde(default)]
+    pub from_layer: Option<String>,
+    #[serde(default)]
+    pub from_file: Option<String>,
+    #[serde(default)]
+    pub to_layer: Option<String>,
+    #[serde(default)]
+    pub to_file: Option<String>,
+    #[serde(default)]
+    pub test_pattern: Option<String>,
+    #[serde(default)]
+    pub max_count: Option<usize>,
+}
+
 /// A single architecture rule definition.
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct ArchitectureRule {
-    /// Rule identifier: "no_circular_dependencies", "ui_cannot_access_database", etc.
     pub id: String,
-    /// Human-readable description of what the rule checks.
     pub description: String,
-    /// Severity: "error" (blocks apply) or "warning" (advisory only).
     pub severity: String,
+    #[serde(default)]
+    pub custom: Option<CustomRule>,
 }
 
 /// Configuration for the Architecture Guardrails Engine.
-///
-/// This is the equivalent of the YAML rules file, deserialized.
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct ArchitectureRules {
     pub rules: Vec<ArchitectureRule>,
-    /// Optional layer definitions for rules like "services_cannot_import_components".
-    /// Maps a layer name to a set of file path patterns (prefix matching).
     #[serde(default)]
     pub layers: HashMap<String, Vec<String>>,
 }
@@ -32,19 +53,14 @@ pub struct ArchitectureRules {
 /// Result of validating a set of changes against architecture rules.
 #[derive(Serialize, Debug)]
 pub struct ValidationResult {
-    /// Whether the patch passes all error-level rules.
     pub allowed: bool,
-    /// All violations found, both errors and warnings.
     pub violations: Vec<DependencyViolation>,
-    /// Number of error-level violations.
     pub error_count: usize,
-    /// Number of warning-level violations.
     pub warning_count: usize,
 }
 
 // ── Built-in Rules ─────────────────────────────────────────────────────────────
 
-/// Built-in rule: detect circular dependencies in the dependency graph.
 fn check_circular_dependencies(
     graph: &DependencyGraph,
     _layers: &HashMap<String, Vec<String>>,
@@ -67,7 +83,6 @@ fn check_circular_dependencies(
     violations
 }
 
-/// Generic cross-layer rule: checks if any file in one layer imports from another layer.
 fn check_cross_layer_access(
     graph: &DependencyGraph,
     layers: &HashMap<String, Vec<String>>,
@@ -108,7 +123,6 @@ fn check_cross_layer_access(
     violations
 }
 
-/// Parse rule ID into `(from_layer, to_layer)` using naming conventions.
 fn parse_layer_rule(rule_id: &str) -> Option<(String, String)> {
     let stripped = rule_id.strip_prefix("no_").unwrap_or(rule_id);
 
@@ -125,7 +139,6 @@ fn parse_layer_rule(rule_id: &str) -> Option<(String, String)> {
         return Some((rest.to_string(), "infrastructure".to_string()));
     }
 
-    // Generic: "{from}_cannot_import_{to}"
     if let Some(cannot_pos) = stripped.find("_cannot_import_") {
         let from = &stripped[..cannot_pos];
         let to = &stripped[cannot_pos + "_cannot_import_".len()..];
@@ -134,12 +147,184 @@ fn parse_layer_rule(rule_id: &str) -> Option<(String, String)> {
         }
     }
 
+    if let Some(can_pos) = stripped.find("_can_import_") {
+        let from = &stripped[..can_pos];
+        let to = &stripped[can_pos + "_can_import_".len()..];
+        if !from.is_empty() && !to.is_empty() {
+            return Some((from.to_string(), to.to_string()));
+        }
+    }
+
     None
+}
+
+// ── Custom Rule Evaluation ─────────────────────────────────────────────────────
+
+fn evaluate_custom_rule(
+    custom: &CustomRule,
+    layers: &HashMap<String, Vec<String>>,
+    graph: &DependencyGraph,
+    rule_id: &str,
+) -> Vec<DependencyViolation> {
+    match custom.predicate_type.as_str() {
+        "forbidden_import" => {
+            let from_layer = match &custom.from_layer {
+                Some(l) => l,
+                None => return Vec::new(),
+            };
+            let to_layer = match &custom.to_layer {
+                Some(l) => l,
+                None => return Vec::new(),
+            };
+            check_cross_layer_access(graph, layers, from_layer, to_layer, rule_id)
+        }
+
+        "allowed_import" => {
+            Vec::new()
+        }
+
+        "must_have_test" => {
+            let target_layer = match &custom.to_layer {
+                Some(l) => l,
+                None => return Vec::new(),
+            };
+            let test_pattern = match &custom.test_pattern {
+                Some(p) => p.clone(),
+                None => "*.test.*".to_string(),
+            };
+
+            let layer_patterns = match layers.get(target_layer) {
+                Some(p) => p,
+                None => return Vec::new(),
+            };
+
+            let mut violations = Vec::new();
+
+            for file in &graph.files {
+                if !layer_patterns.iter().any(|pat| file.starts_with(pat)) {
+                    continue;
+                }
+                if file.contains(".test.") || file.contains(".spec.") {
+                    continue;
+                }
+
+                let has_test = match graph.reverse.get(file) {
+                    Some(dependents) => dependents.iter().any(|dep| {
+                        simple_glob_match(dep, &test_pattern)
+                    }),
+                    None => false,
+                };
+
+                if !has_test {
+                    violations.push(DependencyViolation {
+                        from_file: file.clone(),
+                        to_file: String::new(),
+                        violation_type: rule_id.to_string(),
+                        description: format!(
+                            "Missing test: file '{}' in layer '{}' has no matching test file (pattern: {})",
+                            file, target_layer, test_pattern
+                        ),
+                    });
+                }
+            }
+
+            violations
+        }
+
+        "max_dependents" => {
+            let target_layer = match &custom.to_layer {
+                Some(l) => l,
+                None => return Vec::new(),
+            };
+            let max_count = custom.max_count.unwrap_or(15);
+
+            let layer_patterns = match layers.get(target_layer) {
+                Some(p) => p,
+                None => return Vec::new(),
+            };
+
+            let mut violations = Vec::new();
+
+            for file in &graph.files {
+                if !layer_patterns.iter().any(|pat| file.starts_with(pat)) {
+                    continue;
+                }
+
+                let dep_count = match graph.reverse.get(file) {
+                    Some(deps) => deps.len(),
+                    None => 0,
+                };
+
+                if dep_count > max_count {
+                    violations.push(DependencyViolation {
+                        from_file: file.clone(),
+                        to_file: String::new(),
+                        violation_type: rule_id.to_string(),
+                        description: format!(
+                            "Max dependents exceeded: '{}' has {} dependents (max: {}) — consider splitting",
+                            file, dep_count, max_count
+                        ),
+                    });
+                }
+            }
+
+            violations
+        }
+
+        "forbidden_file_import" => {
+            let from_file = match &custom.from_file {
+                Some(f) => f,
+                None => return Vec::new(),
+            };
+            let to_layer = match &custom.to_layer {
+                Some(l) => l,
+                None => return Vec::new(),
+            };
+            let to_patterns = match layers.get(to_layer) {
+                Some(p) => p,
+                None => return Vec::new(),
+            };
+
+            let mut violations = Vec::new();
+
+            if let Some(deps) = graph.forward.get(from_file) {
+                for to_file in deps {
+                    if to_patterns.iter().any(|pat| to_file.starts_with(pat)) {
+                        violations.push(DependencyViolation {
+                            from_file: from_file.clone(),
+                            to_file: to_file.clone(),
+                            violation_type: rule_id.to_string(),
+                            description: format!(
+                                "Forbidden import: '{}' imports '{}' which belongs to layer '{}'",
+                                from_file, to_file, to_layer
+                            ),
+                        });
+                    }
+                }
+            }
+
+            violations
+        }
+
+        _ => {
+            Vec::new()
+        }
+    }
+}
+
+fn simple_glob_match(path: &str, pattern: &str) -> bool {
+    let pattern = pattern.replace("**", "___DOUBLESTAR___");
+    let pattern = pattern.replace('*', "[^/]*");
+    let pattern = pattern.replace("___DOUBLESTAR___", ".*");
+    let regex = match regex_lite::Regex::new(&format!("^{}$", pattern)) {
+        Ok(r) => r,
+        Err(_) => return false,
+    };
+    regex.is_match(path)
 }
 
 // ── Rule Execution ─────────────────────────────────────────────────────────────
 
-/// Run all rules from the architecture configuration against the dependency graph.
 pub fn validate_rules(
     rules_config: &ArchitectureRules,
     graph: &DependencyGraph,
@@ -149,31 +334,40 @@ pub fn validate_rules(
     let mut warning_count = 0usize;
 
     for rule in &rules_config.rules {
-        let rule_violations = match rule.id.as_str() {
-            "no_circular_dependencies" => {
-                check_circular_dependencies(graph, &rules_config.layers)
-            }
-            _ => {
-                if let Some((from_layer, to_layer)) = parse_layer_rule(&rule.id) {
-                    if from_layer == "_all" {
-                        let mut violations = check_cross_layer_access(
-                            graph, &rules_config.layers, "repositories", &to_layer, &rule.id,
-                        );
-                        for (layer_name, _) in &rules_config.layers {
-                            if layer_name != "repositories" {
+        let rule_violations = if let Some(ref custom) = rule.custom {
+            evaluate_custom_rule(custom, &rules_config.layers, graph, &rule.id)
+        } else {
+            match rule.id.as_str() {
+                "no_circular_dependencies" => {
+                    check_circular_dependencies(graph, &rules_config.layers)
+                }
+                _ => {
+                    if let Some((from_layer, to_layer)) = parse_layer_rule(&rule.id) {
+                        // "_can_import_" rules are allowlists — they don't generate violations.
+                        // Only "_cannot_import_" and other deny rules produce violations.
+                        if rule.id.contains("_can_import_") {
+                            Vec::new()
+                        } else if from_layer == "_all" {
+                            // "repositories_handle_db_only" — flag all layers EXCEPT
+                            // repositories importing from the target (database) layer
+                            let mut violations = Vec::new();
+                            for (layer_name, _) in &rules_config.layers {
+                                if layer_name == "repositories" || layer_name == &to_layer {
+                                    continue; // repositories IS allowed to access database
+                                }
                                 violations.extend(check_cross_layer_access(
                                     graph, &rules_config.layers, layer_name, &to_layer, &rule.id,
                                 ));
                             }
+                            violations
+                        } else {
+                            check_cross_layer_access(
+                                graph, &rules_config.layers, &from_layer, &to_layer, &rule.id,
+                            )
                         }
-                        violations
                     } else {
-                        check_cross_layer_access(
-                            graph, &rules_config.layers, &from_layer, &to_layer, &rule.id,
-                        )
+                        Vec::new()
                     }
-                } else {
-                    Vec::new()
                 }
             }
         };
@@ -197,7 +391,7 @@ pub fn validate_rules(
     }
 }
 
-// ── Helper: re-analyze deps for specific files (without Tauri State) ───────────
+// ── Helper ─────────────────────────────────────────────────────────────────────
 
 fn analyze_deps_for_files(
     file_paths: &[String],
@@ -235,9 +429,6 @@ fn analyze_deps_for_files(
     })
 }
 
-/// Validate AI-proposed changes against architecture rules.
-///
-/// This is the core function called before `apply_patch` executes.
 pub fn validate_proposed_changes(
     rules_config: &ArchitectureRules,
     changed_files: &[String],
@@ -250,7 +441,6 @@ pub fn validate_proposed_changes(
 
 // ── Tauri Commands ─────────────────────────────────────────────────────────────
 
-/// Validate the current project against a set of architecture rules.
 #[tauri::command]
 pub fn validate_architecture(
     rules_json: String,
@@ -266,9 +456,6 @@ pub fn validate_architecture(
     Ok(validate_rules(&rules_config, &graph))
 }
 
-/// Validate proposed file changes against architecture rules.
-///
-/// Called by the frontend before executing `apply_patch`.
 #[tauri::command]
 pub fn validate_patch_against_rules(
     rules_json: String,
@@ -281,7 +468,6 @@ pub fn validate_patch_against_rules(
     validate_proposed_changes(&rules_config, &changed_files, &root)
 }
 
-/// Get the default/recommended architecture rules for a typical React+Tauri project.
 #[tauri::command]
 pub fn get_default_rules() -> ArchitectureRules {
     ArchitectureRules {
@@ -290,30 +476,33 @@ pub fn get_default_rules() -> ArchitectureRules {
                 id: "no_circular_dependencies".to_string(),
                 description: "Detect and prevent circular imports between files".to_string(),
                 severity: "error".to_string(),
+                custom: None,
             },
             ArchitectureRule {
                 id: "ui_cannot_access_database".to_string(),
                 description: "UI components must not import database modules".to_string(),
                 severity: "error".to_string(),
+                custom: None,
             },
             ArchitectureRule {
-                id: "services_cannot_import_components".to_string(),
+                id: "services_cannot_import_ui".to_string(),
                 description: "Service layer must not import UI components".to_string(),
                 severity: "error".to_string(),
+                custom: None,
             },
             ArchitectureRule {
                 id: "repositories_handle_db_only".to_string(),
                 description: "Only repository layer should access database modules".to_string(),
                 severity: "warning".to_string(),
+                custom: None,
             },
         ],
         layers: {
             let mut m = HashMap::new();
             m.insert("ui".to_string(), vec!["src/components/".to_string(), "src/pages/".to_string(), "src/views/".to_string()]);
             m.insert("services".to_string(), vec!["src/services/".to_string(), "src/api/".to_string()]);
-            m.insert("repositories".to_string(), vec!["src/repositories/".to_string(), "src/database/".to_string(), "src/data/".to_string()]);
+            m.insert("repositories".to_string(), vec!["src/repositories/".to_string(), "src/data/".to_string()]);
             m.insert("database".to_string(), vec!["src/database/".to_string(), "src/models/".to_string(), "src/schema/".to_string()]);
-            m.insert("components".to_string(), vec!["src/components/".to_string()]);
             m.insert("infrastructure".to_string(), vec!["src-tauri/src/".to_string(), "src/lib/".to_string()]);
             m
         },
@@ -338,20 +527,19 @@ mod tests {
 
     fn default_layers() -> HashMap<String, Vec<String>> {
         let mut m = HashMap::new();
-        m.insert("ui".to_string(), vec!["src/components/".to_string()]);
+        m.insert("ui".to_string(), vec!["src/components/".to_string(), "src/pages/".to_string(), "src/views/".to_string()]);
         m.insert("services".to_string(), vec!["src/services/".to_string()]);
         m.insert("database".to_string(), vec!["src/database/".to_string()]);
         m.insert("repositories".to_string(), vec!["src/repositories/".to_string()]);
-        m.insert("components".to_string(), vec!["src/components/".to_string()]);
         m
     }
 
     fn default_rules_config() -> ArchitectureRules {
         ArchitectureRules {
             rules: vec![
-                ArchitectureRule { id: "no_circular_dependencies".to_string(), description: "No circular deps".to_string(), severity: "error".to_string() },
-                ArchitectureRule { id: "ui_cannot_access_database".to_string(), description: "UI cannot access DB".to_string(), severity: "error".to_string() },
-                ArchitectureRule { id: "services_cannot_import_components".to_string(), description: "Services cannot import components".to_string(), severity: "error".to_string() },
+                ArchitectureRule { id: "no_circular_dependencies".to_string(), description: "No circular deps".to_string(), severity: "error".to_string(), custom: None },
+                ArchitectureRule { id: "ui_cannot_access_database".to_string(), description: "UI cannot access DB".to_string(), severity: "error".to_string(), custom: None },
+                ArchitectureRule { id: "services_cannot_import_ui".to_string(), description: "Services cannot import components".to_string(), severity: "error".to_string(), custom: None },
             ],
             layers: default_layers(),
         }
@@ -403,13 +591,13 @@ mod tests {
         let config = default_rules_config();
         let result = validate_rules(&config, &graph);
         assert!(!result.allowed);
-        assert!(result.violations.iter().any(|v| v.violation_type == "services_cannot_import_components"));
+        assert!(result.violations.iter().any(|v| v.violation_type == "services_cannot_import_ui"));
     }
 
     #[test]
     fn test_warning_only_passes_allowed() {
         let config = ArchitectureRules {
-            rules: vec![ArchitectureRule { id: "no_circular_dependencies".to_string(), description: "Check circular deps".to_string(), severity: "warning".to_string() }],
+            rules: vec![ArchitectureRule { id: "no_circular_dependencies".to_string(), description: "Check circular deps".to_string(), severity: "warning".to_string(), custom: None }],
             layers: default_layers(),
         };
         let edges = vec![make_edge("a.ts", "b.ts", false), make_edge("b.ts", "a.ts", false)];
@@ -436,5 +624,226 @@ mod tests {
         let result = validate_rules(&config, &graph);
         assert!(result.allowed);
         assert!(result.violations.is_empty());
+    }
+
+    // ── Custom Rule Tests ──────────────────────────────────────────────────
+
+    #[test]
+    fn test_custom_forbidden_import() {
+        let config = ArchitectureRules {
+            rules: vec![ArchitectureRule {
+                id: "custom_rule_1".to_string(),
+                description: "UI cannot import database".to_string(),
+                severity: "error".to_string(),
+                custom: Some(CustomRule {
+                    predicate_type: "forbidden_import".to_string(),
+                    from_layer: Some("ui".to_string()),
+                    to_layer: Some("database".to_string()),
+                    from_file: None,
+                    to_file: None,
+                    test_pattern: None,
+                    max_count: None,
+                }),
+            }],
+            layers: default_layers(),
+        };
+        let edges = vec![make_edge("src/components/Button.tsx", "src/database/query.ts", false)];
+        let graph = DependencyGraph::build_from_edges(&edges);
+        let result = validate_rules(&config, &graph);
+        assert!(!result.allowed);
+        assert_eq!(result.error_count, 1);
+    }
+
+    #[test]
+    fn test_custom_allowed_import_no_violation() {
+        let config = ArchitectureRules {
+            rules: vec![ArchitectureRule {
+                id: "custom_allowed".to_string(),
+                description: "Services CAN import repositories".to_string(),
+                severity: "warning".to_string(),
+                custom: Some(CustomRule {
+                    predicate_type: "allowed_import".to_string(),
+                    from_layer: Some("services".to_string()),
+                    to_layer: Some("repositories".to_string()),
+                    from_file: None,
+                    to_file: None,
+                    test_pattern: None,
+                    max_count: None,
+                }),
+            }],
+            layers: default_layers(),
+        };
+        let edges = vec![make_edge("src/services/api.ts", "src/repositories/userRepo.ts", false)];
+        let graph = DependencyGraph::build_from_edges(&edges);
+        let result = validate_rules(&config, &graph);
+        assert!(result.allowed);
+        assert_eq!(result.violations.len(), 0);
+    }
+
+    #[test]
+    fn test_custom_must_have_test_violation() {
+        let config = ArchitectureRules {
+            rules: vec![ArchitectureRule {
+                id: "require_tests".to_string(),
+                description: "Services must have test files".to_string(),
+                severity: "error".to_string(),
+                custom: Some(CustomRule {
+                    predicate_type: "must_have_test".to_string(),
+                    from_layer: None,
+                    to_layer: Some("services".to_string()),
+                    from_file: None,
+                    to_file: None,
+                    test_pattern: Some("test.ts".to_string()),
+                    max_count: None,
+                }),
+            }],
+            layers: default_layers(),
+        };
+        let edges = vec![
+            make_edge("src/services/api.ts", "src/lib/utils.ts", false),
+        ];
+        let graph = DependencyGraph::build_from_edges(&edges);
+        let result = validate_rules(&config, &graph);
+        assert!(!result.allowed);
+        assert!(result.violations.iter().any(|v| v.violation_type == "require_tests"));
+    }
+
+    #[test]
+    fn test_custom_must_have_test_passes() {
+        let config = ArchitectureRules {
+            rules: vec![ArchitectureRule {
+                id: "require_tests".to_string(),
+                description: "Services must have test files".to_string(),
+                severity: "error".to_string(),
+                custom: Some(CustomRule {
+                    predicate_type: "must_have_test".to_string(),
+                    from_layer: None,
+                    to_layer: Some("services".to_string()),
+                    from_file: None,
+                    to_file: None,
+                    test_pattern: Some("test.ts".to_string()),
+                    max_count: None,
+                }),
+            }],
+            layers: default_layers(),
+        };
+        let edges = vec![
+            make_edge("src/services/api.test.ts", "src/services/api.ts", false),
+            make_edge("src/services/api.ts", "src/lib/utils.ts", false),
+        ];
+        let graph = DependencyGraph::build_from_edges(&edges);
+        let result = validate_rules(&config, &graph);
+        assert!(result.allowed);
+    }
+
+    #[test]
+    fn test_custom_max_dependents_violation() {
+        let config = ArchitectureRules {
+            rules: vec![ArchitectureRule {
+                id: "max_deps".to_string(),
+                description: "Component files should not have too many dependents".to_string(),
+                severity: "warning".to_string(),
+                custom: Some(CustomRule {
+                    predicate_type: "max_dependents".to_string(),
+                    from_layer: None,
+                    to_layer: Some("ui".to_string()),
+                    from_file: None,
+                    to_file: None,
+                    test_pattern: None,
+                    max_count: Some(2),
+                }),
+            }],
+            layers: default_layers(),
+        };
+        let edges = vec![
+            make_edge("src/pages/Home.tsx", "src/components/Button.tsx", false),
+            make_edge("src/pages/About.tsx", "src/components/Button.tsx", false),
+            make_edge("src/pages/Contact.tsx", "src/components/Button.tsx", false),
+        ];
+        let graph = DependencyGraph::build_from_edges(&edges);
+        let result = validate_rules(&config, &graph);
+        assert!(result.violations.iter().any(|v| v.violation_type == "max_deps"));
+    }
+
+    #[test]
+    fn test_custom_max_dependents_passes() {
+        let config = ArchitectureRules {
+            rules: vec![ArchitectureRule {
+                id: "max_deps".to_string(),
+                description: "Component files should not have too many dependents".to_string(),
+                severity: "error".to_string(),
+                custom: Some(CustomRule {
+                    predicate_type: "max_dependents".to_string(),
+                    from_layer: None,
+                    to_layer: Some("ui".to_string()),
+                    from_file: None,
+                    to_file: None,
+                    test_pattern: None,
+                    max_count: Some(5),
+                }),
+            }],
+            layers: default_layers(),
+        };
+        let edges = vec![
+            make_edge("src/pages/Home.tsx", "src/components/Button.tsx", false),
+        ];
+        let graph = DependencyGraph::build_from_edges(&edges);
+        let result = validate_rules(&config, &graph);
+        assert!(result.allowed);
+    }
+
+    #[test]
+    fn test_custom_forbidden_file_import() {
+        let config = ArchitectureRules {
+            rules: vec![ArchitectureRule {
+                id: "no_auth_in_ui".to_string(),
+                description: "auth.ts must not be imported by UI components".to_string(),
+                severity: "error".to_string(),
+                custom: Some(CustomRule {
+                    predicate_type: "forbidden_file_import".to_string(),
+                    from_layer: None,
+                    to_layer: Some("ui".to_string()),
+                    from_file: Some("src/utils/auth.ts".to_string()),
+                    to_file: None,
+                    test_pattern: None,
+                    max_count: None,
+                }),
+            }],
+            layers: default_layers(),
+        };
+        let edges = vec![
+            make_edge("src/utils/auth.ts", "src/components/LoginForm.tsx", false),
+            make_edge("src/utils/auth.ts", "src/services/api.ts", false),
+        ];
+        let graph = DependencyGraph::build_from_edges(&edges);
+        let result = validate_rules(&config, &graph);
+        assert!(!result.allowed);
+        assert!(result.violations.iter().any(|v| v.violation_type == "no_auth_in_ui"));
+    }
+
+    #[test]
+    fn test_custom_rule_ignores_unknown_type() {
+        let config = ArchitectureRules {
+            rules: vec![ArchitectureRule {
+                id: "unknown_custom".to_string(),
+                description: "Some unknown custom rule".to_string(),
+                severity: "error".to_string(),
+                custom: Some(CustomRule {
+                    predicate_type: "nonexistent_type".to_string(),
+                    from_layer: None,
+                    to_layer: None,
+                    from_file: None,
+                    to_file: None,
+                    test_pattern: None,
+                    max_count: None,
+                }),
+            }],
+            layers: default_layers(),
+        };
+        let edges = vec![make_edge("src/components/A.tsx", "src/database/B.ts", false)];
+        let graph = DependencyGraph::build_from_edges(&edges);
+        let result = validate_rules(&config, &graph);
+        assert!(result.allowed);
+        assert_eq!(result.violations.len(), 0);
     }
 }

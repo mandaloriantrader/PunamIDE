@@ -64,8 +64,6 @@ const DockerPanel       = lazy(() => import("./components/DockerPanel"));
 const NotepadsPanel     = lazy(() => import("./components/NotepadsPanel"));
 const GitHubPanel       = lazy(() => import("./components/github/GitHubPanel"));
 
-// Phase 3-9 panels loaded via RightPanel tabs (lazy-loaded there)
-
 // loadNotes is a small utility — import directly, not lazily
 import { loadNotes } from "./components/NotesPanel";
 
@@ -96,6 +94,7 @@ import {
   loadRecentProjects,
   addRecentProject,
   updateFileIndex,
+  refreshProjectIndex,
   dapStart,
   dapStartTcp,
   dapSendRequest,
@@ -583,6 +582,7 @@ export default function App() {
         if (!recentPath || cancelled) return;
 
         await setProjectRoot(recentPath);
+        await refreshProjectIndex().catch((err) => console.warn("Failed to refresh project index:", err));
         if (!cancelled) {
           setProjectPath(recentPath);
           setTabs([]);
@@ -1066,6 +1066,7 @@ export default function App() {
       if (selected) {
         const dir = selected as string;
         await setProjectRoot(dir);
+        await refreshProjectIndex().catch((err) => console.warn("Failed to refresh project index:", err));
         await saveRecentProjectPath(dir);
         await addRecentProject(dir);
         setRecentProjects(prev => [dir, ...prev.filter(p => p !== dir)].slice(0, 8));

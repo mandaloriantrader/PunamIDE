@@ -3,6 +3,7 @@
  * Controls which sidebar view is active.
  */
 
+import React from "react";
 import {
   Files, Search, GitBranch, Bot,
   Settings, Keyboard, Play,

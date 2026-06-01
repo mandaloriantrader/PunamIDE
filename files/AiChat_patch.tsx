@@ -76,6 +76,7 @@ import { runAgentToolLoop, shouldUseToolLoop } from "../utils/agentToolLoop";
         latestErrors: errorContextText.slice(-2000),
         projectMemory: fullMemory,
         projectPath,
+        projectFiles: files, // pass file tree for workspace awareness
         toolLoopMode: true, // ← key flag
       });
 
@@ -221,6 +222,7 @@ import { runAgentToolLoop, shouldUseToolLoop } from "../utils/agentToolLoop";
       latestErrors: errorContextText.slice(-2000),
       projectMemory: fullMemory,
       projectPath,
+      projectFiles: files, // pass file tree for workspace awareness
       toolLoopMode: false, // full-context path
     });
 

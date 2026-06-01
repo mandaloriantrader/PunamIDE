@@ -218,8 +218,9 @@ fn parse_rust_imports(content: &str, file_path: &str) -> Vec<DependencyEdge> {
 // ── Helpers ────────────────────────────────────────────────────────────────────
 
 /// Determine if a JS/TS import path is external (not starting with . or /).
+/// Scoped packages (@scope/pkg) ARE external — they live in node_modules.
 fn is_external_import(path: &str) -> bool {
-    !path.starts_with('.') && !path.starts_with('/') && !path.starts_with('@') && !path.starts_with('#')
+    !path.starts_with('.') && !path.starts_with('/') && !path.starts_with('#')
 }
 
 /// Heuristic for external Python imports: no leading dot means it's likely external.

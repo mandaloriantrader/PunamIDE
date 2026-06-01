@@ -57,6 +57,7 @@ export interface ContextInputs {
   projectPath: string;
   /** NEW: when true, skip injecting file snippets (tool loop will read on demand) */
   toolLoopMode?: boolean;
+  projectFiles?: Array<{ name: string; path: string; is_dir: boolean; children?: any[] }>;
 }
 
 // ── Core: Assemble Persistent Payload ─────────────────────────────────────────
@@ -89,7 +90,8 @@ export function assemblePersistentPayload(inputs: ContextInputs): ContextPayload
     globalGoal,
     currentSubtask,
     projectMemory,
-    toolLoopMode
+    toolLoopMode,
+    inputs.projectFiles
   );
 
   // 2. Context block — skip for tool-loop path
@@ -143,8 +145,15 @@ function buildSystemInstruction(
   globalGoal: string,
   currentSubtask: string,
   projectMemory: string,
-  toolLoopMode: boolean
+  toolLoopMode: boolean,
+  projectFiles?: Array<{ name: string; path: string; is_dir: boolean; children?: any[] }>
 ): string {
+  // Count non-directory files
+  const fileCount = projectFiles?.filter(f => !f.is_dir).length ?? 0;
+  const workspaceSection = fileCount > 0
+    ? `\n\nWORKSPACE: ${fileCount} source files in project.\nFor workspace-wide tasks — analyze, audit, architecture, dependencies, project overview, codebase review — use list_files before making conclusions.\n`
+    : "";
+
   const modeSection = toolLoopMode
     ? `
 TOOL MODE ACTIVE:
@@ -180,7 +189,7 @@ Examples:
 - "install deps" → ===CMD: npm install===
 `;
 
-  return `You are Punam IDE Autopilot.
+  return `You are Punam IDE Autopilot.${workspaceSection}
 
 GLOBAL OBJECTIVE: ${globalGoal || "Help the user with their coding task."}
 

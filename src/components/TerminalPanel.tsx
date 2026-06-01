@@ -35,18 +35,18 @@ export default function TerminalPanel(props: Props) {
         <button
           className={`terminal-mode-btn ${mode === "command" ? "active" : ""}`}
           onClick={() => setMode("command")}
-          title="Command Mode — Run one-shot commands, AI-friendly output"
+          title="PowerShell Mode - Run one-shot commands with AI-friendly output"
         >
           <Zap size={12} />
-          <span>Command</span>
+          <span>PowerShell</span>
         </button>
         <button
           className={`terminal-mode-btn ${mode === "shell" ? "active" : ""}`}
           onClick={() => setMode("shell")}
-          title="Shell Mode — Full interactive PTY terminal"
+          title="Interactive Shell - Full PTY terminal"
         >
           <Monitor size={12} />
-          <span>Shell</span>
+          <span>Interactive</span>
         </button>
       </div>
 

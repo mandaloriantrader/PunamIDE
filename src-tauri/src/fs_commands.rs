@@ -4,6 +4,8 @@ use std::process::Command;
 use tauri::State;
 
 use crate::FileEntry;
+use crate::CodebaseIndex;
+use crate::ProjectIndexCache;
 use crate::ProjectRoot;
 use crate::get_project_root;
 use crate::validate_path_within_project;
@@ -11,7 +13,12 @@ use crate::SKIP_DIRS;
 use crate::SKIP_FILES;
 
 #[tauri::command]
-pub fn set_project_root(path: String, state: State<ProjectRoot>) -> Result<(), String> {
+pub fn set_project_root(
+    path: String,
+    state: State<ProjectRoot>,
+    index_cache: State<ProjectIndexCache>,
+    codebase_index: State<CodebaseIndex>,
+) -> Result<(), String> {
     let p = Path::new(&path);
     if !p.is_dir() {
         return Err(format!("Not a directory: {}", path));
@@ -19,6 +26,8 @@ pub fn set_project_root(path: String, state: State<ProjectRoot>) -> Result<(), S
     let canonical = fs::canonicalize(p).map_err(|e| e.to_string())?;
     *state.0.lock().map_err(|_| "Lock error".to_string())? =
         Some(canonical.to_string_lossy().to_string());
+    index_cache.0.lock().map_err(|_| "Lock error".to_string())?.clear();
+    *codebase_index.0.lock().map_err(|_| "Lock error".to_string())? = None;
     Ok(())
 }
 

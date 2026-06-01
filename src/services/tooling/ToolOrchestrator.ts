@@ -71,7 +71,7 @@ export class ToolOrchestrator {
 
   /** Scan the system for all installed development tools. */
   async scanEnvironment(): Promise<EnvironmentScanResult> {
-    return invoke<EnvironmentScanResult>("scan_environment");
+    return invoke<EnvironmentScanResult>("scan_tools");
   }
 
   /** Get a single tool's status. */

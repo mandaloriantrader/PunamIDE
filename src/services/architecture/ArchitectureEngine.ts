@@ -58,10 +58,21 @@ export interface ValidationResult {
   warning_count: number;
 }
 
+export interface CustomRule {
+  type: string;
+  from_layer?: string;
+  from_file?: string;
+  to_layer?: string;
+  to_file?: string;
+  test_pattern?: string;
+  max_count?: number;
+}
+
 export interface ArchitectureRule {
   id: string;
   description: string;
   severity: "error" | "warning";
+  custom?: CustomRule;
 }
 
 export interface ArchitectureRules {

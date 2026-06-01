@@ -64,7 +64,7 @@ export const BUILT_IN_RULES: RuleDefinition[] = [
     category: "circular",
   },
   {
-    id: "services_cannot_import_components",
+    id: "services_cannot_import_ui",
     description: "Service layer must not import from UI component layer",
     severity: "error",
     category: "layer",
@@ -127,7 +127,7 @@ export class RuleValidator {
         description: v.description,
         severity: v.violation_type === "circular_dependency" ? "error" : "error",
       })),
-      checkedFiles: result.violations.length > 0 ? result.violations.length : 0,
+      checkedFiles: result.violations.length + (result.error_count === 0 ? 1 : 0),
       timeMs,
     };
   }

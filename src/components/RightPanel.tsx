@@ -3,7 +3,8 @@
  * Replaces the single AiChat panel with a multi-tab layout.
  */
 
-import { useState, useRef, useEffect, useCallback } from "react";
+import { useState, useRef, useEffect, useLayoutEffect, useCallback } from "react";
+import { createPortal } from "react-dom";
 import { MessageSquare, Layers, StickyNote, BarChart3, FileCode, ShieldCheck, Monitor, Bot, TrendingUp, Activity, MoreHorizontal, Brain } from "lucide-react";
 import { PanelErrorBoundary } from "./ErrorBoundary";
 import AiChat from "./AiChat";
@@ -71,54 +72,91 @@ export default function RightPanel(props: RightPanelProps) {
   const [activeTab, setActiveTab] = useState<RightPanelTab>("chat");
   const [visibleCount, setVisibleCount] = useState(TABS.length);
   const [showOverflow, setShowOverflow] = useState(false);
+  const [dropdownPos, setDropdownPos] = useState<{ top: number; right: number } | null>(null);
   const tabBarRef = useRef<HTMLDivElement>(null);
   const overflowRef = useRef<HTMLDivElement>(null);
+  const moreButtonRef = useRef<HTMLButtonElement>(null);
+  const tabWidthsRef = useRef<number[]>([]);
+  const rafRef = useRef<number>(0);
 
   // Measure how many tabs fit in the available width
   const measureTabs = useCallback(() => {
-    const container = tabBarRef.current;
-    if (!container) return;
+    cancelAnimationFrame(rafRef.current);
+    rafRef.current = requestAnimationFrame(() => {
+      const container = tabBarRef.current;
+      if (!container) return;
 
-    const containerWidth = container.offsetWidth;
-    const moreButtonWidth = 44; // width reserved for the "⋯" button
-    let totalWidth = 0;
-    let fitCount = 0;
+      const containerWidth = container.offsetWidth;
+      if (containerWidth <= 0) return;
 
-    const buttons = container.querySelectorAll<HTMLElement>(".right-panel-tab:not(.right-panel-tab-more)");
-    for (let i = 0; i < buttons.length; i++) {
-      // Temporarily show all tabs to measure
-      buttons[i].style.display = "flex";
-      void buttons[i].offsetHeight; // Force synchronous layout reflow before measuring
-    }
+      // Cache tab widths on first render when all tabs are in the DOM
+      if (tabWidthsRef.current.length === 0) {
+        const buttons = container.querySelectorAll<HTMLElement>(".right-panel-tab:not(.right-panel-tab-more)");
+        if (buttons.length < TABS.length) return; // Not all rendered yet, wait
+        tabWidthsRef.current = Array.from(buttons).map(btn => btn.offsetWidth);
+      }
 
-    for (let i = 0; i < buttons.length; i++) {
-      totalWidth += buttons[i].offsetWidth;
-      if (totalWidth + moreButtonWidth > containerWidth) break;
-      fitCount++;
-    }
+      // Measure the real overflow button width if available, else estimate
+      const moreBtn = container.querySelector<HTMLElement>(".right-panel-tab-more");
+      const moreButtonWidth = moreBtn ? moreBtn.offsetWidth + 8 : 44;
 
-    // If all tabs fit, show them all
-    if (totalWidth <= containerWidth) {
-      setVisibleCount(TABS.length);
-    } else {
+      const widths = tabWidthsRef.current;
+      const allTabsWidth = widths.reduce((sum, w) => sum + w, 0);
+
+      // If all tabs fit without overflow button, show them all
+      if (allTabsWidth <= containerWidth) {
+        setVisibleCount(TABS.length);
+        return;
+      }
+
+      // Otherwise calculate how many fit alongside the overflow button
+      let totalWidth = 0;
+      let fitCount = 0;
+      for (let i = 0; i < widths.length; i++) {
+        if (totalWidth + widths[i] + moreButtonWidth > containerWidth) break;
+        totalWidth += widths[i];
+        fitCount++;
+      }
+
       setVisibleCount(Math.max(1, fitCount));
-    }
+    });
   }, []);
 
-  useEffect(() => {
+  // Use useLayoutEffect for initial measurement (before paint)
+  useLayoutEffect(() => {
     measureTabs();
+    return () => cancelAnimationFrame(rafRef.current);
+  }, [measureTabs]);
+
+  // ResizeObserver for ongoing resize tracking
+  useEffect(() => {
     const observer = new ResizeObserver(measureTabs);
     if (tabBarRef.current) observer.observe(tabBarRef.current);
-    return () => observer.disconnect();
+    return () => {
+      observer.disconnect();
+      cancelAnimationFrame(rafRef.current);
+    };
   }, [measureTabs]);
+
+  // Position dropdown relative to the more button (for portal rendering)
+  useEffect(() => {
+    if (showOverflow && moreButtonRef.current) {
+      const rect = moreButtonRef.current.getBoundingClientRect();
+      setDropdownPos({
+        top: rect.bottom + 2,
+        right: window.innerWidth - rect.right,
+      });
+    }
+  }, [showOverflow]);
 
   // Close overflow dropdown when clicking outside
   useEffect(() => {
     if (!showOverflow) return;
     const handleClick = (e: MouseEvent) => {
-      if (overflowRef.current && !overflowRef.current.contains(e.target as Node)) {
-        setShowOverflow(false);
-      }
+      const target = e.target as Node;
+      if (overflowRef.current && overflowRef.current.contains(target)) return;
+      if (moreButtonRef.current && moreButtonRef.current.contains(target)) return;
+      setShowOverflow(false);
     };
     document.addEventListener("mousedown", handleClick);
     return () => document.removeEventListener("mousedown", handleClick);
@@ -143,16 +181,21 @@ export default function RightPanel(props: RightPanelProps) {
           </button>
         ))}
         {overflowTabs.length > 0 && (
-          <div className="right-panel-tab-overflow" ref={overflowRef}>
+          <div className="right-panel-tab-overflow">
             <button
+              ref={moreButtonRef}
               className={`right-panel-tab right-panel-tab-more ${overflowTabs.some(t => t.id === activeTab) ? "active" : ""}`}
               onClick={() => setShowOverflow(!showOverflow)}
               title="More tabs"
             >
               <MoreHorizontal size={14} />
             </button>
-            {showOverflow && (
-              <div className="right-panel-overflow-dropdown">
+            {showOverflow && dropdownPos && createPortal(
+              <div
+                ref={overflowRef}
+                className="right-panel-overflow-dropdown"
+                style={{ position: "fixed", top: dropdownPos.top, right: dropdownPos.right, zIndex: 9999 }}
+              >
                 {overflowTabs.map((tab) => (
                   <button
                     key={tab.id}
@@ -166,7 +209,8 @@ export default function RightPanel(props: RightPanelProps) {
                     <span>{tab.label}</span>
                   </button>
                 ))}
-              </div>
+              </div>,
+              document.body
             )}
           </div>
         )}
@@ -289,6 +333,7 @@ export default function RightPanel(props: RightPanelProps) {
             </Suspense>
           </PanelErrorBoundary>
         )}
+
       </div>
     </div>
   );

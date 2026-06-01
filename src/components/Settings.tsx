@@ -11,6 +11,7 @@ import type { MCPServerConfig } from "../utils/mcp";
 import McpSettings from "./McpSettings";
 import { AdaptiveModeSettings } from "./settings/AdaptiveModeSettings";
 import type { AdaptiveStrategy } from "../lib/ai/providerCapabilities";
+import ArchitectureRulesEditor from "./settings/ArchitectureRulesEditor";
 
 interface Props {
   config: AppConfig;
@@ -41,7 +42,7 @@ export default function Settings({ config, onConfigChange, onClose, onProvidersC
   const [providers, setProviders] = useState<AIProviderConfig[]>([]);
   const [mcpServers, setMcpServers] = useState<MCPServerConfig[]>([]);
   const [saved, setSaved] = useState(false);
-  const [activeSection, setActiveSection] = useState<"theme" | "providers" | "mcp">("providers");
+  const [activeSection, setActiveSection] = useState<"theme" | "providers" | "mcp" | "architecture">("providers");
   const [showAddProvider, setShowAddProvider] = useState(false);
   const [expandedProviderId, setExpandedProviderId] = useState<string | null>(null);
   const [testingId, setTestingId] = useState<string | null>(null);
@@ -245,10 +246,16 @@ export default function Settings({ config, onConfigChange, onClose, onProvidersC
             MCP Tools
           </button>
           <button
+            className={`settings-tab ${activeSection === "architecture" ? "active" : ""}`}
+            onClick={() => setActiveSection("architecture")}
+          >
+            Architecture Rules
+          </button>
+          <button
             className={`settings-tab ${activeSection === "theme" ? "active" : ""}`}
             onClick={() => setActiveSection("theme")}
           >
-            Themes &amp; Editor
+            Themes & Editor
           </button>
         </div>
 
@@ -427,6 +434,13 @@ export default function Settings({ config, onConfigChange, onClose, onProvidersC
             onChange={setMcpServers}
             projectPath={projectPath}
           />
+        )}
+
+        {/* Architecture Rules Section */}
+        {activeSection === "architecture" && (
+          <div style={{ height: "100%", display: "flex", flexDirection: "column", minHeight: 400 }}>
+            <ArchitectureRulesEditor />
+          </div>
         )}
 
         {/* Theme Section */}

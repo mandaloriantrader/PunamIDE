@@ -56,6 +56,7 @@ import {
   summarizeOldMessages,
   extractMemoriesFromResponse,
 } from "../utils/contextEngine";
+import { runAgentToolLoop, isWorkspaceAnalysisTask } from "../utils/agentToolLoop";
 import { detectTaskType } from "../lib/ai/taskDetection";
 import { selectAdaptiveProvider } from "../lib/ai/adaptiveRouter";
 import type { AdaptiveStrategy } from "../lib/ai/providerCapabilities";
@@ -1499,6 +1500,7 @@ export default function AiChat({
       projectMemory: fullMemory,
       projectPath,
       activeFilePath: activeFilePath || undefined,
+      projectFiles: files, // pass file tree for workspace awareness
     });
 
     // ── Send to AI using the optimized payload ──────────────────────────────
@@ -1548,9 +1550,87 @@ export default function AiChat({
         }
       });
 
-      // Send with the context engine's system instruction
-      // Only use the first user turn (context block) + append the actual question
-      // Never join all turns — that bleeds previous Q&A into the prompt
+      // ── Routing: workspace-analysis tasks use tool loop ────────────────────
+      // Everything else uses the existing streaming path (unchanged).
+      if (isWorkspaceAnalysisTask(currentTask)) {
+        const streamId = `stream-${Date.now()}`;
+        setMessages(prev => [...prev, { role: "assistant", content: "▍", mode: "chat", streamId } as any]);
+
+        // Track which tools fired (for UI feedback)
+        const firedTools: string[] = [];
+
+        // Use the existing runAgentToolLoop with workspace-awareness payload
+        await runAgentToolLoop({
+          provider,
+          modelId,
+          systemPrompt: payload.systemInstruction,
+          task: currentTask,
+          projectPath,
+          activeFilePath,
+          maxRounds: 10,
+
+          onToolCall: (toolName) => {
+            firedTools.push(toolName);
+            const statusText = `🔧 Using tool: \`${toolName}\`…`;
+            setMessages(prev => prev.map(m =>
+              (m as any).streamId === streamId
+                ? { ...m, content: statusText + "\n\n▍" }
+                : m
+            ));
+          },
+
+          onToken: (token) => {
+            setMessages(prev => prev.map(m =>
+              (m as any).streamId === streamId
+                ? { ...m, content: token + "▍" }
+                : m
+            ));
+          },
+
+          onDone: async (finalText) => {
+            // Parse and handle final answer using existing logic
+            let parsed = await parseResponseAsync(finalText, existingFiles).catch(() => null);
+            if (parsed && parsed.editOperations.length > 0) {
+              parsed = await resolveEditOperations(parsed, projectPath);
+            }
+            const hasActions = parsed ? hasParsedActions(parsed) : false;
+
+            setMessages(prev => prev.map(m => {
+              if ((m as any).streamId !== streamId) return m;
+              const { streamId: _sid, ...rest } = m as any;
+              return {
+                ...rest,
+                content: finalText,
+                parsed: hasActions ? parsed : undefined,
+                applied: false,
+              };
+            }));
+
+            if (parsed) {
+              const changedFiles = parsed.fileChanges.map(f => f.path);
+              extractMemoriesFromResponse(projectPath, currentTask, finalText, changedFiles);
+              recordResponseUsage(parsed.metrics);
+            }
+
+            setLoading(false);
+          },
+
+          onError: (err) => {
+            console.warn("[Tool loop] Error, falling back to streaming:", err);
+            setMessages(prev => prev.filter(m => (m as any).streamId !== streamId));
+            setLoading(false);
+            // On error, the streaming path below will handle the request
+            // Fall through to _agentProposeFixFullContext behavior
+            setMessages(prev => [...prev, { role: "assistant", content: `⚠️ Tool loop failed. Using standard mode instead.\n\n${err}` }]);
+          },
+        });
+
+        setLoading(false);
+        setAgentTask((prev) => prev ? { ...prev, step: "awaiting_approval" } : null);
+        return; // tool loop handled this request
+      }
+
+      // ── Existing streaming path (unchanged) ─────────────────────────────────
       const contextBlock = payload.contents
         .find(c => c.role === "user")
         ?.parts[0].text ?? "";

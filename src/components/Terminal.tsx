@@ -254,7 +254,7 @@ export default function Terminal({ cwd, onOutputChange, commandToRun, onCommandS
       const newSession: TerminalSession = {
         id: tabId,
         name: shortName(cmd),
-        lines: [makeLine("system", "Punam AI -> Running command"), makeLine("input", `$ ${cmd}`)],
+        lines: [makeLine("system", "Punam AI -> Running command"), makeLine("input", `PS> ${cmd}`)],
         running: true,
         activeCommand: cmd,
         activeSessionId: null,
@@ -513,7 +513,11 @@ export default function Terminal({ cwd, onOutputChange, commandToRun, onCommandS
         }
         if (finishedSession) {
           const outputText = finishedSession.lines.map((l) => stripAnsi(l.text)).join("\n");
-          reportRunObservation(finishedSession.activeCommand, outputText, sessionStatus === "failed" ? "failed" : undefined);
+          reportRunObservation(
+            finishedSession.activeCommand,
+            outputText,
+            sessionStatus === "failed" ? "failed" : sessionStatus === "completed" ? "completed" : undefined
+          );
         }
 
         return prev.map((s) =>
@@ -588,7 +592,7 @@ export default function Terminal({ cwd, onOutputChange, commandToRun, onCommandS
       return;
     }
 
-    const inputLine = makeLine("input", `$ ${cmd}`);
+    const inputLine = makeLine("input", `PS> ${cmd}`);
     setSuggestion(null);
 
     setSessions((prev) =>
@@ -839,7 +843,7 @@ export default function Terminal({ cwd, onOutputChange, commandToRun, onCommandS
               }
             </div>
           )}
-          <span className="terminal-prompt">$</span>
+          <span className="terminal-prompt">PS&gt;</span>
           <input
             ref={inputRef}
             type="text"

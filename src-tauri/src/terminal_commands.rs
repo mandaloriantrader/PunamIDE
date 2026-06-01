@@ -13,6 +13,30 @@ use crate::PortCheckResult;
 use crate::TerminalProcessHandle;
 use crate::TerminalProcesses;
 
+fn command_shell(command: &str) -> (String, Vec<String>) {
+    if cfg!(target_os = "windows") {
+        let powershell = std::env::var("SystemRoot")
+            .map(|root| format!("{}\\System32\\WindowsPowerShell\\v1.0\\powershell.exe", root))
+            .unwrap_or_else(|_| "powershell.exe".to_string());
+        (
+            powershell,
+            vec![
+                "-NoLogo".to_string(),
+                "-NoProfile".to_string(),
+                "-ExecutionPolicy".to_string(),
+                "Bypass".to_string(),
+                "-Command".to_string(),
+                command.to_string(),
+            ],
+        )
+    } else {
+        (
+            "bash".to_string(),
+            vec!["-lc".to_string(), command.to_string()],
+        )
+    }
+}
+
 #[derive(serde::Serialize, Clone)]
 struct TerminalOutputEvent {
     session_id: String,
@@ -75,15 +99,10 @@ pub async fn start_terminal_process(
 ) -> Result<String, String> {
     let session_id = client_session_id.unwrap_or_else(|| format!("term-{}", uuid_simple()));
 
-    let (shell, flag) = if cfg!(target_os = "windows") {
-        ("cmd", "/c")
-    } else {
-        ("bash", "-c")
-    };
+    let (shell, args) = command_shell(&command);
 
     let mut cmd = TokioCommand::new(shell);
-    cmd.arg(flag)
-        .arg(&command)
+    cmd.args(args)
         .current_dir(&cwd)
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
@@ -242,15 +261,10 @@ pub(crate) fn uuid_simple() -> String {
 #[tauri::command]
 pub async fn run_terminal_command(command: String, cwd: String) -> Result<CmdResult, String> {
     let result = tokio::task::spawn_blocking(move || {
-        let (shell, flag) = if cfg!(target_os = "windows") {
-            ("cmd", "/c")
-        } else {
-            ("bash", "-c")
-        };
+        let (shell, args) = command_shell(&command);
 
         let output = Command::new(shell)
-            .arg(flag)
-            .arg(&command)
+            .args(args)
             .current_dir(&cwd)
             .output()
             .map_err(|e| format!("Failed to execute: {}", e))?;
