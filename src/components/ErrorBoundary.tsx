@@ -1,7 +1,8 @@
 import { Component } from "react";
 import type { ReactNode, ErrorInfo } from "react";
 import { logger } from "./Logger";
-import { APP_NAME, DEFAULT_PANEL_ERROR_MESSAGE, UNKNOWN_PANEL_ERROR_MESSAGE, FULL_APP_ERROR_MESSAGE, DEFAULT_ERROR_MESSAGE, DEFAULT_ERROR_DESCRIPTION, RELOAD_BUTTON_TEXT } from "../lib/constants";
+import { APP_NAME, DEFAULT_PANEL_ERROR_MESSAGE, UNKNOWN_PANEL_ERROR_MESSAGE, FULL_APP_ERROR_MESSAGE, DEFAULT_ERROR_DESCRIPTION, RELOAD_BUTTON_TEXT } from "../lib/constants";
+import { PUNAM_DISCORD_URL } from "../config/alpha";
 
 interface Props {
   children: ReactNode;
@@ -83,6 +84,41 @@ export default class ErrorBoundary extends Component<Props, State> {
     logger.error(FULL_APP_ERROR_MESSAGE, { error, componentStack: info.componentStack });
   }
 
+  private getErrorText() {
+    return [
+      "PunamIDE error report",
+      this.state.error?.message || "Unknown error",
+      this.state.error?.stack || "",
+    ].join("\n\n");
+  }
+
+  private copyError = async () => {
+    await navigator.clipboard.writeText(this.getErrorText());
+  };
+
+  private exportLogs = async () => {
+    const [{ save }, { invoke }] = await Promise.all([
+      import("@tauri-apps/plugin-dialog"),
+      import("@tauri-apps/api/core"),
+    ]);
+    const report = await invoke<string>("generate_diagnostics_report", {
+      includeProjectPath: false,
+      userMessage: this.getErrorText(),
+    });
+    const path = await save({
+      defaultPath: "punamide-crash-diagnostics.txt",
+      filters: [{ name: "Text", extensions: ["txt"] }],
+    });
+    if (path) {
+      await invoke("export_diagnostics_report", { path, report });
+    }
+  };
+
+  private openDiscord = async () => {
+    const { open } = await import("@tauri-apps/plugin-shell");
+    await open(PUNAM_DISCORD_URL);
+  };
+
   render() {
     if (this.state.hasError) {
       return (
@@ -99,7 +135,7 @@ export default class ErrorBoundary extends Component<Props, State> {
           textAlign: "center",
         }}>
           <h1 style={{ fontSize: 24, marginBottom: 16, color: "#f38ba8" }}>
-            {DEFAULT_ERROR_MESSAGE}
+            Oops! Something went wrong.
           </h1>
           <p style={{ fontSize: 14, color: "#a6adc8", maxWidth: 500, marginBottom: 24 }}>
             {DEFAULT_ERROR_DESCRIPTION}
@@ -116,21 +152,23 @@ export default class ErrorBoundary extends Component<Props, State> {
           }}>
             {this.state.error?.message}
           </pre>
-          <button
-            onClick={() => window.location.reload()}
-            style={{
-              padding: "10px 24px",
-              background: "#89b4fa",
-              color: "#1e1e2e",
-              border: "none",
-              borderRadius: 8,
-              fontSize: 14,
-              fontWeight: 600,
-              cursor: "pointer",
-            }}
-          >
-            {RELOAD_BUTTON_TEXT}
-          </button>
+          <div style={{ display: "flex", gap: 10, flexWrap: "wrap", justifyContent: "center" }}>
+            <button onClick={this.copyError} style={errorButtonStyle}>Copy Error</button>
+            <button onClick={this.exportLogs} style={errorButtonStyle}>Export Logs</button>
+            <button onClick={this.openDiscord} style={errorButtonStyle}>Open Discord</button>
+            <button
+              onClick={() => window.location.reload()}
+              style={{
+                ...errorButtonStyle,
+                background: "#89b4fa",
+                color: "#1e1e2e",
+                border: "none",
+                fontWeight: 600,
+              }}
+            >
+              {RELOAD_BUTTON_TEXT}
+            </button>
+          </div>
         </div>
       );
     }
@@ -138,3 +176,13 @@ export default class ErrorBoundary extends Component<Props, State> {
     return this.props.children;
   }
 }
+
+const errorButtonStyle = {
+  padding: "10px 16px",
+  background: "#313244",
+  color: "#cdd6f4",
+  border: "1px solid #45475a",
+  borderRadius: 8,
+  fontSize: 13,
+  cursor: "pointer",
+};

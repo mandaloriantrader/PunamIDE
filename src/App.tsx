@@ -21,6 +21,16 @@ import {
   Play,
   BugPlay,
   SquareDot,
+  HelpCircle,
+  MessageSquare,
+  FileText,
+  Download,
+  Info,
+  ExternalLink,
+  Clipboard,
+  FolderCog,
+  RefreshCw,
+  Globe,
 } from "lucide-react";
 import FileExplorer from "./components/FileExplorer";
 import FindReplace from "./components/FindReplace";
@@ -90,6 +100,7 @@ import {
   loadInlineCompletionEnabled,
   saveInlineCompletionEnabled,
   loadActiveThemeId,
+  saveActiveThemeId,
   loadCustomThemes,
   loadRecentProjects,
   addRecentProject,
@@ -99,20 +110,38 @@ import {
   dapStartTcp,
   dapSendRequest,
   dapStop,
+  generateDiagnosticsReport,
+  exportDiagnosticsReport,
+  getSystemDiagnostics,
+  openLogsFolder,
+  openDataFolder,
 } from "./utils/tauri";
-import type { AppConfig, FileEntry, RunProfile, SearchResult, DapRequest } from "./utils/tauri";
+import type { AppConfig, FileEntry, RunProfile, SearchResult, DapRequest, SystemDiagnostics } from "./utils/tauri";
 import type { ParsedResponse } from "./utils/prompts";
 import { parseProblemsFromOutput } from "./utils/problems";
 import type { DebugLaunchConfig } from "./utils/debugConfig";
 import { loadLaunchConfigs, saveLaunchConfigs, createDefaultLaunchJson, resolveConfigVariables, getDefaultConfig, detectProjectType, autoGenerateLaunchJson } from "./utils/debugConfig";
 import type { Problem } from "./utils/problems";
 import { registerToastHandler } from "./utils/toast";
-import { applyTheme, BUILTIN_THEMES, getThemeById } from "./utils/themes";
-import { open } from "@tauri-apps/plugin-dialog";
+import { applyTheme, getDefaultTheme, getThemeById } from "./utils/themes";
+import { open, save } from "@tauri-apps/plugin-dialog";
+import { open as openExternal } from "@tauri-apps/plugin-shell";
 import { listen } from "@tauri-apps/api/event";
 import Split from "react-split";
 import "./styles/index.css";
 import type { RunObservation } from "./services/run/verifiedRun";
+import {
+  ALPHA_RELEASE_NOTES,
+  PUNAM_BUILD_NUMBER,
+  PUNAM_CHANGELOG,
+  PUNAM_DISCORD_URL,
+  PUNAM_GITHUB_URL,
+  PUNAM_LICENSE,
+  PUNAM_RELEASE_CHANNEL,
+  PUNAM_RELEASE_DATE,
+  PUNAM_VERSION,
+  PUNAM_WEBSITE_URL,
+} from "./config/alpha";
 
 // LSP integration
 import { lspManager } from "./services/lsp/lspManager";
@@ -150,6 +179,16 @@ export default function App() {
   const [showTerminal, setShowTerminal] = useState(false);
   const [showProblems, setShowProblems] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
+  const [showHelpMenu, setShowHelpMenu] = useState(false);
+  const [showFeedback, setShowFeedback] = useState(false);
+  const [showDiagnostics, setShowDiagnostics] = useState(false);
+  const [showAbout, setShowAbout] = useState(false);
+  const [showFirstRunWelcome, setShowFirstRunWelcome] = useState(false);
+  const [feedbackMessage, setFeedbackMessage] = useState("");
+  const [includeProjectPathInDiagnostics, setIncludeProjectPathInDiagnostics] = useState(false);
+  const [diagnosticsReport, setDiagnosticsReport] = useState("");
+  const [systemDiagnostics, setSystemDiagnostics] = useState<SystemDiagnostics | null>(null);
+  const [diagnosticsBusy, setDiagnosticsBusy] = useState(false);
   const [showRunProfiles, setShowRunProfiles] = useState(false);
   const [showSearch, setShowSearch] = useState(false);
   const [showGitPanel, setShowGitPanel] = useState(false);
@@ -238,6 +277,7 @@ export default function App() {
   const [forceAiPrompt, setForceAiPrompt] = useState<{ text: string; mode: string } | null>(null);
   const toastIdRef = useRef(0);
   const tabsRef = useRef<Tab[]>([]);
+  const isClosingRef = useRef(false);
   const dapRequestSeq = useRef(1);
   const handleFileSelectRef = useRef<(path: string) => Promise<void>>(async () => {});
 
@@ -252,6 +292,125 @@ export default function App() {
 
   // Register global toast handler so any component can show toasts without props
   registerToastHandler(showToast);
+
+  useEffect(() => {
+    const key = "punamide_alpha_welcome_seen";
+    if (!window.localStorage.getItem(key)) {
+      setShowFirstRunWelcome(true);
+      window.localStorage.setItem(key, "1");
+    }
+  }, []);
+
+  const refreshSystemDiagnostics = useCallback(async () => {
+    try {
+      const info = await getSystemDiagnostics();
+      setSystemDiagnostics(info);
+      return info;
+    } catch (err) {
+      showToast(`Failed to load system info: ${err}`, "error");
+      return null;
+    }
+  }, [showToast]);
+
+  const buildDiagnosticsReport = useCallback(async (message?: string) => {
+    return generateDiagnosticsReport(includeProjectPathInDiagnostics, message?.trim() || undefined);
+  }, [includeProjectPathInDiagnostics]);
+
+  const handleGenerateDiagnostics = useCallback(async (message?: string) => {
+    setDiagnosticsBusy(true);
+    try {
+      await refreshSystemDiagnostics();
+      const report = await buildDiagnosticsReport(message);
+      setDiagnosticsReport(report);
+      setShowDiagnostics(true);
+      return report;
+    } catch (err) {
+      showToast(`Failed to generate diagnostics: ${err}`, "error");
+      return "";
+    } finally {
+      setDiagnosticsBusy(false);
+    }
+  }, [buildDiagnosticsReport, refreshSystemDiagnostics, showToast]);
+
+  const handleExportDiagnostics = useCallback(async (message?: string, forceFresh = false) => {
+    setDiagnosticsBusy(true);
+    try {
+      const report = forceFresh || message ? await buildDiagnosticsReport(message) : diagnosticsReport || await buildDiagnosticsReport(message);
+      const path = await save({
+        defaultPath: "punamide-alpha-diagnostics.txt",
+        filters: [{ name: "Text", extensions: ["txt"] }],
+      });
+      if (!path) return;
+      await exportDiagnosticsReport(path, report);
+      setDiagnosticsReport(report);
+      showToast("Diagnostics exported.", "success");
+    } catch (err) {
+      showToast(`Failed to export diagnostics: ${err}`, "error");
+    } finally {
+      setDiagnosticsBusy(false);
+    }
+  }, [buildDiagnosticsReport, diagnosticsReport, showToast]);
+
+  const handleCopyDiagnostics = useCallback(async (message?: string) => {
+    try {
+      const report = diagnosticsReport || await buildDiagnosticsReport(message);
+      await navigator.clipboard.writeText(report);
+      setDiagnosticsReport(report);
+      showToast("Diagnostics copied.", "success");
+    } catch (err) {
+      showToast(`Failed to copy diagnostics: ${err}`, "error");
+    }
+  }, [buildDiagnosticsReport, diagnosticsReport, showToast]);
+
+  const handleCopySystemInfo = useCallback(async () => {
+    const info = systemDiagnostics || await refreshSystemDiagnostics();
+    if (!info) return;
+    const activeProvider = aiProviders.find((provider) => provider.apiKey || provider.name === "Ollama (Local)")?.name || config.provider || "Not configured";
+    const lines = [
+      `PunamIDE ${PUNAM_VERSION}`,
+      `Build: ${info.build_number}`,
+      `Channel: ${info.release_channel}`,
+      `OS: ${info.os} ${info.os_version}`,
+      `CPU: ${info.cpu} (${info.logical_cpus} logical)`,
+      `RAM: ${info.total_memory_mb} MB`,
+      `Tauri: ${info.tauri_version}`,
+      `Rust backend: ${info.rust_backend_version}`,
+      `Provider: ${activeProvider}`,
+      `Logs: ${info.log_path}`,
+    ];
+    await navigator.clipboard.writeText(lines.join("\n"));
+    showToast("System info copied.", "success");
+  }, [aiProviders, config.provider, refreshSystemDiagnostics, showToast, systemDiagnostics]);
+
+  const handleJoinDiscord = useCallback(async () => {
+    if (PUNAM_DISCORD_URL.includes("REPLACE_ME")) {
+      showToast("Discord invite is not configured yet.", "warning");
+      return;
+    }
+    try {
+      await openExternal(PUNAM_DISCORD_URL);
+    } catch (err) {
+      showToast(`Failed to open Discord: ${err}`, "error");
+    }
+  }, [showToast]);
+
+  const handleOpenExternal = useCallback(async (url: string) => {
+    try {
+      await openExternal(url);
+    } catch (err) {
+      showToast(`Failed to open link: ${err}`, "error");
+    }
+  }, [showToast]);
+
+  const handleCheckForUpdates = useCallback(() => {
+    showToast("You are on the Alpha channel. Update checks are manual for v0.1.", "info");
+  }, [showToast]);
+
+  useEffect(() => {
+    if (showDiagnostics && !systemDiagnostics) {
+      refreshSystemDiagnostics();
+    }
+  }, [refreshSystemDiagnostics, showDiagnostics, systemDiagnostics]);
 
   const getProjectFilePath = useCallback((relativePath: string) => {
     if (isAbsolutePath(relativePath)) return relativePath;
@@ -554,9 +713,7 @@ export default function App() {
   useEffect(() => {
     loadConfigFromStore().then((storedConfig) => {
       setConfig(storedConfig);
-      const fallbackTheme = storedConfig.theme === "light"
-        ? BUILTIN_THEMES.find((theme) => theme.id === "github-light") || BUILTIN_THEMES[0]
-        : BUILTIN_THEMES[0];
+      const fallbackTheme = getDefaultTheme(storedConfig.theme === "light" ? "light" : "dark");
       applyTheme(fallbackTheme);
     }).catch(() => {});
     loadAIProviders().then(setAiProviders).catch(() => {});
@@ -565,10 +722,13 @@ export default function App() {
     loadRecentProjects().then(setRecentProjects).catch(() => {});
     // Load and apply saved theme
     Promise.all([loadActiveThemeId(), loadCustomThemes()]).then(([themeId, customThemes]) => {
-      if (themeId) {
-        const theme = getThemeById(themeId, customThemes) || BUILTIN_THEMES[0];
-        applyTheme(theme);
-        setConfig((prev) => ({ ...prev, theme: theme.type }));
+      const theme = themeId
+        ? getThemeById(themeId, customThemes) || getDefaultTheme("dark", customThemes)
+        : getDefaultTheme("dark", customThemes);
+      applyTheme(theme);
+      setConfig((prev) => ({ ...prev, theme: theme.type }));
+      if (!themeId || theme.id !== themeId) {
+        saveActiveThemeId(theme.id).catch(() => {});
       }
     }).catch(() => {});
   }, []);
@@ -582,11 +742,11 @@ export default function App() {
         if (!recentPath || cancelled) return;
 
         await setProjectRoot(recentPath);
-        await refreshProjectIndex().catch((err) => console.warn("Failed to refresh project index:", err));
         if (!cancelled) {
           setProjectPath(recentPath);
           setTabs([]);
           setActiveTab("");
+          refreshProjectIndex().catch((err) => console.warn("Failed to refresh project index:", err));
         }
       } catch (err) {
         console.error("Failed to restore recent project:", err);
@@ -1066,7 +1226,6 @@ export default function App() {
       if (selected) {
         const dir = selected as string;
         await setProjectRoot(dir);
-        await refreshProjectIndex().catch((err) => console.warn("Failed to refresh project index:", err));
         await saveRecentProjectPath(dir);
         await addRecentProject(dir);
         setRecentProjects(prev => [dir, ...prev.filter(p => p !== dir)].slice(0, 8));
@@ -1080,6 +1239,7 @@ export default function App() {
         setShowSearch(false);
         setShowGitPanel(false);
         setGitRefreshKey((key) => key + 1);
+        refreshProjectIndex().catch((err) => console.warn("Failed to refresh project index:", err));
       }
     } catch (err) {
       showToast(`Failed to open folder: ${err}`, "error");
@@ -1346,24 +1506,36 @@ export default function App() {
         const appWindow = getCurrentWindow();
 
         unlistenClose = await appWindow.onCloseRequested(async (event) => {
+          event.preventDefault();
+
+          if (isClosingRef.current) return;
+          isClosingRef.current = true;
+
           const modifiedTabs = tabsRef.current.filter((t) => t.modified);
           if (modifiedTabs.length > 0) {
-            // Prevent the window from closing immediately
-            event.preventDefault();
 
+            // Save with a timeout — don't let a stuck save prevent closing
             try {
-              for (const tab of modifiedTabs) {
-                await writeFile(tab.path, tab.content);
-              }
+              const savePromises = modifiedTabs.map((tab) => writeFile(tab.path, tab.content));
+              await Promise.race([
+                Promise.allSettled(savePromises),
+                new Promise((resolve) => setTimeout(resolve, 3000)), // 3s timeout
+              ]);
               console.log(`[AutoSave] Saved ${modifiedTabs.length} file(s) on exit`);
             } catch (err) {
               console.error("[AutoSave] Failed to save on exit:", err);
             }
 
-            // Now actually close the window
+          }
+
+          // Ask the backend to exit so native cleanup runs even if webview close is blocked.
+          try {
+            const { invoke } = await import("@tauri-apps/api/core");
+            await invoke("request_app_exit");
+          } catch (err) {
+            console.error("[AutoSave] Backend exit failed; destroying window:", err);
             await appWindow.destroy();
           }
-          // If no modified tabs, window closes normally
         });
       } catch {
         // Not in Tauri environment (dev mode in browser) — use beforeunload
@@ -2109,13 +2281,12 @@ export default function App() {
       title: config.theme === "light" ? "Switch To Dark Theme" : "Switch To Light Theme",
       run: async () => {
         const nextType = config.theme === "light" ? "dark" : "light";
-        const nextTheme = nextType === "light"
-          ? BUILTIN_THEMES.find((theme) => theme.id === "github-light") || BUILTIN_THEMES[0]
-          : BUILTIN_THEMES[0];
+        const nextTheme = getDefaultTheme(nextType);
         const nextConfig = { ...config, theme: nextType };
         applyTheme(nextTheme);
         setConfig(nextConfig);
         await saveConfigToStore(nextConfig).catch(() => {});
+        await saveActiveThemeId(nextTheme.id).catch(() => {});
       },
     },
     {
@@ -2227,6 +2398,56 @@ export default function App() {
             {problems.length > 0 && <span className="toolbar-badge">{problems.length}</span>}
           </button>
           <span className="titlebar-sep" />
+          <div className="help-menu-root">
+            <button
+              className={`toolbar-btn ${showHelpMenu ? "active" : ""}`}
+              onClick={() => setShowHelpMenu((open) => !open)}
+              title="Help"
+              aria-label="Help"
+              aria-expanded={showHelpMenu}
+            >
+              <HelpCircle size={15} />
+            </button>
+            {showHelpMenu && (
+              <>
+                <div className="help-menu-backdrop" onClick={() => setShowHelpMenu(false)} />
+                <div className="help-menu">
+                  <button onClick={() => { setShowFeedback(true); setShowHelpMenu(false); }}>
+                    <MessageSquare size={14} />
+                    <span>Send Feedback</span>
+                  </button>
+                  <button onClick={() => { handleExportDiagnostics(undefined, true); setShowHelpMenu(false); }}>
+                    <Download size={14} />
+                    <span>Export Logs</span>
+                  </button>
+                  <button onClick={() => { handleGenerateDiagnostics(); setShowHelpMenu(false); }}>
+                    <FileText size={14} />
+                    <span>Generate Diagnostics</span>
+                  </button>
+                  <button onClick={() => { setShowShortcuts(true); setShowHelpMenu(false); }}>
+                    <Command size={14} />
+                    <span>Keyboard Shortcuts</span>
+                  </button>
+                  <button onClick={() => { handleCheckForUpdates(); setShowHelpMenu(false); }}>
+                    <RefreshCw size={14} />
+                    <span>Check for Updates</span>
+                  </button>
+                  <button onClick={() => { openDataFolder().catch((err) => showToast(`Failed to open data folder: ${err}`, "error")); setShowHelpMenu(false); }}>
+                    <FolderCog size={14} />
+                    <span>Open Data Folder</span>
+                  </button>
+                  <button onClick={() => { handleJoinDiscord(); setShowHelpMenu(false); }}>
+                    <ExternalLink size={14} />
+                    <span>Join Discord</span>
+                  </button>
+                  <button onClick={() => { setShowAbout(true); setShowHelpMenu(false); }}>
+                    <Info size={14} />
+                    <span>About</span>
+                  </button>
+                </div>
+              </>
+            )}
+          </div>
           <button className={`toolbar-btn ${zenMode ? "active" : ""}`} onClick={() => setZenMode(prev => !prev)} title="Zen Mode (F11)">{zenMode ? <Minimize2 size={15} /> : <Maximize2 size={15} />}</button>
         </div>
       </div>
@@ -2476,37 +2697,40 @@ export default function App() {
                   </div>
                   {!hasBottomPanel && <h2 className="welcome-title">Welcome to PunamIDE</h2>}
                   {!hasBottomPanel && <p>{projectPath ? "Open a file from the explorer to start editing" : "Open a project folder to get started"}</p>}
-                  <div className="welcome-shortcuts">
-                    <button className="welcome-shortcut-btn" onClick={handleOpenFolder}><FolderOpen size={16} /><span>Open Folder</span><kbd>Ctrl+O</kbd></button>
-                    <button className="welcome-shortcut-btn" onClick={() => { setShowTerminal(true); setBottomPanelActive("terminal"); }}><TerminalIcon size={16} /><span>New Terminal</span><kbd>Ctrl+`</kbd></button>
-                    <button className="welcome-shortcut-btn" onClick={() => setShowCommandPalette(true)}><Command size={16} /><span>Command Palette</span><kbd>Ctrl+Shift+P</kbd></button>
-                    {!hasBottomPanel && <button className="welcome-shortcut-btn" onClick={() => handleActivitySelect("search")}><Search size={16} /><span>Search Files</span><kbd>Ctrl+Shift+F</kbd></button>}
-                  </div>
-                  {!hasBottomPanel && recentProjects.length > 0 && (
-                    <div className="welcome-recent">
-                      <p className="welcome-recent-label">Recent</p>
-                      {recentProjects.slice(0, 5).map((p) => (
-                        <button
-                          key={p}
-                          className="welcome-recent-btn"
-                          onClick={async () => {
-                            await setProjectRoot(p);
-                            await saveRecentProjectPath(p);
-                            setProjectPath(p);
-                            setTabs([]);
-                            setActiveTab("");
-                            setProblems([]);
-                            setGitRefreshKey(k => k + 1);
-                          }}
-                          title={p}
-                        >
-                          <FolderOpen size={13} />
-                          <span className="welcome-recent-name">{p.split(/[\\/]/).pop()}</span>
-                          <span className="welcome-recent-path">{p}</span>
-                        </button>
-                      ))}
+                  <div className="welcome-workspace">
+                    <div className="welcome-shortcuts">
+                      <button className="welcome-shortcut-btn" onClick={handleOpenFolder}><FolderOpen size={15} /><span>Open Folder</span><kbd>Ctrl+O</kbd></button>
+                      <button className="welcome-shortcut-btn" onClick={() => { setShowTerminal(true); setBottomPanelActive("terminal"); }}><TerminalIcon size={15} /><span>New Terminal</span><kbd>Ctrl+`</kbd></button>
+                      <button className="welcome-shortcut-btn" onClick={() => setShowCommandPalette(true)}><Command size={15} /><span>Command Palette</span><kbd>Ctrl+Shift+P</kbd></button>
+                      {!hasBottomPanel && <button className="welcome-shortcut-btn" onClick={() => handleActivitySelect("search")}><Search size={15} /><span>Search Files</span><kbd>Ctrl+Shift+F</kbd></button>}
+                      {!hasBottomPanel && <button className="welcome-shortcut-btn" onClick={() => handleOpenExternal(PUNAM_WEBSITE_URL)}><Globe size={15} /><span>Documentation</span><kbd>Web</kbd></button>}
+                      {!hasBottomPanel && <button className="welcome-shortcut-btn" onClick={handleJoinDiscord}><ExternalLink size={15} /><span>Discord</span><kbd>Alpha</kbd></button>}
                     </div>
-                  )}
+                    {!hasBottomPanel && recentProjects.length > 0 && (
+                      <div className="welcome-recent">
+                        <p className="welcome-recent-label">Recent Projects</p>
+                        {recentProjects.slice(0, 4).map((p) => (
+                          <button
+                            key={p}
+                            className="welcome-recent-btn"
+                            onClick={async () => {
+                              await setProjectRoot(p);
+                              await saveRecentProjectPath(p);
+                              setProjectPath(p);
+                              setTabs([]);
+                              setActiveTab("");
+                              setProblems([]);
+                              setGitRefreshKey(k => k + 1);
+                            }}
+                            title={p}
+                          >
+                            <FolderOpen size={13} />
+                            <span className="welcome-recent-name">{p.split(/[\\/]/).pop()}</span>
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </div>
                 </div>
               )}
             </div>
@@ -2767,6 +2991,213 @@ export default function App() {
               onJumpToLine={(line) => setEditorLine(line)}
             />
           </Suspense>
+        </div>
+      )}
+
+      {showFeedback && (
+        <div className="alpha-modal-overlay" onClick={() => setShowFeedback(false)}>
+          <div className="alpha-modal" onClick={(event) => event.stopPropagation()}>
+            <div className="alpha-modal-header">
+              <div>
+                <h2>Send Feedback</h2>
+                <p>Tell us what happened. Diagnostics stay local until you copy or export them.</p>
+              </div>
+              <button className="toolbar-btn" onClick={() => setShowFeedback(false)} aria-label="Close feedback">
+                <X size={15} />
+              </button>
+            </div>
+            <textarea
+              className="alpha-textarea"
+              value={feedbackMessage}
+              onChange={(event) => setFeedbackMessage(event.target.value)}
+              placeholder="What happened? What were you trying to do?"
+            />
+            <label className="alpha-checkbox-row">
+              <input
+                type="checkbox"
+                checked={includeProjectPathInDiagnostics}
+                onChange={(event) => setIncludeProjectPathInDiagnostics(event.target.checked)}
+              />
+              <span>Include current project path in diagnostics</span>
+            </label>
+            <div className="alpha-modal-actions">
+              <button className="btn-secondary compact" onClick={() => handleCopyDiagnostics(feedbackMessage)} disabled={diagnosticsBusy}>
+                <Clipboard size={14} />
+                Copy Report
+              </button>
+              <button className="btn-secondary compact" onClick={() => handleExportDiagnostics(feedbackMessage)} disabled={diagnosticsBusy}>
+                <Download size={14} />
+                Export Report
+              </button>
+              <button className="btn-primary compact" onClick={handleJoinDiscord}>
+                <ExternalLink size={14} />
+                Discord
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showDiagnostics && (
+        <div className="alpha-modal-overlay" onClick={() => setShowDiagnostics(false)}>
+          <div className="alpha-modal alpha-modal-wide" onClick={(event) => event.stopPropagation()}>
+            <div className="alpha-modal-header">
+              <div>
+                <h2>Diagnostics</h2>
+                <p>Review before sharing. No source files are included.</p>
+              </div>
+              <button className="toolbar-btn" onClick={() => setShowDiagnostics(false)} aria-label="Close diagnostics">
+                <X size={15} />
+              </button>
+            </div>
+            <div className="alpha-diagnostics-grid">
+              {[
+                ["App version", systemDiagnostics?.app_version || PUNAM_VERSION],
+                ["Build", systemDiagnostics?.build_number || PUNAM_BUILD_NUMBER],
+                ["Release date", systemDiagnostics?.release_date || PUNAM_RELEASE_DATE],
+                ["Channel", systemDiagnostics?.release_channel || PUNAM_RELEASE_CHANNEL],
+                ["OS", systemDiagnostics ? `${systemDiagnostics.os} ${systemDiagnostics.os_version}` : "Loading..."],
+                ["CPU", systemDiagnostics ? `${systemDiagnostics.cpu} (${systemDiagnostics.logical_cpus} logical)` : "Loading..."],
+                ["RAM", systemDiagnostics ? `${systemDiagnostics.total_memory_mb} MB` : "Loading..."],
+                ["Tauri", systemDiagnostics?.tauri_version || "Loading..."],
+                ["Rust backend", systemDiagnostics?.rust_backend_version || "Loading..."],
+                ["Active provider", aiProviders.find((provider) => provider.apiKey || provider.name === "Ollama (Local)")?.name || config.provider || "Not configured"],
+                ["Log path", systemDiagnostics?.log_path || "Loading..."],
+              ].map(([label, value]) => (
+                <div className="alpha-diagnostics-item" key={label}>
+                  <span>{label}</span>
+                  <strong>{value}</strong>
+                </div>
+              ))}
+            </div>
+            <textarea className="alpha-report" value={diagnosticsReport} readOnly />
+            <div className="alpha-modal-actions">
+              <button className="btn-secondary compact" onClick={() => refreshSystemDiagnostics()} disabled={diagnosticsBusy}>
+                <RefreshCw size={14} />
+                Refresh
+              </button>
+              <button className="btn-secondary compact" onClick={() => handleCopyDiagnostics()} disabled={diagnosticsBusy}>
+                <Clipboard size={14} />
+                Copy Report
+              </button>
+              <button className="btn-secondary compact" onClick={handleCopySystemInfo} disabled={diagnosticsBusy}>
+                <Clipboard size={14} />
+                Copy System Info
+              </button>
+              <button className="btn-secondary compact" onClick={() => openLogsFolder().catch((err) => showToast(`Failed to open logs: ${err}`, "error"))}>
+                <FolderCog size={14} />
+                Open Logs Folder
+              </button>
+              <button className="btn-primary compact" onClick={() => handleExportDiagnostics()} disabled={diagnosticsBusy}>
+                <Download size={14} />
+                Export Diagnostics
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showAbout && (
+        <div className="alpha-modal-overlay" onClick={() => setShowAbout(false)}>
+          <div className="alpha-modal alpha-about" onClick={(event) => event.stopPropagation()}>
+            <div className="alpha-modal-header">
+              <div className="alpha-about-title">
+                <img src="/logo-Transparent.png" alt="PunamIDE" />
+                <div>
+                  <h2>PunamIDE {PUNAM_VERSION}</h2>
+                  <p>AI-Powered Desktop IDE built with Rust + Tauri</p>
+                </div>
+              </div>
+              <button className="toolbar-btn" onClick={() => setShowAbout(false)} aria-label="Close about">
+                <X size={15} />
+              </button>
+            </div>
+            <div className="alpha-diagnostics-grid">
+              <div className="alpha-diagnostics-item"><span>Build</span><strong>{PUNAM_BUILD_NUMBER}</strong></div>
+              <div className="alpha-diagnostics-item"><span>Release date</span><strong>{PUNAM_RELEASE_DATE}</strong></div>
+              <div className="alpha-diagnostics-item"><span>Channel</span><strong>{PUNAM_RELEASE_CHANNEL}</strong></div>
+              <div className="alpha-diagnostics-item"><span>License</span><strong>{PUNAM_LICENSE}</strong></div>
+            </div>
+            <div className="alpha-about-list">
+              {ALPHA_RELEASE_NOTES.map((note) => (
+                <div key={note}>{note}</div>
+              ))}
+            </div>
+            <div className="alpha-changelog">
+              {PUNAM_CHANGELOG.map((line, index) => (
+                <div key={`${line}-${index}`} className={index === 0 ? "alpha-changelog-title" : ""}>{line}</div>
+              ))}
+            </div>
+            <div className="alpha-modal-actions">
+              <button className="btn-secondary compact" onClick={() => handleOpenExternal(PUNAM_WEBSITE_URL)}>
+                <Globe size={14} />
+                Website
+              </button>
+              <button className="btn-secondary compact" onClick={() => handleOpenExternal(PUNAM_GITHUB_URL)}>
+                <ExternalLink size={14} />
+                GitHub
+              </button>
+              <button className="btn-secondary compact" onClick={() => handleGenerateDiagnostics()} disabled={diagnosticsBusy}>
+                <FileText size={14} />
+                Diagnostics
+              </button>
+              <button className="btn-secondary compact" onClick={handleCheckForUpdates}>
+                <RefreshCw size={14} />
+                Check for Updates
+              </button>
+              <button className="btn-primary compact" onClick={handleJoinDiscord}>
+                <ExternalLink size={14} />
+                Discord
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showFirstRunWelcome && (
+        <div className="alpha-modal-overlay" onClick={() => setShowFirstRunWelcome(false)}>
+          <div className="alpha-modal alpha-first-run" onClick={(event) => event.stopPropagation()}>
+            <div className="alpha-modal-header">
+              <div className="alpha-about-title">
+                <img src="/logo-Transparent.png" alt="PunamIDE" />
+                <div>
+                  <h2>Welcome to PunamIDE</h2>
+                  <p>Set up the essentials for your first alpha session.</p>
+                </div>
+              </div>
+              <button className="toolbar-btn" onClick={() => setShowFirstRunWelcome(false)} aria-label="Close welcome">
+                <X size={15} />
+              </button>
+            </div>
+            <div className="alpha-onboarding-steps">
+              <button onClick={() => { setShowSettings(true); setShowFirstRunWelcome(false); }}>
+                <span>1</span>
+                <strong>Choose AI Provider</strong>
+                <small>Gemini, OpenAI-compatible, Groq, OpenRouter, or local Ollama.</small>
+              </button>
+              <button onClick={() => { setShowSettings(true); setShowFirstRunWelcome(false); }}>
+                <span>2</span>
+                <strong>Configure API Key</strong>
+                <small>Keys stay in your local Punam settings store.</small>
+              </button>
+              <button onClick={() => { setShowSettings(true); setShowFirstRunWelcome(false); }}>
+                <span>3</span>
+                <strong>Select Theme</strong>
+                <small>Choose the editor look before settling in.</small>
+              </button>
+              <button onClick={() => { setShowFirstRunWelcome(false); handleOpenFolder(); }}>
+                <span>4</span>
+                <strong>Open Sample Project</strong>
+                <small>Pick a local folder to start exploring Punam.</small>
+              </button>
+            </div>
+            <div className="alpha-modal-actions">
+              <button className="btn-secondary compact" onClick={() => setShowFirstRunWelcome(false)}>Skip</button>
+              <button className="btn-primary compact" onClick={() => { setShowSettings(true); setShowFirstRunWelcome(false); }}>
+                Start Setup
+              </button>
+            </div>
+          </div>
         </div>
       )}
 

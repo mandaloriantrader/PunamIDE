@@ -8,6 +8,9 @@ use tokio::process::{Child as TokioChild, Command as TokioCommand};
 use tokio::sync::mpsc;
 use serde::{Deserialize, Serialize};
 
+#[cfg(target_os = "windows")]
+use std::os::windows::process::CommandExt;
+
 // ─── DAP Types ──────────────────────────────────────────────────────────────────
 
 /// We manually deserialize DapMessage based on the "type" field
@@ -212,12 +215,18 @@ pub async fn dap_start(
     app_handle: AppHandle,
     state: State<'_, DebuggerSessions>,
 ) -> Result<(), String> {
-    let mut child = TokioCommand::new(&adapter_command)
-        .args(&adapter_args)
+    let mut cmd = TokioCommand::new(&adapter_command);
+    cmd.args(&adapter_args)
         .current_dir(&cwd)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
+        .kill_on_drop(true);
+
+    #[cfg(target_os = "windows")]
+    cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
+
+    let mut child = cmd
         .spawn()
         .map_err(|e| format!("Failed to spawn debug adapter '{}': {}", adapter_command, e))?;
 
@@ -292,12 +301,18 @@ pub async fn dap_start_tcp(
     state: State<'_, DebuggerSessions>,
 ) -> Result<(), String> {
     // Spawn the adapter process (it will listen on host:port)
-    let mut child = TokioCommand::new(&adapter_command)
-        .args(&adapter_args)
+    let mut cmd = TokioCommand::new(&adapter_command);
+    cmd.args(&adapter_args)
         .current_dir(&cwd)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
+        .kill_on_drop(true);
+
+    #[cfg(target_os = "windows")]
+    cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
+
+    let mut child = cmd
         .spawn()
         .map_err(|e| format!("Failed to spawn debug adapter '{}': {}", adapter_command, e))?;
 

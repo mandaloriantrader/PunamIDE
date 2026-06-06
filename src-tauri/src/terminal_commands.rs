@@ -263,9 +263,16 @@ pub async fn run_terminal_command(command: String, cwd: String) -> Result<CmdRes
     let result = tokio::task::spawn_blocking(move || {
         let (shell, args) = command_shell(&command);
 
-        let output = Command::new(shell)
-            .args(args)
-            .current_dir(&cwd)
+        let mut cmd = Command::new(shell);
+        cmd.args(args).current_dir(&cwd);
+
+        #[cfg(target_os = "windows")]
+        {
+            use std::os::windows::process::CommandExt;
+            cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
+        }
+
+        let output = cmd
             .output()
             .map_err(|e| format!("Failed to execute: {}", e))?;
 

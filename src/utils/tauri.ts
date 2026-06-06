@@ -621,6 +621,44 @@ export const gitLog = (count: number) =>
 export const gitBranch = () =>
   invoke<string>("git_branch");
 
+// Alpha diagnostics / feedback
+export const generateDiagnosticsReport = (
+  includeProjectPath: boolean,
+  userMessage?: string,
+) =>
+  invoke<string>("generate_diagnostics_report", {
+    includeProjectPath,
+    userMessage,
+  });
+
+export const exportDiagnosticsReport = (path: string, report: string) =>
+  invoke<void>("export_diagnostics_report", { path, report });
+
+export interface SystemDiagnostics {
+  app_version: string;
+  build_number: string;
+  release_date: string;
+  release_channel: string;
+  os: string;
+  os_version: string;
+  cpu: string;
+  logical_cpus: number;
+  total_memory_mb: number;
+  tauri_version: string;
+  rust_backend_version: string;
+  log_path: string;
+  data_path: string;
+}
+
+export const getSystemDiagnostics = () =>
+  invoke<SystemDiagnostics>("get_system_diagnostics");
+
+export const openLogsFolder = () =>
+  invoke<void>("open_logs_folder");
+
+export const openDataFolder = () =>
+  invoke<void>("open_data_folder");
+
 // ─── (Rust fuzzy edit and codebase index wrappers removed — JS implementations used instead) ───
 
 

@@ -36,6 +36,9 @@ import {
 } from "../services/security/VulnerabilityDatabase";
 import { invoke } from "@tauri-apps/api/core";
 
+const SECURITY_SCAN_FILE_LIMIT = 50;
+const SECURITY_SCAN_DEPTH_LIMIT = 4;
+
 // ── Styles ────────────────────────────────────────────────────────────────────
 
 const PANEL_STYLE: React.CSSProperties = {
@@ -102,6 +105,13 @@ export default function SecurityPanel({ projectPath }: { projectPath?: string })
   const [analyzer] = useState(() => new ThreatAnalyzer());
   const [findings, setFindings] = useState<SecurityFinding[]>(() => db.getCurrentFindings());
   const [summary, setSummary] = useState<ThreatSummary | null>(null);
+  const [scanStats, setScanStats] = useState({
+    filesScanned: 0,
+    filesDiscovered: 0,
+    capped: false,
+    skippedFiles: 0,
+    lastScanAt: 0,
+  });
   const [scanning, setScanning] = useState(false);
   const [health, setHealth] = useState<"critical" | "warning" | "good">("good");
   const [showAll, setShowAll] = useState(false);
@@ -124,21 +134,26 @@ export default function SecurityPanel({ projectPath }: { projectPath?: string })
     setScanning(true);
     try {
       const allFindings: SecurityFinding[] = [];
+      let scannedFiles: string[] = [];
 
       if (projectPath) {
         // Get list of source files to scan via Tauri
         const { readDir } = await import("@tauri-apps/plugin-fs");
-        const entries = await readDir(projectPath).catch(() => []);
 
         // Collect scannable source files (recursive, limited to common extensions)
         const scanExtensions = new Set(["ts", "tsx", "js", "jsx", "py", "rs", "go", "java", "rb", "php", "html", "sql"]);
         const filesToScan: string[] = [];
+        let capped = false;
 
         const collectFiles = async (dirPath: string, depth = 0) => {
-          if (depth > 4 || filesToScan.length > 50) return;
+          if (depth > SECURITY_SCAN_DEPTH_LIMIT) return;
           try {
             const items = await readDir(dirPath).catch(() => []);
             for (const item of items) {
+              if (filesToScan.length >= SECURITY_SCAN_FILE_LIMIT) {
+                capped = true;
+                return;
+              }
               const fullPath = `${dirPath}${dirPath.endsWith("\\") || dirPath.endsWith("/") ? "" : "\\"}${item.name}`;
               if (item.isDirectory) {
                 // Skip node_modules, .git, dist, build, target
@@ -155,9 +170,11 @@ export default function SecurityPanel({ projectPath }: { projectPath?: string })
         };
 
         await collectFiles(projectPath);
+        const scanTargets = filesToScan.slice(0, SECURITY_SCAN_FILE_LIMIT);
+        scannedFiles = scanTargets;
 
         // Scan each file via Rust security scanner
-        for (const filePath of filesToScan.slice(0, 50)) {
+        for (const filePath of scanTargets) {
           try {
             const result = await invoke<{
               file_path: string;
@@ -168,12 +185,28 @@ export default function SecurityPanel({ projectPath }: { projectPath?: string })
             }
           } catch { /* skip files that fail to scan */ }
         }
+
+        setScanStats({
+          filesScanned: scanTargets.length,
+          filesDiscovered: filesToScan.length,
+          capped,
+          skippedFiles: Math.max(0, filesToScan.length - scanTargets.length),
+          lastScanAt: Date.now(),
+        });
+      } else {
+        setScanStats({
+          filesScanned: 0,
+          filesDiscovered: 0,
+          capped: false,
+          skippedFiles: 0,
+          lastScanAt: Date.now(),
+        });
       }
 
       db.addScan({
         id: `scan-${Date.now()}`,
         timestamp: Date.now(),
-        filesScanned: [],
+        filesScanned: scannedFiles,
         findings: allFindings,
         trendPoint: analyzer.createTrendPoint(allFindings),
       });
@@ -192,6 +225,7 @@ export default function SecurityPanel({ projectPath }: { projectPath?: string })
       : findings.filter((f) => f.severity === activeFilter);
 
   const displayedFindings = showAll ? filteredFindings : filteredFindings.slice(0, 20);
+  const hasRunScan = scanStats.lastScanAt > 0;
 
   // ── Render Helpers ───────────────────────────────────────────────────────
 
@@ -302,6 +336,13 @@ export default function SecurityPanel({ projectPath }: { projectPath?: string })
             </>
           )}
         </button>
+        {hasRunScan && (
+          <span style={{ alignSelf: "center", fontSize: "10px", color: "var(--text-secondary, #a0a0b0)" }}>
+            Scanned {scanStats.filesScanned} file{scanStats.filesScanned === 1 ? "" : "s"}
+            {scanStats.capped ? ` · capped at ${SECURITY_SCAN_FILE_LIMIT}` : ""}
+            {scanStats.lastScanAt ? ` · ${new Date(scanStats.lastScanAt).toLocaleTimeString()}` : ""}
+          </span>
+        )}
         {activeFilter !== "all" && (
           <button
             onClick={() => setActiveFilter("all")}
@@ -333,7 +374,7 @@ export default function SecurityPanel({ projectPath }: { projectPath?: string })
       {!scanning && findings.length > 0 && (
         <>
           <div style={{ padding: "8px 16px", fontSize: "11px", color: "var(--text-secondary, #a0a0b0)", flexShrink: 0 }}>
-            {findings.length} finding(s) across {summary?.byFile ? Object.keys(summary.byFile).length : 0} file(s)
+            {findings.length} finding(s) across {summary?.byFile ? Object.keys(summary.byFile).length : 0} file(s) · scanned {scanStats.filesScanned} file{scanStats.filesScanned === 1 ? "" : "s"}
           </div>
 
           {displayedFindings.map((f, i) => (
@@ -464,10 +505,19 @@ export default function SecurityPanel({ projectPath }: { projectPath?: string })
       {!scanning && findings.length === 0 && (
         <div style={{ padding: "32px 16px", textAlign: "center", color: "var(--text-secondary, #a0a0b0)" }}>
           <ShieldCheck size={32} style={{ marginBottom: "8px", opacity: 0.5 }} />
-          <div style={{ fontSize: "12px" }}>No vulnerabilities detected</div>
-          <div style={{ fontSize: "10px", marginTop: "4px", opacity: 0.7 }}>
-            Run a scan to check the project for security issues
+          <div style={{ fontSize: "12px" }}>
+            {hasRunScan ? "No matching security patterns found" : "No scan run yet"}
           </div>
+          <div style={{ fontSize: "10px", marginTop: "4px", opacity: 0.7 }}>
+            {hasRunScan
+              ? `Scanned ${scanStats.filesScanned} source file${scanStats.filesScanned === 1 ? "" : "s"}. This alpha scan checks known risky code patterns, not every possible vulnerability.`
+              : "Run a scan to check the project for known risky code patterns."}
+          </div>
+          {hasRunScan && scanStats.capped && (
+            <div style={{ fontSize: "10px", marginTop: "8px", color: "#fbbf24", lineHeight: 1.4 }}>
+              Scan limit reached. First {SECURITY_SCAN_FILE_LIMIT} source files were checked; deeper files may not be covered yet.
+            </div>
+          )}
         </div>
       )}
 
@@ -479,7 +529,7 @@ export default function SecurityPanel({ projectPath }: { projectPath?: string })
         color: "var(--text-secondary, #a0a0b0)",
         marginTop: "auto",
       }}>
-        Security scanner validates AI-generated patches before apply. Critical findings block patches.
+        Alpha security scan: source pattern checks only. Critical findings block AI patch apply.
       </div>
     </div>
   );

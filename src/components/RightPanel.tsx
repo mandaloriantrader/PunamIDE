@@ -313,7 +313,7 @@ export default function RightPanel(props: RightPanelProps) {
         {activeTab === "debt" && (
           <PanelErrorBoundary fallbackLabel="Technical Debt">
             <Suspense fallback={null}>
-              <TechnicalDebtDashboard projectPath={props.projectPath} />
+              <TechnicalDebtDashboard projectPath={props.projectPath} files={props.files} />
             </Suspense>
           </PanelErrorBoundary>
         )}

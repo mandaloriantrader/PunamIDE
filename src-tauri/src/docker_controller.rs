@@ -8,6 +8,9 @@
 use serde::{Deserialize, Serialize};
 use std::process::Command;
 
+#[cfg(target_os = "windows")]
+use std::os::windows::process::CommandExt;
+
 // ── Data Types ─────────────────────────────────────────────────────────────────
 
 #[derive(Serialize, Debug)]
@@ -37,8 +40,12 @@ pub fn docker_list_containers(all: bool) -> Result<Vec<DockerContainerInfo>, Str
     let mut args = vec!["ps".to_string(), "--format".to_string(), "{{.ID}}\t{{.Names}}\t{{.Image}}\t{{.Status}}\t{{.Ports}}".to_string()];
     if all { args.push("-a".to_string()); }
 
-    let output = Command::new("docker")
-        .args(&args)
+    let mut cmd = Command::new("docker");
+    cmd.args(&args);
+    #[cfg(target_os = "windows")]
+    cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
+
+    let output = cmd
         .output()
         .map_err(|e| format!("Failed to run docker ps: {}. Is Docker installed?", e))?;
 
@@ -64,8 +71,12 @@ pub fn docker_list_containers(all: bool) -> Result<Vec<DockerContainerInfo>, Str
 /// Start a container.
 #[tauri::command]
 pub fn docker_start(container: String) -> Result<DockerResult, String> {
-    let output = Command::new("docker")
-        .args(["start", &container])
+    let mut cmd = Command::new("docker");
+    cmd.args(["start", &container]);
+    #[cfg(target_os = "windows")]
+    cmd.creation_flags(0x08000000);
+
+    let output = cmd
         .output()
         .map_err(|e| format!("Failed to run docker start: {}", e))?;
 
@@ -82,8 +93,12 @@ pub fn docker_start(container: String) -> Result<DockerResult, String> {
 /// Stop a container.
 #[tauri::command]
 pub fn docker_stop(container: String) -> Result<DockerResult, String> {
-    let output = Command::new("docker")
-        .args(["stop", &container])
+    let mut cmd = Command::new("docker");
+    cmd.args(["stop", &container]);
+    #[cfg(target_os = "windows")]
+    cmd.creation_flags(0x08000000);
+
+    let output = cmd
         .output()
         .map_err(|e| format!("Failed to run docker stop: {}", e))?;
 
@@ -107,8 +122,12 @@ pub fn docker_logs(container: String, tail: Option<usize>) -> Result<DockerResul
     }
     args.push(container.clone());
 
-    let output = Command::new("docker")
-        .args(&args)
+    let mut cmd = Command::new("docker");
+    cmd.args(&args);
+    #[cfg(target_os = "windows")]
+    cmd.creation_flags(0x08000000);
+
+    let output = cmd
         .output()
         .map_err(|e| format!("Failed to run docker logs: {}", e))?;
 
@@ -128,8 +147,12 @@ pub fn docker_exec(container: String, command: Vec<String>) -> Result<DockerResu
     let mut args = vec!["exec".to_string(), container.clone()];
     args.extend(command);
 
-    let output = Command::new("docker")
-        .args(&args)
+    let mut cmd = Command::new("docker");
+    cmd.args(&args);
+    #[cfg(target_os = "windows")]
+    cmd.creation_flags(0x08000000);
+
+    let output = cmd
         .output()
         .map_err(|e| format!("Failed to run docker exec: {}", e))?;
 
@@ -150,8 +173,12 @@ pub fn docker_remove_container(container: String, force: bool) -> Result<DockerR
     if force { args.push("-f".to_string()); }
     args.push(container.clone());
 
-    let output = Command::new("docker")
-        .args(&args)
+    let mut cmd = Command::new("docker");
+    cmd.args(&args);
+    #[cfg(target_os = "windows")]
+    cmd.creation_flags(0x08000000);
+
+    let output = cmd
         .output()
         .map_err(|e| format!("Failed to run docker rm: {}", e))?;
 
@@ -168,9 +195,12 @@ pub fn docker_remove_container(container: String, force: bool) -> Result<DockerR
 /// Check if Docker is available.
 #[tauri::command]
 pub fn docker_available() -> bool {
-    Command::new("docker")
-        .arg("--version")
-        .output()
+    let mut cmd = Command::new("docker");
+    cmd.arg("--version");
+    #[cfg(target_os = "windows")]
+    cmd.creation_flags(0x08000000);
+
+    cmd.output()
         .map(|o| o.status.success())
         .unwrap_or(false)
 }

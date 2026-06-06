@@ -5,13 +5,25 @@ import { Save, Plus, Trash2, CheckCircle, XCircle, Loader2, Upload, Download, Fi
 import type { AIProviderConfig, ModelConfig } from "../utils/providers";
 import { PROVIDER_PRESETS, testConnection } from "../utils/providers";
 import { showToast } from "../utils/toast";
-import { BUILTIN_THEMES, applyTheme, importTheme, exportTheme, getThemeById } from "../utils/themes";
+import { BUILTIN_THEMES, applyTheme, importTheme, exportTheme, getThemeById, getDefaultTheme } from "../utils/themes";
 import type { ThemeDefinition } from "../utils/themes";
 import type { MCPServerConfig } from "../utils/mcp";
 import McpSettings from "./McpSettings";
 import { AdaptiveModeSettings } from "./settings/AdaptiveModeSettings";
 import type { AdaptiveStrategy } from "../lib/ai/providerCapabilities";
 import ArchitectureRulesEditor from "./settings/ArchitectureRulesEditor";
+import { open as openExternal } from "@tauri-apps/plugin-shell";
+import {
+  PUNAM_BUILD_NUMBER,
+  PUNAM_CHANGELOG,
+  PUNAM_DISCORD_URL,
+  PUNAM_GITHUB_URL,
+  PUNAM_LICENSE,
+  PUNAM_RELEASE_CHANNEL,
+  PUNAM_RELEASE_DATE,
+  PUNAM_VERSION,
+  PUNAM_WEBSITE_URL,
+} from "../config/alpha";
 
 interface Props {
   config: AppConfig;
@@ -42,7 +54,7 @@ export default function Settings({ config, onConfigChange, onClose, onProvidersC
   const [providers, setProviders] = useState<AIProviderConfig[]>([]);
   const [mcpServers, setMcpServers] = useState<MCPServerConfig[]>([]);
   const [saved, setSaved] = useState(false);
-  const [activeSection, setActiveSection] = useState<"theme" | "providers" | "mcp" | "architecture">("providers");
+  const [activeSection, setActiveSection] = useState<"theme" | "providers" | "mcp" | "architecture" | "about">("providers");
   const [showAddProvider, setShowAddProvider] = useState(false);
   const [expandedProviderId, setExpandedProviderId] = useState<string | null>(null);
   const [testingId, setTestingId] = useState<string | null>(null);
@@ -80,7 +92,7 @@ export default function Settings({ config, onConfigChange, onClose, onProvidersC
     loadCustomThemes().then(setCustomThemes);
     loadActiveThemeId().then((id) => {
       if (id) setActiveThemeId(id);
-      else setActiveThemeId(config.theme === "light" ? "github-light" : "catppuccin-mocha");
+      else setActiveThemeId(getDefaultTheme(config.theme === "light" ? "light" : "dark").id);
     });
     // Load MCP servers
     loadMcpServers().then(setMcpServers);
@@ -212,7 +224,7 @@ export default function Settings({ config, onConfigChange, onClose, onProvidersC
     saveCustomThemes(updated);
     if (activeThemeId === themeId) {
       // Reset to default
-      const defaultTheme = BUILTIN_THEMES[0];
+      const defaultTheme = getDefaultTheme("dark", updated);
       handleSelectTheme(defaultTheme);
     }
   };
@@ -256,6 +268,12 @@ export default function Settings({ config, onConfigChange, onClose, onProvidersC
             onClick={() => setActiveSection("theme")}
           >
             Themes & Editor
+          </button>
+          <button
+            className={`settings-tab ${activeSection === "about" ? "active" : ""}`}
+            onClick={() => setActiveSection("about")}
+          >
+            About
           </button>
         </div>
 
@@ -547,6 +565,35 @@ export default function Settings({ config, onConfigChange, onClose, onProvidersC
                 aria-label="Toggle inline code completion"
               >
                 <span className="settings-toggle-knob" />
+              </button>
+            </div>
+          </div>
+        )}
+
+        {activeSection === "about" && (
+          <div className="settings-section">
+            <h3>PunamIDE {PUNAM_VERSION}</h3>
+            <div className="settings-about-grid">
+              <div><span>Build</span><strong>{PUNAM_BUILD_NUMBER}</strong></div>
+              <div><span>Release date</span><strong>{PUNAM_RELEASE_DATE}</strong></div>
+              <div><span>Channel</span><strong>{PUNAM_RELEASE_CHANNEL}</strong></div>
+              <div><span>License</span><strong>{PUNAM_LICENSE}</strong></div>
+            </div>
+            <h3>Changelog</h3>
+            <div className="settings-about-list">
+              {PUNAM_CHANGELOG.map((line, index) => (
+                <div key={`${line}-${index}`} className={index === 0 ? "settings-about-version" : ""}>{line}</div>
+              ))}
+            </div>
+            <div className="settings-provider-actions">
+              <button className="btn-secondary compact" onClick={() => openExternal(PUNAM_WEBSITE_URL).catch((err) => showToast(`Failed to open website: ${err}`, "error"))}>
+                Website
+              </button>
+              <button className="btn-secondary compact" onClick={() => openExternal(PUNAM_DISCORD_URL).catch((err) => showToast(`Failed to open Discord: ${err}`, "error"))}>
+                Discord
+              </button>
+              <button className="btn-secondary compact" onClick={() => openExternal(PUNAM_GITHUB_URL).catch((err) => showToast(`Failed to open GitHub: ${err}`, "error"))}>
+                GitHub
               </button>
             </div>
           </div>

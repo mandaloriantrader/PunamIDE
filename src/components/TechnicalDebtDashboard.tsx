@@ -50,6 +50,7 @@ import { classifyComplexity, classifyNesting } from "../services/technicalDebt/D
 import type { RefactorPlan, RefactorPlanItem } from "../services/technicalDebt/RefactorPlanner";
 import type { CycleDetectionResult }           from "../services/technicalDebt/CircularDepDetector";
 import type { CouplingAnalysis }               from "../services/technicalDebt/CouplingAnalyzer";
+import type { FileEntry } from "../utils/tauri";
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -152,46 +153,62 @@ const ROW: React.CSSProperties = {
 // ── File discovery ─────────────────────────────────────────────────────────────
 
 const SOURCE_EXT = new Set(["ts", "tsx", "js", "jsx", "py", "rs", "go", "java", "cs"]);
-const SKIP_DIRS  = /^(node_modules|\.git|dist|build|target|\.next|\.turbo|coverage|out)$/i;
 
-async function scanWorkspace(
-  projectPath: string,
-  maxFiles: number,
-): Promise<{ paths: string[]; discovered: number }> {
-  const { readDir } = await import("@tauri-apps/plugin-fs");
+function collectSourcePathsFromTree(entries: FileEntry[]): { paths: string[]; discovered: number } {
   const paths: string[] = [];
   let discovered = 0;
 
-  async function recurse(dir: string): Promise<void> {
-    if (maxFiles > 0 && paths.length >= maxFiles) return;
-    let items;
-    try {
-      items = await readDir(dir);
-    } catch {
-      return;
-    }
-
-    for (const item of items) {
-      if (maxFiles > 0 && paths.length >= maxFiles) break;
-
-      const fullPath = `${dir}/${item.name}`;
-
-      if (item.isDirectory) {
-        if (!SKIP_DIRS.test(item.name)) {
-          await recurse(fullPath);
-        }
-      } else {
-        discovered++;
-        const ext = item.name.split(".").pop()?.toLowerCase() ?? "";
-        if (SOURCE_EXT.has(ext)) {
-          paths.push(fullPath);
-        }
+  function walk(items: FileEntry[]) {
+    for (const entry of items) {
+      discovered++;
+      if (entry.is_dir) {
+        if (entry.children) walk(entry.children);
+        continue;
+      }
+      const ext = entry.name.split(".").pop()?.toLowerCase() || "";
+      if (SOURCE_EXT.has(ext)) {
+        paths.push(entry.path);
       }
     }
   }
 
-  await recurse(projectPath);
+  walk(entries);
   return { paths, discovered };
+}
+
+async function scanWorkspace(
+  projectPath: string,
+  maxFiles: number,
+  explorerFiles: FileEntry[] = [],
+): Promise<{ paths: string[]; discovered: number }> {
+  const explorerScan = collectSourcePathsFromTree(explorerFiles);
+  if (explorerScan.paths.length > 0) {
+    return {
+      paths: explorerScan.paths.slice(0, maxFiles > 0 ? maxFiles : undefined),
+      discovered: explorerScan.discovered,
+    };
+  }
+
+  const { refreshProjectIndex, readDirectory } = await import("../utils/tauri");
+  const separator = projectPath.includes("\\") ? "\\" : "/";
+  const root = projectPath.replace(/[\\/]+$/, "");
+
+  const entries = await refreshProjectIndex();
+  const sourcePaths = entries
+    .filter((entry) => !entry.is_binary && SOURCE_EXT.has(entry.extension.toLowerCase()))
+    .map((entry) => `${root}${separator}${entry.path.replace(/^[\\/]+/, "").replace(/[\\/]/g, separator)}`)
+    .slice(0, maxFiles > 0 ? maxFiles : undefined);
+
+  if (sourcePaths.length > 0) {
+    return { paths: sourcePaths, discovered: entries.length };
+  }
+
+  const tree = await readDirectory(projectPath).catch(() => []);
+  const treeScan = collectSourcePathsFromTree(tree);
+  return {
+    paths: treeScan.paths.slice(0, maxFiles > 0 ? maxFiles : undefined),
+    discovered: Math.max(entries.length, treeScan.discovered),
+  };
 }
 
 // ── Import map builder (Phase 4) ──────────────────────────────────────────────
@@ -234,11 +251,13 @@ async function buildImportMaps(
 interface Props {
   projectPath?: string;
   maxFiles?: number;
+  files?: FileEntry[];
 }
 
 export default function TechnicalDebtDashboard({
   projectPath,
   maxFiles = MAX_FILES_DEFAULT,
+  files = [],
 }: Props) {
   const [filePaths, setFilePaths]         = useState<string[]>([]);
   const [totalDiscovered, setTotalDiscovered] = useState(0);
@@ -263,14 +282,14 @@ export default function TechnicalDebtDashboard({
   useEffect(() => {
     if (!projectPath) return;
     setScanning(true);
-    scanWorkspace(projectPath, maxFiles)
+    scanWorkspace(projectPath, maxFiles, files)
       .then(({ paths, discovered }) => {
         setFilePaths(paths);
         setTotalDiscovered(discovered);
       })
       .catch(() => {})
       .finally(() => setScanning(false));
-  }, [projectPath, maxFiles]);
+  }, [projectPath, maxFiles, files]);
 
   const handleAnalyze = useCallback(async () => {
     if (!filePaths.length) return;

@@ -11,6 +11,9 @@ use std::process::Command;
 use std::path::PathBuf;
 use std::collections::HashMap;
 
+#[cfg(target_os = "windows")]
+use std::os::windows::process::CommandExt;
+
 // ── Data Types ─────────────────────────────────────────────────────────────────
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -119,8 +122,13 @@ fn find_executable(cmd: &str) -> Option<PathBuf> {
 
 /// Run --version and capture stdout.
 fn get_version(exe_path: &PathBuf, version_args: &[&str]) -> Result<String, String> {
-    let output = Command::new(exe_path)
-        .args(version_args)
+    let mut cmd = Command::new(exe_path);
+    cmd.args(version_args);
+
+    #[cfg(target_os = "windows")]
+    cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
+
+    let output = cmd
         .output()
         .map_err(|e| format!("Failed to run: {}", e))?;
 

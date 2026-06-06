@@ -9,6 +9,9 @@ use serde::{Deserialize, Serialize};
 use std::process::Command;
 use std::path::PathBuf;
 
+#[cfg(target_os = "windows")]
+use std::os::windows::process::CommandExt;
+
 // ── Data Types ─────────────────────────────────────────────────────────────────
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -181,9 +184,12 @@ pub fn package_install(
 
     let args = pm.install_args(&packages);
 
-    let output = Command::new(pm.cmd())
-        .args(&args)
-        .current_dir(&cwd)
+    let mut cmd = Command::new(pm.cmd());
+    cmd.args(&args).current_dir(&cwd);
+    #[cfg(target_os = "windows")]
+    cmd.creation_flags(0x08000000);
+
+    let output = cmd
         .output()
         .map_err(|e| format!("Failed to run {}: {}", pm.cmd(), e))?;
 
@@ -215,9 +221,12 @@ pub fn package_remove(
 
     let args = pm.remove_args(&packages);
 
-    let output = Command::new(pm.cmd())
-        .args(&args)
-        .current_dir(&cwd)
+    let mut cmd = Command::new(pm.cmd());
+    cmd.args(&args).current_dir(&cwd);
+    #[cfg(target_os = "windows")]
+    cmd.creation_flags(0x08000000);
+
+    let output = cmd
         .output()
         .map_err(|e| format!("Failed to run {}: {}", pm.cmd(), e))?;
 
@@ -249,9 +258,12 @@ pub fn package_update(
 
     let args = pm.update_args(&packages);
 
-    let output = Command::new(pm.cmd())
-        .args(&args)
-        .current_dir(&cwd)
+    let mut cmd = Command::new(pm.cmd());
+    cmd.args(&args).current_dir(&cwd);
+    #[cfg(target_os = "windows")]
+    cmd.creation_flags(0x08000000);
+
+    let output = cmd
         .output()
         .map_err(|e| format!("Failed to run {}: {}", pm.cmd(), e))?;
 
@@ -287,11 +299,14 @@ pub fn package_audit(
         _ => return Err(format!("Audit not supported for: {}", manager)),
     };
 
-    let output = Command::new(cmd)
-        .args(&args)
-        .current_dir(&cwd)
-        .output()
-        .map_err(|e| format!("Failed to run audit: {}", e))?;
+    let output = {
+        let mut cmd = Command::new(cmd);
+        cmd.args(&args).current_dir(&cwd);
+        #[cfg(target_os = "windows")]
+        cmd.creation_flags(0x08000000);
+        cmd.output()
+            .map_err(|e| format!("Failed to run audit: {}", e))?
+    };
 
     Ok(PackageOperationResult {
         success: output.status.success(),

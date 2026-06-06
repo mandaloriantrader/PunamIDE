@@ -36,6 +36,7 @@ regex-lite = "0.1"
 dirs = "5"
 walkdir = "2"
 zip = { version = "2.1", default-features = false, features = ["deflate"] }
+sysinfo = "0.30"
 
 [dev-dependencies]
 tempfile = "3"

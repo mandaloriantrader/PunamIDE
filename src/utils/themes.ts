@@ -39,6 +39,9 @@ export interface ThemeColors {
   scrollbarTrack: string;
 }
 
+export const DEFAULT_DARK_THEME_ID = "nord";
+export const DEFAULT_LIGHT_THEME_ID = "github-light";
+
 // --- Built-in Themes ---
 
 export const BUILTIN_THEMES: ThemeDefinition[] = [
@@ -561,4 +564,10 @@ export function importTheme(json: string): ThemeDefinition | null {
 /** Get a theme by ID (built-in or custom) */
 export function getThemeById(id: string, customThemes: ThemeDefinition[] = []): ThemeDefinition | undefined {
   return BUILTIN_THEMES.find((t) => t.id === id) || customThemes.find((t) => t.id === id);
+}
+
+/** Get the product default theme for the requested mode. */
+export function getDefaultTheme(type: "dark" | "light" = "dark", customThemes: ThemeDefinition[] = []): ThemeDefinition {
+  const defaultId = type === "light" ? DEFAULT_LIGHT_THEME_ID : DEFAULT_DARK_THEME_ID;
+  return getThemeById(defaultId, customThemes) || BUILTIN_THEMES.find((theme) => theme.type === type) || BUILTIN_THEMES[0];
 }
