@@ -57,7 +57,14 @@ fn get_db_path() -> std::path::PathBuf {
 }
 
 fn get_conn() -> Result<Connection, String> {
-    Connection::open(&get_db_path()).map_err(|e| format!("DB error: {}", e))
+    let conn = Connection::open(&get_db_path()).map_err(|e| format!("DB error: {}", e))?;
+    conn.execute_batch(
+        "PRAGMA journal_mode=WAL;
+         PRAGMA synchronous=NORMAL;
+         PRAGMA busy_timeout=5000;
+         PRAGMA foreign_keys=ON;"
+    ).map_err(|e| format!("DB pragma error: {}", e))?;
+    Ok(conn)
 }
 
 /// Initialize memory tables and FTS5 indexes.

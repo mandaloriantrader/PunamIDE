@@ -282,7 +282,11 @@ async fn call_gemini(req: &LlmRequest) -> Result<String, String> {
         }
     });
 
-    let client = reqwest::Client::new();
+    let client = reqwest::Client::builder()
+        .connect_timeout(Duration::from_secs(10))
+        .timeout(Duration::from_secs(120))
+        .build()
+        .map_err(|e| format!("Failed to build HTTP client: {}", e))?;
     let resp = client
         .post(&url)
         .json(&body)
@@ -347,7 +351,11 @@ async fn call_gemini_stream(
         }
     });
 
-    let client = reqwest::Client::new();
+    let client = reqwest::Client::builder()
+        .connect_timeout(Duration::from_secs(10))
+        .timeout(Duration::from_secs(120))
+        .build()
+        .map_err(|e| format!("Failed to build HTTP client: {}", e))?;
     let resp = match client.post(&url).json(&body).send().await {
         Ok(r) => r,
         Err(e) => {
@@ -543,7 +551,11 @@ async fn call_openai_compatible_stream(
         "stream": true
     });
 
-    let client = reqwest::Client::new();
+    let client = reqwest::Client::builder()
+        .connect_timeout(Duration::from_secs(10))
+        .timeout(Duration::from_secs(120))
+        .build()
+        .map_err(|e| format!("Failed to build HTTP client: {}", e))?;
     let mut req_builder = client
         .post(&url)
         .header("Content-Type", "application/json");
@@ -686,7 +698,11 @@ async fn call_openai_compatible_cmd(
         "max_tokens": 16384
     });
 
-    let client = reqwest::Client::new();
+    let client = reqwest::Client::builder()
+        .connect_timeout(Duration::from_secs(10))
+        .timeout(Duration::from_secs(120))
+        .build()
+        .map_err(|e| format!("Failed to build HTTP client: {}", e))?;
     let mut req_builder = client
         .post(&url)
         .header("Content-Type", "application/json");
@@ -834,14 +850,8 @@ fn watch_project(
         return Err(format!("Not a directory: {}", path));
     }
 
-    // Stop existing watcher if any
-    {
-        let mut handle = state.0.lock().map_err(|_| "Lock error".to_string())?;
-        *handle = None;
-    }
-
     let app_clone = app.clone();
-    let debouncer = new_debouncer(
+    let mut debouncer = new_debouncer(
         Duration::from_millis(500),
         move |result: Result<Vec<notify_debouncer_mini::DebouncedEvent>, notify::Error>| {
             if let Ok(events) = result {
@@ -879,22 +889,17 @@ fn watch_project(
     )
     .map_err(|e| format!("Failed to create watcher: {}", e))?;
 
-    // Start watching
-    let watcher = debouncer;
+    // Atomically replace old watcher with new one under a single lock
     {
         let mut handle = state.0.lock().map_err(|_| "Lock error".to_string())?;
-        *handle = Some(watcher);
-    }
-
-    // Add the path to watch
-    {
-        let mut handle = state.0.lock().map_err(|_| "Lock error".to_string())?;
-        if let Some(ref mut debouncer) = *handle {
-            debouncer
-                .watcher()
-                .watch(watch_path, notify::RecursiveMode::Recursive)
-                .map_err(|e| format!("Failed to watch path: {}", e))?;
-        }
+        // Set to None first to drop the old watcher cleanly
+        *handle = None;
+        // Add the path to watch on the new watcher before storing it
+        debouncer
+            .watcher()
+            .watch(watch_path, notify::RecursiveMode::Recursive)
+            .map_err(|e| format!("Failed to watch path: {}", e))?;
+        *handle = Some(debouncer);
     }
 
     Ok(())
@@ -1294,7 +1299,14 @@ fn get_db_path() -> std::path::PathBuf {
 
 fn get_connection() -> Result<Connection, String> {
     let db_path = get_db_path();
-    Connection::open(&db_path).map_err(|e| format!("DB error: {}", e))
+    let conn = Connection::open(&db_path).map_err(|e| format!("DB error: {}", e))?;
+    conn.execute_batch(
+        "PRAGMA journal_mode=WAL;
+         PRAGMA synchronous=NORMAL;
+         PRAGMA busy_timeout=5000;
+         PRAGMA foreign_keys=ON;"
+    ).map_err(|e| format!("DB pragma error: {}", e))?;
+    Ok(conn)
 }
 
 #[tauri::command]

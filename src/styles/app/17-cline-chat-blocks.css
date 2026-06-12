@@ -87,6 +87,10 @@
   animation: thinkingFadeIn 0.25s ease;
 }
 
+.cl-thinking.streaming .cl-thinking-body {
+  animation: none;
+}
+
 .cl-thinking-body p {
   font-size: 12px;
   color: var(--text-secondary);

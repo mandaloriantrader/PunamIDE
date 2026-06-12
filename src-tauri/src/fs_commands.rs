@@ -1,5 +1,6 @@
+use std::collections::HashSet;
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 use tauri::State;
 
@@ -46,12 +47,19 @@ pub fn read_directory(path: String, state: State<ProjectRoot>) -> Result<Vec<Fil
             return Err("Access denied: path outside project".to_string());
         }
     }
-    build_tree(root, 0, 4)
+    let mut visited = HashSet::new();
+    build_tree(root, 0, 4, &mut visited)
 }
 
-pub(crate) fn build_tree(dir: &Path, depth: usize, max_depth: usize) -> Result<Vec<FileEntry>, String> {
+pub(crate) fn build_tree(dir: &Path, depth: usize, max_depth: usize, visited: &mut HashSet<PathBuf>) -> Result<Vec<FileEntry>, String> {
     if depth >= max_depth {
         return Ok(vec![]);
+    }
+
+    // Symlink cycle detection: canonicalize and check if already visited
+    let canonical = fs::canonicalize(dir).unwrap_or_else(|_| dir.to_path_buf());
+    if !visited.insert(canonical) {
+        return Ok(vec![]); // Already visited — skip to prevent infinite recursion
     }
 
     let mut entries: Vec<FileEntry> = Vec::new();
@@ -85,7 +93,7 @@ pub(crate) fn build_tree(dir: &Path, depth: usize, max_depth: usize) -> Result<V
         }
 
         let children = if is_dir {
-            Some(build_tree(&file_path, depth + 1, max_depth).unwrap_or_default())
+            Some(build_tree(&file_path, depth + 1, max_depth, visited).unwrap_or_default())
         } else {
             None
         };

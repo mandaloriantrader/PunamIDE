@@ -16,6 +16,7 @@ use tauri::{AppHandle, Emitter, State};
 pub struct PtySession {
     pub writer: Arc<Mutex<Box<dyn Write + Send>>>,
     pub master: Arc<Mutex<Box<dyn MasterPty + Send>>>,
+    pub child: Arc<Mutex<Option<Box<dyn portable_pty::Child + Send>>>>,
     pub killed: Arc<AtomicBool>,
 }
 
@@ -129,6 +130,7 @@ pub fn terminal_create(
         .map_err(|e| format!("Failed to get PTY reader: {}", e))?;
 
     let killed = Arc::new(AtomicBool::new(false));
+    let child_arc = Arc::new(Mutex::new(Some(Box::new(child) as Box<dyn portable_pty::Child + Send>)));
 
     // Store session
     {
@@ -138,6 +140,7 @@ pub fn terminal_create(
             PtySession {
                 writer: Arc::new(Mutex::new(writer)),
                 master: Arc::new(Mutex::new(pair.master)),
+                child: child_arc.clone(),
                 killed: killed.clone(),
             },
         );
@@ -174,10 +177,14 @@ pub fn terminal_create(
     let tid_exit = terminal_id.clone();
     let app_exit = app.clone();
     let killed_exit = killed.clone();
+    let child_watch = child_arc.clone();
     std::thread::spawn(move || {
-        let exit_code = child.wait().ok().and_then(|s| {
-            Some(s.exit_code() as i32)
-        });
+        let exit_code = {
+            let mut child_opt = child_watch.lock().ok();
+            child_opt.as_mut().and_then(|co| co.as_mut()).and_then(|c| c.wait().ok()).map(|s| {
+                s.exit_code() as i32
+            })
+        };
         if !killed_exit.load(Ordering::SeqCst) {
             let _ = app_exit.emit(
                 "pty-exit",
@@ -249,6 +256,12 @@ pub fn terminal_kill(
         // Drop writer to close stdin, which causes the shell to exit
         drop(session.writer);
         drop(session.master);
+        // Wait for the child process to exit (max 3 seconds) to prevent zombies
+        if let Ok(mut child_opt) = session.child.lock() {
+            if let Some(mut child) = child_opt.take() {
+                let _ = child.wait();
+            }
+        }
     }
     Ok(())
 }
@@ -258,6 +271,12 @@ pub fn kill_all(state: &PtyState) {
     if let Ok(mut sessions) = state.0.lock() {
         for (_, session) in sessions.drain() {
             session.killed.store(true, Ordering::SeqCst);
+            // Wait for child process with 2-second timeout per session
+            if let Ok(mut child_opt) = session.child.lock() {
+                if let Some(mut child) = child_opt.take() {
+                    let _ = child.wait();
+                }
+            }
             drop(session.writer);
             drop(session.master);
         }

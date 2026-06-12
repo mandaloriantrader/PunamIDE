@@ -70,7 +70,7 @@ macro_rules! patterns {
                     // query += "..." + variable
                     r#"(?i)\bquery\s*\+=\s*["'`].*?\s*\+\s*(\w+)"#,
                     // `SELECT * FROM users WHERE id = ${var}`
-                    r#"(?i)["'`]\s*(?:SELECT|INSERT|UPDATE|DELETE|DROP|CREATE|ALTER)\s+.+?\s*\$\{\s*(?!\d)"#,
+                    r#"(?i)["'`]\s*(?:SELECT|INSERT|UPDATE|DELETE|DROP|CREATE|ALTER)\s+.+?\s*\$\{"#,
                     // "SELECT * FROM " + table
                     r#"(?i)["'`]\s*(?:SELECT|INSERT|UPDATE|DELETE|DROP)\s+.+?["'`]\s*\+"#,
                     // execute("SELECT..." + var)
@@ -114,7 +114,7 @@ macro_rules! patterns {
                 id: "xss-eval-with-user-input",
                 description: "eval() or dynamic code execution from user input",
                 regexes: &[
-                    r#"(?i)eval\s*\(\s*(?!["'`]\s*(?:function|\(\)|[\d]+)\s*["'`]\s*\))"#,
+                    r#"(?i)\beval\s*\("#,
                     r#"(?i)new\s+Function\s*\("#,
                     r#"(?i)setTimeout\s*\(\s*(?:['"`][^'"`]*['"`]\s*,\s*\d+\)|[^'"`,\d][^,]*\))"#,
                 ],
@@ -172,8 +172,8 @@ macro_rules! patterns {
                 id: "unsafe-child-process",
                 description: "Child process spawned with potentially unsafe input",
                 regexes: &[
-                    r#"(?i)(?:exec|execSync)\s*\(\s*(?!["'`](?:echo|ls|dir|git|node|npm|pnpm|cargo|python|pip)\b)"#,
-                    r#"(?i)child_process\.exec\s*\(\s*(?!["'`](?:echo|ls|dir|git)\b)"#,
+                    r#"(?i)(?:exec|execSync)\s*\("#,
+                    r#"(?i)child_process\.exec\s*\("#,
                 ],
                 file_extensions: &["ts", "tsx", "js", "jsx"],
                 severity: "critical",
@@ -374,8 +374,6 @@ pub fn scan_patch(patch_content: &str, file_path: &str) -> PatchSecurityResult {
             continue;
         }
 
-        if !in_hunk { continue; }
-
         if line.starts_with("+") && !line.starts_with("+++") {
             let code = &line[1..]; // strip the '+'
 
@@ -422,7 +420,7 @@ pub fn scan_patch(patch_content: &str, file_path: &str) -> PatchSecurityResult {
             }
 
             current_line_num += 1;
-        } else if !line.starts_with("-") && !line.starts_with("---") {
+        } else if in_hunk && !line.starts_with("-") && !line.starts_with("---") {
             // Context line
             current_line_num += 1;
         }
@@ -478,6 +476,20 @@ pub fn security_scan_patch(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_all_security_patterns_compile() {
+        for pattern in patterns!() {
+            for regex in pattern.regexes {
+                assert!(
+                    Regex::new(regex).is_ok(),
+                    "Invalid regex in security pattern '{}': {}",
+                    pattern.id,
+                    regex
+                );
+            }
+        }
+    }
 
     #[test]
     fn test_detect_sql_injection_concatenation() {

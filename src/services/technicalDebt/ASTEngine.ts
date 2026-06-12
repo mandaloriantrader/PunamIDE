@@ -38,6 +38,14 @@ const jsGrammarUrl      = '/tree-sitter-javascript.wasm'
 
 export type SupportedLanguage = 'typescript' | 'tsx' | 'javascript' | 'jsx'
 
+export interface ASTEngineDiagnostics {
+  coreInitStarted: boolean
+  loadedLanguages: SupportedLanguage[]
+  successfulParses: number
+  failedParses: number
+  lastError: string | null
+}
+
 // Tree type re-exported so consumers don't import from web-tree-sitter directly
 export type { Tree, SyntaxNode }
 
@@ -75,6 +83,9 @@ class ASTEngine {
   private coreReady: Promise<void> | null = null
   private parsers = new Map<SupportedLanguage, Parser>()
   private grammarLoading = new Map<SupportedLanguage, Promise<void>>()
+  private successfulParses = 0
+  private failedParses = 0
+  private lastError: string | null = null
 
   // ── Core init ────────────────────────────────────────────────────────────────
 
@@ -154,8 +165,18 @@ class ASTEngine {
       const parser = this.parsers.get(language)
       if (!parser) return null
 
-      return parser.parse(content) ?? null
-    } catch {
+      const tree = parser.parse(content) ?? null
+      if (tree) {
+        this.successfulParses++
+        this.lastError = null
+      } else {
+        this.failedParses++
+        this.lastError = 'Tree-sitter returned no syntax tree'
+      }
+      return tree
+    } catch (error) {
+      this.failedParses++
+      this.lastError = error instanceof Error ? error.message : String(error)
       // WASM load failure, parse error, memory pressure — degrade silently
       return null
     }
@@ -189,7 +210,17 @@ class ASTEngine {
    * parsers.size > 0 for a stronger "at least one grammar loaded" signal.
    */
   isASTAvailable(): boolean {
-    return this.coreReady !== null
+    return this.parsers.size > 0 && this.successfulParses > 0
+  }
+
+  getDiagnostics(): ASTEngineDiagnostics {
+    return {
+      coreInitStarted: this.coreReady !== null,
+      loadedLanguages: [...this.parsers.keys()],
+      successfulParses: this.successfulParses,
+      failedParses: this.failedParses,
+      lastError: this.lastError,
+    }
   }
 
   /**

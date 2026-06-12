@@ -281,6 +281,14 @@ export default function App() {
   const dapRequestSeq = useRef(1);
   const handleFileSelectRef = useRef<(path: string) => Promise<void>>(async () => {});
 
+  // ── Auto-cap debug console at 500 lines to prevent unbounded memory growth ──
+  useEffect(() => {
+    setDebugConsoleOutput(prev => {
+      if (prev.length > 500) return prev.slice(-500);
+      return prev;
+    });
+  }, [debugConsoleOutput]);
+
   // Keep tabsRef in sync
   useEffect(() => { tabsRef.current = tabs; }, [tabs]);
 
@@ -1119,9 +1127,9 @@ export default function App() {
 
     return () => {
       cancelled = true;
-      unlistenPromise.then((unlisten) => unlisten()).catch(() => {});
-      unlistenDebuggerEvents.then((unlisten) => unlisten()).catch(() => {});
-      unlistenStderr.then((unlisten) => unlisten()).catch(() => {});
+      unlistenPromise.then((unlisten) => unlisten()).catch((err) => console.warn("Failed to unregister fs-changed listener:", err));
+      unlistenDebuggerEvents.then((unlisten) => unlisten()).catch((err) => console.warn("Failed to unregister debugger-event listener:", err));
+      unlistenStderr.then((unlisten) => unlisten()).catch((err) => console.warn("Failed to unregister debugger-stderr listener:", err));
     };
   }, [projectPath, refreshFiles, getProjectFilePath, showToast, fetchStackFrames, fetchScopes, fetchVariables]);
 

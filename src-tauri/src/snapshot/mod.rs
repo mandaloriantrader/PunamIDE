@@ -251,7 +251,9 @@ pub async fn create_snapshot(
     }
 
     let folder = folder_name(&name);
-    let dest = backup_dir(&root).join(&folder);
+    let backup = backup_dir(&root);
+    let tmp_folder = folder.clone() + ".tmp";
+    let dest = backup.join(&tmp_folder);
     fs::create_dir_all(&dest).map_err(|e| format!("Failed to create snapshot dir: {}", e))?;
 
     let (file_count, total_bytes) =
@@ -275,6 +277,15 @@ pub async fn create_snapshot(
     fs::write(dest.join("manifest.json"), manifest_json)
         .map_err(|e| format!("Failed to write manifest: {}", e))?;
 
+    // Atomically rename tmp → final (crash-safe: incomplete snapshots stay as .tmp)
+    let final_dest = backup.join(&folder);
+    // Remove existing snapshot with same name if present
+    if final_dest.exists() {
+        fs::remove_dir_all(&final_dest).ok();
+    }
+    fs::rename(&dest, &final_dest)
+        .map_err(|e| format!("Failed to finalize snapshot: {}", e))?;
+
     enforce_retention(&root, MAX_RETENTION).ok();
 
     Ok(CreateResult {
@@ -297,6 +308,13 @@ pub async fn list_snapshots(project_root: String) -> Result<Vec<SnapshotManifest
         let entry = entry.map_err(|e| e.to_string())?;
         let path = entry.path();
         if !path.is_dir() {
+            continue;
+        }
+        // Skip incomplete snapshots (still in .tmp phase)
+        if path.file_name()
+            .map(|n| n.to_string_lossy().ends_with(".tmp"))
+            .unwrap_or(false)
+        {
             continue;
         }
         let manifest_path = path.join("manifest.json");

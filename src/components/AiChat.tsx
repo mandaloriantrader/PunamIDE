@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef, useEffect, useLayoutEffect } from "react";
 import type { ElementType } from "react";
 import {
   User,
@@ -483,7 +483,7 @@ export default function AiChat({
     }
     setSessionTokens({ totalIn, totalOut, totalCostInr, requestCount });
   }, [messages]);
-  const bottomRef = useRef<HTMLDivElement>(null);
+  const chatMessagesRef = useRef<HTMLDivElement>(null);
   const isInitialLoad = useRef(true);
 
   // --- Agent Task State ---
@@ -545,18 +545,23 @@ export default function AiChat({
     }
   };
 
-  useEffect(() => {
+  useLayoutEffect(() => {
+    const container = chatMessagesRef.current;
+    if (!container) return;
+
     if (isInitialLoad.current) {
       // Skip scroll entirely during initial session hydration.
       // Only flip the flag once we actually have messages loaded.
       if (messages.length > 0) {
-        // Jump to bottom without animation on first real load
-        bottomRef.current?.scrollIntoView();
+        container.scrollTop = container.scrollHeight;
         isInitialLoad.current = false;
       }
       return;
     }
-    bottomRef.current?.scrollIntoView({ behavior: "smooth" });
+
+    // Production streams can update at display-frame speed. Directly pinning
+    // this scroller avoids overlapping animations and ancestor layout jumps.
+    container.scrollTop = container.scrollHeight;
   }, [messages, loading]);
 
   useEffect(() => {
@@ -2449,7 +2454,7 @@ export default function AiChat({
       </div>
 
       {/* Messages — virtualized: browser skips rendering off-screen messages */}
-      <div className="chat-messages" style={{ contentVisibility: "auto", containIntrinsicSize: "auto 500px" }}>
+      <div className="chat-messages" ref={chatMessagesRef}>
         {/* Proactive Error Detection — sticky at top so it doesn't scroll away (B008 fix) */}
         {proactiveError && (
           <div className="proactive-error-card" style={{ position: "sticky", top: 0, zIndex: 10 }}>
@@ -2692,7 +2697,6 @@ export default function AiChat({
           </div>
         )}
 
-        <div ref={bottomRef} />
       </div>
 
       {agentTask && agentTask.active && agentTask.step === "awaiting_run" && agentTask.suggestedCommand && (

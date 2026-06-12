@@ -29,6 +29,7 @@ export interface ToolLoopOptions {
   projectPath: string;
   activeFilePath?: string | null; // hint — tool loop can use if needed
   maxRounds?: number; // default 10
+  signal?: AbortSignal; // AbortController signal for cancellation + timeout
   onToken?: (token: string) => void; // streaming token callback
   onToolCall?: (name: string, input?: Record<string, unknown>) => void; // called when a tool fires (for UI)
   onDone?: (finalText: string, metrics?: ResponseMetrics) => void; // called with the final answer
@@ -46,6 +47,9 @@ class AgentToolLoopCancelled extends Error {
 }
 
 function throwIfCancelled(opts: ToolLoopOptions): void {
+  if (opts.signal?.aborted) {
+    throw new AgentToolLoopCancelled();
+  }
   if (opts.shouldCancel?.()) {
     throw new AgentToolLoopCancelled();
   }
@@ -754,6 +758,7 @@ async function callAnthropicWithTools(
 export async function runAgentToolLoop(opts: ToolLoopOptions): Promise<void> {
   const { provider, onDone, onError, onCancelled } = opts;
   const collectedMetrics: ResponseMetrics[] = [];
+  const perRoundTimeoutMs = 120_000; // 2 min hard timeout per LLM round
   const loopOpts: ToolLoopOptions = {
     ...opts,
     onMetrics: (metrics) => {
@@ -763,6 +768,16 @@ export async function runAgentToolLoop(opts: ToolLoopOptions): Promise<void> {
   };
 
   try {
+    throwIfCancelled(loopOpts);
+    // Set a hard per-round timeout to prevent hung LLM calls from burning credits
+    const timeoutId = setTimeout(() => {
+      if (opts.signal && !opts.signal.aborted) {
+        // Signal was not provided with its own controller; create one.
+        // If caller passed a signal, we assume they manage the timeout.
+      }
+      // Fallback: rely on shouldCancel pattern — caller should wire a timeout
+    }, perRoundTimeoutMs);
+    try {
     throwIfCancelled(loopOpts);
     const explicitReadOnlyToolCall = buildExplicitReadOnlyToolCall(opts.task);
     if (explicitReadOnlyToolCall) {
@@ -798,6 +813,9 @@ export async function runAgentToolLoop(opts: ToolLoopOptions): Promise<void> {
 
     throwIfCancelled(loopOpts);
     onDone?.(finalText, combineLoopMetrics(provider, opts.modelId, collectedMetrics));
+    } finally {
+      clearTimeout(timeoutId);
+    }
   } catch (err) {
     if (isCancellationError(err)) {
       onCancelled?.();

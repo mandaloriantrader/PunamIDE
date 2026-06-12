@@ -124,6 +124,22 @@ export interface GraphBundle {
   couplingAnalysis: CouplingAnalysis;
 }
 
+export type ASTAnalysisMode = "active" | "partial" | "fallback" | "not-applicable";
+export type AnalysisExecution = "worker" | "main-thread";
+
+export interface ASTAnalysisStatus {
+  mode: ASTAnalysisMode;
+  execution: AnalysisExecution;
+  supportedFiles: number;
+  astFiles: number;
+  fallbackFiles: number;
+  fallbackFilePaths: string[];
+  unsupportedFiles: number;
+  parserFailures: number;
+  loadedLanguages: string[];
+  lastError: string | null;
+}
+
 export interface ProjectDebtAnalysis {
   files: FileDebtMetrics[];
   hotspots: DebtHotspot[];
@@ -132,6 +148,7 @@ export interface ProjectDebtAnalysis {
   totalLinesOfCode: number;
   discovery: DiscoveryMetrics;
   graph: GraphBundle | null;      // Phase 4: null until graph is built
+  astStatus: ASTAnalysisStatus;
 }
 
 // ── Analysis config ────────────────────────────────────────────────────────────
@@ -606,7 +623,17 @@ export class DebtAnalyzer {
           const importMaps: import('./ImportExtractor').FileImportExportMap[]
                                                            = event.data.importMaps  ?? [];
           discovery.fromCache = event.data.fromCache ?? 0;
-          resolve(this.buildResult(workerMetrics, discovery, importMaps));
+          resolve(this.buildResult(
+            workerMetrics,
+            discovery,
+            importMaps,
+            "worker",
+            {
+              parserFailures: event.data.astDiagnostics?.failedParses ?? 0,
+              loadedLanguages: event.data.astDiagnostics?.loadedLanguages ?? [],
+              lastError: event.data.astDiagnostics?.lastError ?? null,
+            },
+          ));
         };
         worker.onerror = () => {
           worker.terminate();
@@ -639,7 +666,7 @@ export class DebtAnalyzer {
       metrics.push(m);
       discovery.analyzed++;
     }
-    return this.buildResult(metrics, discovery);
+    return this.buildResult(metrics, discovery, [], "main-thread");
   }
 
   private async analyzeFromContents(
@@ -653,7 +680,7 @@ export class DebtAnalyzer {
       if (m && m.linesOfCode > 0) metrics.push(m);
       else discovery.failed++;
     }
-    return this.buildResult(metrics, discovery);
+    return this.buildResult(metrics, discovery, [], "main-thread");
   }
 
   // ── Result assembly ──────────────────────────────────────────────────────────
@@ -662,6 +689,12 @@ export class DebtAnalyzer {
     metrics: FileDebtMetrics[],
     discovery: DiscoveryMetrics,
     _importMaps: import('./ImportExtractor').FileImportExportMap[] = [],
+    execution: AnalysisExecution = "main-thread",
+    diagnostics: {
+      parserFailures: number;
+      loadedLanguages: string[];
+      lastError: string | null;
+    } = { parserFailures: 0, loadedLanguages: [], lastError: null },
   ): ProjectDebtAnalysis {
     const sorted = [...metrics].sort((a, b) => a.fileScore - b.fileScore);
     const candidates = sorted.filter(
@@ -677,6 +710,18 @@ export class DebtAnalyzer {
     const overallScore = metrics.length > 0
       ? Math.round(metrics.reduce((s, m) => s + m.fileScore, 0) / metrics.length)
       : 100;
+    const supportedFiles = metrics.filter((m) => /\.(?:[jt]sx?)$/i.test(m.filePath)).length;
+    const astFiles = metrics.filter((m) => m.astMetrics !== null).length;
+    const fallbackFiles = Math.max(0, supportedFiles - astFiles);
+    const fallbackFilePaths = metrics
+      .filter((m) => /\.(?:[jt]sx?)$/i.test(m.filePath) && m.astMetrics === null)
+      .map((m) => m.filePath);
+    const unsupportedFiles = Math.max(0, metrics.length - supportedFiles);
+    const mode: ASTAnalysisMode =
+      supportedFiles === 0 ? "not-applicable"
+      : astFiles === supportedFiles ? "active"
+      : astFiles > 0 ? "partial"
+      : "fallback";
 
     return {
       files: sorted,
@@ -686,6 +731,18 @@ export class DebtAnalyzer {
       totalLinesOfCode:   metrics.reduce((s, m) => s + m.linesOfCode, 0),
       discovery,
       graph: null,
+      astStatus: {
+        mode,
+        execution,
+        supportedFiles,
+        astFiles,
+        fallbackFiles,
+        fallbackFilePaths,
+        unsupportedFiles,
+        parserFailures: diagnostics.parserFailures,
+        loadedLanguages: diagnostics.loadedLanguages,
+        lastError: diagnostics.lastError,
+      },
     };
   }
 

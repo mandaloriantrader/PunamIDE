@@ -56,7 +56,37 @@ impl SafetyValidator {
             }
         }
 
-        // 2. NEEDS APPROVAL SIGNATURES (common dev commands)
+        let downloads_piped_to_shell =
+            (trimmed.starts_with("curl ") || trimmed.starts_with("wget "))
+            && (trimmed.contains("| sh") || trimmed.contains("| bash"));
+        if downloads_piped_to_shell {
+            return ValidationResult {
+                risk_level: RiskLevel::Blocked,
+                sanitized_command: raw_command.to_string(),
+                feedback_message: "Downloading content directly into a shell is blocked.".to_string(),
+            };
+        }
+
+        // 2. SAFE commands (read-only, informational)
+        let safe_signatures = [
+            "echo ", "cat ", "type ", "dir", "ls",
+            "pwd", "cd ", "whoami", "date", "time",
+            "node -v", "npm -v", "python --version",
+            "cargo --version", "git status", "git log",
+            "git diff", "git branch",
+        ];
+
+        for sig in safe_signatures {
+            if trimmed.contains(sig) || trimmed == sig.trim() {
+                return ValidationResult {
+                    risk_level: RiskLevel::Safe,
+                    sanitized_command: raw_command.to_string(),
+                    feedback_message: "Read-only or informational command.".to_string(),
+                };
+            }
+        }
+
+        // 3. NEEDS APPROVAL SIGNATURES (common dev commands)
         let approval_signatures = [
             "npm install", "npm run", "npm test", "npm start",
             "npx ", "git ", "python ", "python3 ",
@@ -72,25 +102,6 @@ impl SafetyValidator {
                     risk_level: RiskLevel::NeedsApproval,
                     sanitized_command: raw_command.to_string(),
                     feedback_message: "This command modifies packages, runtime state, or source tracking.".to_string(),
-                };
-            }
-        }
-
-        // 3. SAFE commands (read-only, informational)
-        let safe_signatures = [
-            "echo ", "cat ", "type ", "dir", "ls",
-            "pwd", "cd ", "whoami", "date", "time",
-            "node -v", "npm -v", "python --version",
-            "cargo --version", "git status", "git log",
-            "git diff", "git branch",
-        ];
-
-        for sig in safe_signatures {
-            if trimmed.contains(sig) || trimmed == sig.trim() {
-                return ValidationResult {
-                    risk_level: RiskLevel::Safe,
-                    sanitized_command: raw_command.to_string(),
-                    feedback_message: "Read-only or informational command.".to_string(),
                 };
             }
         }
@@ -200,7 +211,7 @@ mod tests {
 
         let res = validator.validate_path_jail("src/index.html");
         assert!(res.is_ok());
-        assert!(res.unwrap().starts_with(db.path()));
+        assert!(res.unwrap().starts_with(db.path().canonicalize().unwrap()));
     }
 
     #[test]

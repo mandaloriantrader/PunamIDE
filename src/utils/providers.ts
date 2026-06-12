@@ -272,16 +272,33 @@ export async function sendToProvider(
   }
 }
 
-/** Send to multiple models in parallel, return all responses */
+/** Run up to `limit` async tasks concurrently */
+async function concurrentLimit<T>(tasks: Array<() => Promise<T>>, limit: number): Promise<T[]> {
+  const results: T[] = new Array(tasks.length);
+  let nextIndex = 0;
+
+  async function worker(): Promise<void> {
+    while (nextIndex < tasks.length) {
+      const idx = nextIndex++;
+      results[idx] = await tasks[idx]();
+    }
+  }
+
+  const workers = Array.from({ length: Math.min(limit, tasks.length) }, () => worker());
+  await Promise.all(workers);
+  return results;
+}
+
+/** Send to multiple models with at most 3 concurrent requests */
 export async function sendToMultipleModels(
   providers: AIProviderConfig[],
   selectedModels: Array<{ providerId: string; model: string }>,
   request: AIRequest
 ): Promise<AIResponse[]> {
-  const promises = selectedModels.map(({ providerId, model }) => {
+  const tasks = selectedModels.map(({ providerId, model }) => {
     const provider = providers.find((p) => p.id === providerId);
     if (!provider) {
-      return Promise.resolve<AIResponse>({
+      return () => Promise.resolve<AIResponse>({
         text: "",
         success: false,
         error: `Provider ${providerId} not found`,
@@ -296,10 +313,10 @@ export async function sendToMultipleModels(
         },
       });
     }
-    return sendToProvider(provider, model, request);
+    return () => sendToProvider(provider, model, request);
   });
 
-  return Promise.all(promises);
+  return concurrentLimit(tasks, 3);
 }
 
 /** Send with streaming — emits tokens via 'llm-stream' event, returns full text at end */

@@ -211,6 +211,7 @@ fn evaluate_custom_rule(
                 let has_test = match graph.reverse.get(file) {
                     Some(dependents) => dependents.iter().any(|dep| {
                         simple_glob_match(dep, &test_pattern)
+                            || (!test_pattern.contains('*') && dep.ends_with(&test_pattern))
                     }),
                     None => false,
                 };

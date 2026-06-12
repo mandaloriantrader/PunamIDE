@@ -56,7 +56,7 @@ const workerCache = new Map<string, WorkerCacheEntry>()
 // ── Message handler ───────────────────────────────────────────────────────────
 
 self.onmessage = async (event: MessageEvent) => {
-  const { type, files, config } = event.data as {
+  const { type, files } = event.data as {
     type:   'analyze_v2' | 'analyze'
     files:  Record<string, string>
     config: AnalysisConfig
@@ -114,7 +114,12 @@ self.onmessage = async (event: MessageEvent) => {
     return
   }
 
-  self.postMessage({ fileMetrics, importMaps, fromCache })
+  self.postMessage({
+    fileMetrics,
+    importMaps,
+    fromCache,
+    astDiagnostics: engine.getDiagnostics(),
+  })
 }
 
 // ── Per-file analysis ─────────────────────────────────────────────────────────

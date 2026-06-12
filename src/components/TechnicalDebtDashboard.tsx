@@ -45,8 +45,8 @@ import type {
   DiscoveryMetrics,
   HotspotASTDetail,
   GraphBundle,
+  ASTAnalysisStatus,
 } from "../services/technicalDebt/DebtAnalyzer";
-import { classifyComplexity, classifyNesting } from "../services/technicalDebt/DebtAnalyzer";
 import type { RefactorPlan, RefactorPlanItem } from "../services/technicalDebt/RefactorPlanner";
 import type { CycleDetectionResult }           from "../services/technicalDebt/CircularDepDetector";
 import type { CouplingAnalysis }               from "../services/technicalDebt/CouplingAnalyzer";
@@ -266,6 +266,9 @@ export default function TechnicalDebtDashboard({
   const [discovery, setDiscovery]         = useState<DiscoveryMetrics | null>(null);
   const [cycleResult, setCycleResult]     = useState<CycleDetectionResult | null>(null);
   const [couplingResult, setCouplingResult] = useState<CouplingAnalysis | null>(null);
+  const [astStatus, setAstStatus]           = useState<ASTAnalysisStatus | null>(null);
+  const [scanDurationMs, setScanDurationMs] = useState<number | null>(null);
+  const [showASTDetails, setShowASTDetails] = useState(false);
   const [loading, setLoading]             = useState(false);
   const [graphBuilding, setGraphBuilding] = useState(false);
   const [scanning, setScanning]           = useState(false);
@@ -294,14 +297,19 @@ export default function TechnicalDebtDashboard({
   const handleAnalyze = useCallback(async () => {
     if (!filePaths.length) return;
     setLoading(true);
+    setAstStatus(null);
+    setScanDurationMs(null);
     setCycleResult(null);
     setCouplingResult(null);
+    const scanStartedAt = performance.now();
 
     try {
       // ── Phase 1: file analysis ──────────────────────────────────────────
       const analyzer = getDebtAnalyzer();
       let analysis   = await analyzer.analyzeProject(filePaths, { maxFiles });
       setDiscovery(analysis.discovery);
+      setAstStatus(analysis.astStatus);
+      setScanDurationMs(performance.now() - scanStartedAt);
 
       const scorer = getDebtScorer();
       setScore(scorer.score(analysis));
@@ -387,7 +395,10 @@ export default function TechnicalDebtDashboard({
         <BarChart3 size={16} />
         Technical Debt Intelligence
         <span style={{ fontSize: "10px", color: "var(--text-secondary, #a0a0b0)", marginLeft: "auto", display: "flex", alignItems: "center", gap: "6px" }}>
-          <ASTStatusBadge />
+          <ASTStatusBadge
+            status={astStatus}
+            onClick={() => astStatus && setShowASTDetails(true)}
+          />
           Phase 4
         </span>
       </div>
@@ -424,8 +435,26 @@ export default function TechnicalDebtDashboard({
               ? "No source files found"
               : "No project open"}
           </span>
+          {astStatus && (
+            <span style={{ fontSize: "9px", color: "var(--text-secondary, #a0a0b0)" }}>
+              Coverage: {astStatus.supportedFiles > 0
+                ? Math.round((astStatus.astFiles / astStatus.supportedFiles) * 100)
+                : 0}% ({astStatus.astFiles}/{astStatus.supportedFiles})
+              {astStatus.fallbackFiles > 0 ? ` · Fallback: ${astStatus.fallbackFiles}` : ""}
+              {astStatus.unsupportedFiles > 0 ? ` · Unsupported: ${astStatus.unsupportedFiles}` : ""}
+          </span>
+          )}
         </div>
       </div>
+
+      {showASTDetails && astStatus && (
+        <ASTDetailsPanel
+          status={astStatus}
+          discovery={discovery}
+          scanDurationMs={scanDurationMs}
+          onClose={() => setShowASTDetails(false)}
+        />
+      )}
 
       {score && (
         <>
@@ -942,32 +971,152 @@ function Badge({ color, children }: { color: string; children: React.ReactNode }
 
 // ── AST Status Badge ──────────────────────────────────────────────────────────
 
-function ASTStatusBadge() {
-  const [astActive, setAstActive] = useState<boolean | null>(null);
+function ASTStatusBadge({
+  status,
+  onClick,
+}: {
+  status: ASTAnalysisStatus | null;
+  onClick: () => void;
+}) {
+  if (!status) {
+    return (
+      <span style={{ fontSize: "9px", color: "var(--text-secondary, #a0a0b0)" }}>
+        AST not checked
+      </span>
+    );
+  }
 
-  useEffect(() => {
-    import("../services/technicalDebt/ASTEngine")
-      .then(({ getASTEngine }) => {
-        // Try to init and check after a short delay
-        const engine = getASTEngine();
-        engine.preload().then(() => {
-          setAstActive(engine.isASTAvailable());
-        }).catch(() => setAstActive(false));
-      })
-      .catch(() => setAstActive(false));
-  }, []);
+  const presentation = {
+    active: { label: "AST Active", color: "#34d399" },
+    partial: { label: "AST Partial", color: "#fbbf24" },
+    fallback: { label: "Regex Fallback", color: "#f87171" },
+    "not-applicable": { label: "AST N/A", color: "#a0a0b0" },
+  }[status.mode];
 
-  if (astActive === null) return null;
+  const title = [
+    `${status.astFiles}/${status.supportedFiles} supported files parsed with Tree-sitter`,
+    `${status.fallbackFiles} regex fallback`,
+    `${status.unsupportedFiles} unsupported language files`,
+    `Execution: ${status.execution}`,
+    status.lastError ? `Last error: ${status.lastError}` : "",
+  ].filter(Boolean).join("\n");
 
   return (
-    <span style={{
+    <button type="button" title={title} onClick={onClick} style={{
       fontSize: "9px", padding: "1px 6px",
       borderRadius: "3px", fontWeight: 600,
-      background: astActive ? "#34d39922" : "#f8717122",
-      color: astActive ? "#34d399" : "#f87171",
-      border: `1px solid ${astActive ? "#34d39944" : "#f8717144"}`,
+      background: `${presentation.color}22`,
+      color: presentation.color,
+      border: `1px solid ${presentation.color}44`,
+      cursor: "pointer",
+      fontFamily: "inherit",
     }}>
-      {astActive ? "AST Active" : "Regex Fallback"}
-    </span>
+      {presentation.label}
+    </button>
+  );
+}
+
+function ASTDetailsPanel({
+  status,
+  discovery,
+  scanDurationMs,
+  onClose,
+}: {
+  status: ASTAnalysisStatus;
+  discovery: DiscoveryMetrics | null;
+  scanDurationMs: number | null;
+  onClose: () => void;
+}) {
+  const coverage = status.supportedFiles > 0
+    ? Math.round((status.astFiles / status.supportedFiles) * 100)
+    : 0;
+  const healthy = status.mode === "active" && status.parserFailures === 0;
+  const confidence =
+    coverage >= 95 && status.parserFailures === 0 ? "High"
+    : coverage >= 75 ? "Medium"
+    : "Low";
+  const confidenceColor =
+    confidence === "High" ? "#34d399"
+    : confidence === "Medium" ? "#fbbf24"
+    : "#f87171";
+  const coverageColor =
+    coverage === 100 ? "#34d399"
+    : coverage >= 90 ? "#fbbf24"
+    : "#f87171";
+  const languageLabels: Record<string, string> = {
+    typescript: "TypeScript",
+    tsx: "TSX",
+    javascript: "JavaScript",
+    jsx: "JSX",
+  };
+
+  return (
+    <div style={{
+      margin: "10px 16px 0",
+      padding: "12px",
+      borderRadius: "8px",
+      border: "1px solid var(--border-color, #2a2a4a)",
+      background: "var(--bg-input, #1a1a2e)",
+      fontSize: "10px",
+    }}>
+      <div style={{ display: "flex", alignItems: "center", marginBottom: "10px" }}>
+        <strong style={{ fontSize: "12px" }}>Analysis Engine</strong>
+        <button type="button" onClick={onClose} style={{
+          marginLeft: "auto", border: "none", background: "transparent",
+          color: "var(--text-secondary, #a0a0b0)", cursor: "pointer", fontFamily: "inherit",
+        }}>
+          Close
+        </button>
+      </div>
+      <div style={{ display: "grid", gap: "5px", color: "var(--text-secondary, #a0a0b0)" }}>
+        <span style={{ color: healthy ? "#34d399" : "#fbbf24", fontWeight: 600 }}>
+          Parser Health: {healthy ? "Healthy" : "Degraded"}
+        </span>
+        <span style={{ color: confidenceColor, fontWeight: 600 }}>
+          Analysis Confidence: {confidence}
+        </span>
+        <span>✓ Tree-sitter {status.mode === "fallback" ? "Unavailable" : "Active"}</span>
+        <span>✓ {status.execution === "worker" ? "Worker Running" : "Main-thread fallback"}</span>
+        <span style={{ color: coverageColor }}>
+          ✓ Coverage: {coverage}% ({status.astFiles}/{status.supportedFiles})
+        </span>
+        {scanDurationMs !== null && (
+          <span>Scan Time: {(scanDurationMs / 1000).toFixed(2)}s</span>
+        )}
+        <span>{status.fallbackFiles === 0 ? "✓" : "!"} {status.fallbackFiles} fallback files</span>
+        <span>{status.parserFailures === 0 ? "✓" : "!"} {status.parserFailures} parser failures</span>
+        <span>{status.unsupportedFiles} unsupported source files</span>
+        {discovery && <span>{discovery.skipped} skipped files · {discovery.failed} unreadable/failed files</span>}
+      </div>
+      <div style={{ marginTop: "10px", color: "var(--text-secondary, #a0a0b0)" }}>
+        <strong style={{ color: "var(--text-primary, #fff)" }}>Languages:</strong>{" "}
+        {status.loadedLanguages.length > 0
+          ? status.loadedLanguages.map((language) => languageLabels[language] ?? language).join(", ")
+          : "None loaded"}
+      </div>
+      {status.lastError && (
+        <div style={{ marginTop: "8px", color: "#f87171", wordBreak: "break-word" }}>
+          Last parser error: {status.lastError}
+        </div>
+      )}
+      {status.fallbackFilePaths.length > 0 && (
+        <div style={{ marginTop: "10px" }}>
+          <strong style={{ color: "#fbbf24" }}>
+            Fallback Files ({status.fallbackFilePaths.length})
+          </strong>
+          <div style={{
+            marginTop: "5px", display: "grid", gap: "3px",
+            color: "var(--text-secondary, #a0a0b0)",
+            maxHeight: "120px", overflowY: "auto",
+          }}>
+            {status.fallbackFilePaths.map((filePath) => (
+              <span key={filePath} title={filePath}>
+                {filePath.replace(/\\/g, "/").split("/").slice(-3).join("/")}
+              </span>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
   );
 }
