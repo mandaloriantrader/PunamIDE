@@ -1,11 +1,14 @@
 // src/utils/agentToolLoop.ts
 //
 // Phase 1 — Agent Tool-Calling Orchestration Loop
+// Phase 2 — Planner Stage + Auto-Verifier Loop
 //
 // This module handles:
 //   1. Native tool calling for Anthropic (claude-*) providers
 //   2. Gemini function calling adapter
 //   3. JSON-fallback for all other providers (openai-compatible, groq, etc.)
+//   4. Planner: LLM-generated step-by-step plan before tool execution
+//   5. Verifier: auto-runs typecheck/lint/test after patches, retries on failure
 
 import type { AIProviderConfig, ResponseMetrics } from "./providers";
 import {
@@ -37,6 +40,26 @@ export interface ToolLoopOptions {
   onCancelled?: () => void;
   shouldCancel?: () => boolean;
   onMetrics?: (metrics: ResponseMetrics) => void;
+  /** Phase 2: Called when the planner produces a step-by-step plan before tool execution */
+  onPlanReady?: (plan: AgentPlan) => void;
+  /** Phase 2: Called when auto-verification runs after patch application */
+  onVerifyResult?: (result: VerifyResult) => void;
+  /** Phase 2: Enable auto-verification loop (default: true when project has package.json) */
+  enableAutoVerify?: boolean;
+}
+
+/** Structured plan produced by the Planner stage */
+export interface AgentPlan {
+  goal: string;
+  steps: Array<{ index: number; description: string; tool_hint?: string }>;
+  generatedAt: number;
+}
+
+/** Result from the auto-verification stage */
+export interface VerifyResult {
+  passed: boolean;
+  checks: Array<{ name: string; passed: boolean; output: string }>;
+  retryCount: number;
 }
 
 class AgentToolLoopCancelled extends Error {
@@ -120,6 +143,10 @@ const INTERNAL_TOOL_NAMES: AgentToolName[] = [
   "apply_patch",
   "write_file",
   "run_command",
+  "symbol_lookup",
+  "find_callers",
+  "find_callees",
+  "semantic_search",
 ];
 
 function getExplicitToolNames(task: string): AgentToolName[] {
@@ -310,6 +337,7 @@ async function synthesizeFinalAnswer(
       "",
       "Write the final answer now.",
     ].join("\n"),
+    signal: opts.signal,
   });
   recordLoopMetrics(opts, resp.metrics);
 
@@ -337,12 +365,10 @@ async function runAnthropicToolLoop(opts: ToolLoopOptions): Promise<string> {
     onToolCall,
   } = opts;
 
-  // Initial hint: tell the model which file is open (no content)
   const fileHint = activeFilePath
     ? `\n\nCurrently open in editor: ${activeFilePath}`
     : "";
 
-  // Anthropic messages format
   type Message =
     | { role: "user"; content: string | AnthropicContent[] }
     | { role: "assistant"; content: AnthropicContent[] };
@@ -362,7 +388,6 @@ async function runAnthropicToolLoop(opts: ToolLoopOptions): Promise<string> {
 
   for (let round = 0; round < maxRounds; round++) {
     throwIfCancelled(opts);
-    // Call Anthropic via Tauri backend streaming endpoint
     const response = await callAnthropicWithTools(
       provider,
       modelId,
@@ -372,7 +397,6 @@ async function runAnthropicToolLoop(opts: ToolLoopOptions): Promise<string> {
     );
     throwIfCancelled(opts);
 
-    // Collect text + tool_use blocks
     const textBlocks = response.content.filter(
       (b): b is { type: "text"; text: string } => b.type === "text"
     );
@@ -380,17 +404,14 @@ async function runAnthropicToolLoop(opts: ToolLoopOptions): Promise<string> {
       (b): b is ToolCall & { type: "tool_use" } => b.type === "tool_use"
     );
 
-    // Accumulate any text
     if (textBlocks.length > 0) {
       finalText = textBlocks.map((b) => b.text).join("");
     }
 
-    // If model is done (no tool calls), return the answer
     if (response.stop_reason === "end_turn" || toolUseBlocks.length === 0) {
       return finalText;
     }
 
-    // Execute all tool calls in parallel
     const toolResults: AnthropicContent[] = [];
     await Promise.all(
       toolUseBlocks.map(async (block) => {
@@ -424,7 +445,6 @@ async function runAnthropicToolLoop(opts: ToolLoopOptions): Promise<string> {
       })
     );
 
-    // Feed results back
     messages.push({ role: "assistant", content: response.content });
     messages.push({ role: "user", content: toolResults });
   }
@@ -450,10 +470,8 @@ async function runJsonFallbackToolLoop(opts: ToolLoopOptions): Promise<string> {
     ? `\n\nCurrently open in editor: ${activeFilePath}`
     : "";
 
-  // Inject tool instructions into system prompt
   const fullSystem = `${systemPrompt}\n\n${buildToolSystemPrompt()}`;
 
-  // Build a simple text conversation
   const conversationParts: string[] = [];
   const observations: ToolObservation[] = [];
   const seenToolCalls = new Set<string>();
@@ -462,17 +480,16 @@ async function runJsonFallbackToolLoop(opts: ToolLoopOptions): Promise<string> {
 
   for (let round = 0; round < maxRounds; round++) {
     throwIfCancelled(opts);
-    // Build the full prompt string for this round
     const fullPrompt =
       conversationParts.length > 0
         ? conversationParts.join("\n\n") + "\n\nUser: " + userTurn
         : userTurn;
 
-    // Call via the existing sendToProviderStreaming path
     const { sendToProviderStreaming } = await import("./providers");
     const resp = await sendToProviderStreaming(provider, modelId, {
       systemPrompt: fullSystem,
       userPrompt: fullPrompt,
+      signal: opts.signal,
     });
     recordLoopMetrics(opts, resp.metrics);
 
@@ -484,12 +501,9 @@ async function runJsonFallbackToolLoop(opts: ToolLoopOptions): Promise<string> {
     const responseText = resp.text;
     lastText = responseText;
 
-    // Try to parse a tool call from the response
     const toolCall = parseJsonToolCall(responseText);
 
     if (!toolCall) {
-      // If the model hinted at tool use (e.g. "Let me list all files") but
-      // didn't output a JSON block, push it to produce the tool call.
       const toolIntent = /\b(list|read|search|find|check|look|show|get)\b/i;
       if (toolIntent.test(responseText)) {
         conversationParts.push(
@@ -499,11 +513,9 @@ async function runJsonFallbackToolLoop(opts: ToolLoopOptions): Promise<string> {
         userTurn = "Output the tool call now.";
         continue;
       }
-      // No tool call and no tool intent — this is the final answer
       return responseText;
     }
 
-    // Execute the tool
     throwIfCancelled(opts);
     const normalizedToolCall = normalizeAgentToolCall(toolCall);
     const normalizedName = "tool" in normalizedToolCall ? normalizedToolCall.tool : normalizedToolCall.name;
@@ -524,13 +536,11 @@ async function runJsonFallbackToolLoop(opts: ToolLoopOptions): Promise<string> {
     throwIfCancelled(opts);
     recordToolObservation(observations, normalizedName, normalizedInput, result);
 
-    // Append to conversation history
     conversationParts.push(
       `Assistant:\n${responseText}`,
       `Tool result (${normalizedName}):\n${result.content}`
     );
 
-    // Next user turn is empty (continue reasoning)
     userTurn = "Continue based on the tool result above.";
   }
 
@@ -557,7 +567,6 @@ interface GeminiResponse {
   }>;
 }
 
-/** Convert our Anthropic-format tool schemas to Gemini functionDeclarations */
 function toGeminiFunctionDeclarations() {
   return AGENT_TOOL_DEFINITIONS.map((tool) => ({
     name: tool.name,
@@ -572,14 +581,12 @@ async function callGeminiWithTools(
   systemPrompt: string,
   contents: GeminiContent[]
 ): Promise<GeminiResponse> {
-  // Gemini 1.5+ supports system_instruction
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${modelId}:generateContent?key=${apiKey}`;
 
   const body = {
     system_instruction: { parts: [{ text: systemPrompt }] },
     contents,
     tools: [{ functionDeclarations: toGeminiFunctionDeclarations() }],
-    // ANY mode = model decides when to call tools; AUTO is default but explicit is safer
     tool_config: { function_calling_config: { mode: "AUTO" } },
     generationConfig: { temperature: 0.3, maxOutputTokens: 8192 },
   };
@@ -638,27 +645,22 @@ async function runGeminiToolLoop(opts: ToolLoopOptions): Promise<string> {
     const parts = candidate.content?.parts ?? [];
     const finishReason = candidate.finishReason;
 
-    // Collect text parts
     const textParts = parts.filter((p): p is { text: string } => typeof p.text === "string");
     if (textParts.length > 0) {
       finalText = textParts.map((p) => p.text).join("");
     }
 
-    // Collect function call parts
     const fnCalls = parts.filter(
       (p): p is { functionCall: { name: string; args: Record<string, unknown> } } =>
         p.functionCall !== undefined
     );
 
-    // If no tool calls or model is done, return final answer
     if (fnCalls.length === 0 || finishReason === "STOP") {
       return finalText;
     }
 
-    // Push the model's response (with tool calls) into history
     contents.push({ role: "model", parts });
 
-    // Execute all tool calls and collect function responses
     const responseParts: GeminiPart[] = [];
     await Promise.all(
       fnCalls.map(async (fc) => {
@@ -694,7 +696,6 @@ async function runGeminiToolLoop(opts: ToolLoopOptions): Promise<string> {
       })
     );
 
-    // Feed results back as a user turn (Gemini requires this)
     contents.push({ role: "user", parts: responseParts });
   }
 
@@ -749,16 +750,139 @@ async function callAnthropicWithTools(
   return response.json() as Promise<AnthropicResponse>;
 }
 
+// ── Planner Stage (Phase 2) ──────────────────────────────────────────────────
+
+/**
+ * Generate a structured plan before the main tool loop starts.
+ * Uses a cheap/fast LLM call to produce a 3-5 step exploration plan.
+ * Falls back silently if the LLM call fails — the agent still works reactively.
+ */
+async function generatePlan(opts: ToolLoopOptions): Promise<AgentPlan | null> {
+  try {
+    const { sendToProviderStreaming } = await import("./providers");
+    const planSystemPrompt = [
+      "You are a planning assistant. Given a user's task, produce a concise step-by-step plan.",
+      "Output ONLY a JSON object with format:",
+      '{ "goal": "brief goal", "steps": [ {"index":1,"description":"step description"} ] }',
+      "No markdown, no explanation — only the JSON object.",
+      "Maximum 5 steps. Each step describes WHAT to investigate, not HOW.",
+    ].join("\n");
+    const planPrompt = `Task: ${opts.task}\n\nProject: ${opts.projectPath}\n${opts.activeFilePath ? "Active file: " + opts.activeFilePath : ""}\n\nProduce the plan JSON:`;
+
+    const resp = await sendToProviderStreaming(opts.provider, opts.modelId, {
+      systemPrompt: planSystemPrompt,
+      userPrompt: planPrompt,
+      signal: opts.signal,
+    });
+    if (!resp.success || !resp.text.trim()) return null;
+
+    const jsonMatch = resp.text.match(/\{[\s\S]*\}/);
+    if (!jsonMatch) return null;
+    const parsed = JSON.parse(jsonMatch[0]) as { goal: string; steps: Array<{ index: number; description: string }> };
+    if (!parsed.goal || !Array.isArray(parsed.steps)) return null;
+
+    const plan: AgentPlan = {
+      goal: parsed.goal,
+      steps: parsed.steps.slice(0, 5).map((s, i) => ({ index: i + 1, description: s.description })),
+      generatedAt: Date.now(),
+    };
+    opts.onPlanReady?.(plan);
+    return plan;
+  } catch {
+    return null;
+  }
+}
+
+// ── Verification Stage (Phase 2) ─────────────────────────────────────────────
+
+/** Auto-detect what verification commands to run based on project structure */
+async function detectVerificationCommands(projectPath: string): Promise<string[]> {
+  const commands: string[] = [];
+  try {
+    const { invoke } = await import("@tauri-apps/api/core");
+    const pkgExists = await invoke<boolean>("path_exists", { path: "package.json" });
+    if (pkgExists) {
+      try {
+        const pkgContent = await invoke<string>("read_file", { path: "package.json" });
+        const pkg = JSON.parse(pkgContent);
+        if (pkg.scripts?.typecheck) commands.push("npm run typecheck 2>&1");
+        else if (pkg.scripts?.["type-check"]) commands.push("npm run type-check 2>&1");
+        else if (pkg.devDependencies?.typescript || pkg.dependencies?.typescript) {
+          const tsconfigExists = await invoke<boolean>("path_exists", { path: "tsconfig.json" });
+          if (tsconfigExists) commands.push("npx tsc --noEmit 2>&1");
+        }
+        if (pkg.scripts?.lint) commands.push("npm run lint 2>&1");
+        if (pkg.scripts?.test && !/no test/i.test(pkg.scripts.test)) {
+          commands.push("npm test -- --run 2>&1");
+        }
+      } catch { /* package.json parse failed — skip */ }
+    }
+    const cargoExists = await invoke<boolean>("path_exists", { path: "Cargo.toml" });
+    if (cargoExists) {
+      commands.push("cargo check 2>&1");
+    }
+    const pyprojectExists = await invoke<boolean>("path_exists", { path: "pyproject.toml" });
+    if (pyprojectExists) {
+      commands.push("ruff check . 2>&1");
+    }
+  } catch { /* detection failed — skip */ }
+  return commands;
+}
+
+/** Run verification commands and return results */
+async function runVerification(
+  projectPath: string,
+  opts: ToolLoopOptions,
+  retryCount: number,
+): Promise<VerifyResult> {
+  const verifCommands = await detectVerificationCommands(projectPath);
+  if (verifCommands.length === 0) {
+    return { passed: true, checks: [], retryCount };
+  }
+
+  const checks: VerifyResult["checks"] = [];
+  let allPassed = true;
+
+  for (const cmd of verifCommands) {
+    try {
+      const result = await executeAgentTool(
+        { name: "run_command", input: { command: cmd, cwd: projectPath }, id: `verify-${Date.now()}` } as unknown as ToolCall,
+        projectPath
+      );
+      const output = result.content.slice(0, 2000);
+      const failed = result.is_error ||
+        (/\berror\b/i.test(output) && !/0 errors|no errors|error 0/i.test(output)) ||
+        result.content.includes("FAIL") ||
+        result.content.includes("failed");
+      checks.push({ name: cmd, passed: !failed, output });
+      if (failed) allPassed = false;
+    } catch (err) {
+      checks.push({ name: cmd, passed: false, output: String(err).slice(0, 500) });
+      allPassed = false;
+    }
+  }
+
+  const verifyResult: VerifyResult = { passed: allPassed, checks, retryCount };
+  opts.onVerifyResult?.(verifyResult);
+  return verifyResult;
+}
+
 // ── Public entry point ────────────────────────────────────────────────────────
 
 /**
  * Run the full tool-calling agent loop.
  * Automatically selects the right adapter based on provider type.
+ *
+ * Phase 2 features:
+ *   - Planner: generates a step-by-step plan before tool execution (calls onPlanReady)
+ *   - Verifier: runs typecheck/lint/test after patch application (calls onVerifyResult)
+ *               retries up to 2 times if verification fails, feeding errors back to the model
  */
 export async function runAgentToolLoop(opts: ToolLoopOptions): Promise<void> {
   const { provider, onDone, onError, onCancelled } = opts;
   const collectedMetrics: ResponseMetrics[] = [];
-  const perRoundTimeoutMs = 120_000; // 2 min hard timeout per LLM round
+  const perRoundTimeoutMs = 120_000;
+  let timeoutId: ReturnType<typeof setTimeout> | null = null;
   const loopOpts: ToolLoopOptions = {
     ...opts,
     onMetrics: (metrics) => {
@@ -769,15 +893,20 @@ export async function runAgentToolLoop(opts: ToolLoopOptions): Promise<void> {
 
   try {
     throwIfCancelled(loopOpts);
-    // Set a hard per-round timeout to prevent hung LLM calls from burning credits
-    const timeoutId = setTimeout(() => {
-      if (opts.signal && !opts.signal.aborted) {
-        // Signal was not provided with its own controller; create one.
-        // If caller passed a signal, we assume they manage the timeout.
-      }
-      // Fallback: rely on shouldCancel pattern — caller should wire a timeout
-    }, perRoundTimeoutMs);
-    try {
+    if (!loopOpts.signal) {
+      const internalController = new AbortController();
+      loopOpts.signal = internalController.signal;
+      timeoutId = setTimeout(() => {
+        if (!internalController.signal.aborted) {
+          internalController.abort();
+        }
+      }, perRoundTimeoutMs);
+    }
+
+    // ── Phase 2: Planner ───────────────────────────────────────────────
+    // Generate a plan before tool execution (non-blocking — agent works without it)
+    generatePlan(loopOpts).catch(() => {});
+
     throwIfCancelled(loopOpts);
     const explicitReadOnlyToolCall = buildExplicitReadOnlyToolCall(opts.task);
     if (explicitReadOnlyToolCall) {
@@ -788,12 +917,7 @@ export async function runAgentToolLoop(opts: ToolLoopOptions): Promise<void> {
       const result = await executeAgentTool(normalized, opts.projectPath);
       throwIfCancelled(loopOpts);
       const observations: ToolObservation[] = [];
-      recordToolObservation(
-        observations,
-        normalizedName,
-        normalizedInput,
-        result
-      );
+      recordToolObservation(observations, normalizedName, normalizedInput, result);
       const finalText = await synthesizeFinalAnswer(loopOpts, observations, "");
       throwIfCancelled(loopOpts);
       onDone?.(finalText, combineLoopMetrics(provider, opts.modelId, collectedMetrics));
@@ -807,15 +931,49 @@ export async function runAgentToolLoop(opts: ToolLoopOptions): Promise<void> {
     } else if (provider.type === "gemini") {
       finalText = await runGeminiToolLoop(loopOpts);
     } else {
-      // openai-compatible, groq, ollama, mistral, etc.
       finalText = await runJsonFallbackToolLoop(loopOpts);
     }
 
     throwIfCancelled(loopOpts);
-    onDone?.(finalText, combineLoopMetrics(provider, opts.modelId, collectedMetrics));
-    } finally {
-      clearTimeout(timeoutId);
+
+    // ── Phase 2: Auto-Verifier ─────────────────────────────────────────
+    // After successful agent run, verify changes if any write/patch tools were used
+    const shouldVerify = opts.enableAutoVerify !== false;
+    if (shouldVerify) {
+      const MAX_RETRIES = 2;
+      for (let retry = 0; retry <= MAX_RETRIES; retry++) {
+        const verifyResult = await runVerification(opts.projectPath, loopOpts, retry);
+        if (verifyResult.passed) break;
+        if (retry < MAX_RETRIES) {
+          // Feed errors back to the model for self-correction
+          const failedChecks = verifyResult.checks.filter(c => !c.passed);
+          const errorFeedback = [
+            "AUTO-VERIFICATION FAILED. The following checks did not pass:",
+            ...failedChecks.map(c => `- ${c.name}\n${c.output.slice(0, 500)}`),
+            "",
+            "Please fix the issues above and produce corrected file changes.",
+          ].join("\n");
+          const correctionOpts: ToolLoopOptions = {
+            ...loopOpts,
+            task: `Fix the following verification failures in ${opts.projectPath}:\n\n${errorFeedback}`,
+            maxRounds: 4,
+          };
+          try {
+            if (provider.type === "anthropic") {
+              finalText = await runAnthropicToolLoop(correctionOpts);
+            } else if (provider.type === "gemini") {
+              finalText = await runGeminiToolLoop(correctionOpts);
+            } else {
+              finalText = await runJsonFallbackToolLoop(correctionOpts);
+            }
+          } catch {
+            break; // if correction fails, stop retrying
+          }
+        }
+      }
     }
+
+    onDone?.(finalText, combineLoopMetrics(provider, opts.modelId, collectedMetrics));
   } catch (err) {
     if (isCancellationError(err)) {
       onCancelled?.();
@@ -823,5 +981,7 @@ export async function runAgentToolLoop(opts: ToolLoopOptions): Promise<void> {
     }
     const message = err instanceof Error ? err.message : String(err);
     onError?.(message);
+  } finally {
+    if (timeoutId) clearTimeout(timeoutId);
   }
 }

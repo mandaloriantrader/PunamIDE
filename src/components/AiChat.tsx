@@ -58,6 +58,7 @@ import { useAttachments } from "../hooks/useAttachments";
 import { parseResponseAsync } from "../hooks/useAiWorker";
 import {
   assemblePersistentPayload,
+  fetchRustContext,
   loadAgentMemories,
   compressMemories,
   summarizeOldMessages,
@@ -67,6 +68,8 @@ import { runAgentToolLoop } from "../utils/agentToolLoop";
 import { buildInternalToolInventoryPrompt } from "../utils/agentTools";
 import { decideAgentRoute } from "../services/agent/AgentRuntime";
 import { resolveMentions } from "../utils/mentionResolver";
+import { useEditPreview } from "../hooks/useEditPreview";
+import EditPreviewPanel from "./EditPreviewPanel";
 import { detectTaskType } from "../lib/ai/taskDetection";
 import { selectAdaptiveProvider } from "../lib/ai/adaptiveRouter";
 import type { AdaptiveStrategy } from "../lib/ai/providerCapabilities";
@@ -415,6 +418,18 @@ export default function AiChat({
     handleDeleteSession,
   } = useChatSessions({ projectPath, messages, setMessages });
 
+  // --- Edit Preview (per-hunk accept/reject in chat mode) ---
+  const {
+    preview: editPreview,
+    buildPreview: buildEditPreview,
+    toggleItem: toggleEditItem,
+    acceptAll: acceptAllEdits,
+    rejectAll: rejectAllEdits,
+    getAcceptedEdits,
+    reset: resetEditPreview,
+  } = useEditPreview();
+  const [pendingEditParsed, setPendingEditParsed] = useState<any>(null);
+
   const {
     attachments,
     isDragOver,
@@ -656,6 +671,53 @@ export default function AiChat({
   };
 
   /**
+   * Resolve edit operations with optional preview in chat mode.
+   * In agent mode: applies immediately (fast autonomous flow).
+   * In chat mode: shows the EditPreviewPanel for per-hunk accept/reject.
+   */
+  const resolveEditsWithPreview = async (
+    parsed: any,
+    mode: AgentMode,
+  ): Promise<any> => {
+    if (!parsed || !parsed.editOperations || parsed.editOperations.length === 0) {
+      return parsed;
+    }
+
+    // Agent mode: apply immediately (autonomous flow, no interruptions)
+    if (mode === "agent") {
+      return resolveEditOperations(parsed, projectPath);
+    }
+
+    // Chat mode: show preview panel for user review
+    buildEditPreview(parsed.editOperations);
+    setPendingEditParsed(parsed);
+    // Return parsed as-is (edits NOT applied yet — user must review)
+    return { ...parsed, editOperations: [] };
+  };
+
+  /** Called when user clicks "Apply" in the EditPreviewPanel */
+  const handleApplyAcceptedEdits = async () => {
+    if (!pendingEditParsed) return;
+    const accepted = getAcceptedEdits();
+    if (accepted.length > 0) {
+      // Build a synthetic parsed response with only accepted edits
+      const filteredParsed = {
+        ...pendingEditParsed,
+        editOperations: accepted,
+      };
+      await resolveEditOperations(filteredParsed, projectPath);
+    }
+    resetEditPreview();
+    setPendingEditParsed(null);
+  };
+
+  /** Called when user dismisses the preview without applying */
+  const handleDismissEditPreview = () => {
+    resetEditPreview();
+    setPendingEditParsed(null);
+  };
+
+  /**
    * Unified context builder — single-pass with deduplication.
    * Priority order (highest to lowest): open tabs, @mentions, key files, @codebase/search hits, errors.
    * Files already loaded by mentionResolver are tracked to avoid re-reads.
@@ -760,6 +822,21 @@ export default function AiChat({
       const relPath = getRelativePath(projectPath, activeFilePath);
       if (!contextFiles.has(relPath)) {
         queueFile(relPath);
+      }
+    }
+
+    // 10. Rust TF-IDF context enrichment — query the Rust backend for intelligent
+    //     file scoring (TF-IDF + dependency graph + git boost + open tab boost).
+    //     This adds highly-relevant files the heuristics above may have missed.
+    if (userPrompt.length > 3) {
+      const tabPaths = openTabs.map((t) => getRelativePath(projectPath, t.path));
+      const rustCtx = await fetchRustContext(userPrompt, tabPaths, 5).catch(() => null);
+      if (rustCtx && rustCtx.relevant_files.length > 0) {
+        for (const rf of rustCtx.relevant_files) {
+          if (!contextFiles.has(rf.path) && !queued.has(rf.path)) {
+            queueFile(rf.path);
+          }
+        }
       }
     }
 
@@ -1007,7 +1084,8 @@ export default function AiChat({
             return;
           }
 
-          const streamId = `stream-${Date.now()}`;
+          const streamId = `stream-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+          const streamController = new AbortController();
           const firstNotice = "";
           setMessages((prev) => [...prev, { role: "assistant", content: `${firstNotice}\n\nâ–`, mode, streamId } as ChatMessage & { streamId: string }]);
 
@@ -1052,8 +1130,9 @@ export default function AiChat({
               ));
             };
 
-            const unlisten = await listen<{ token: string; done: boolean }>("llm-stream", (event) => {
-              const { token, done } = event.payload;
+            const unlisten = await listen<{ stream_id: string; token: string; done: boolean }>("llm-stream", (event) => {
+              const { stream_id, token, done } = event.payload;
+              if (stream_id !== streamId) return;
               if (!done && token) {
                 streamedText += token;
                 tokenCount++;
@@ -1062,11 +1141,22 @@ export default function AiChat({
             });
 
             resetParseState();
+            activeStreamRef.current = {
+              cancel: () => {
+                streamController.abort();
+                cancelAnimationFrame(rafId);
+                unlisten();
+              },
+              streamId,
+              kind: "chat",
+            };
 
             const resp = await sendToProviderStreaming(candidate.provider, candidate.model, {
               systemPrompt: SYSTEM_PROMPT,
               userPrompt: prompt,
               images: imagePayload,
+              streamId,
+              signal: streamController.signal,
             });
             unlisten();
             cancelAnimationFrame(rafId);
@@ -1097,12 +1187,15 @@ export default function AiChat({
               finalText = resp.error || "Unknown error";
             }
           }
+          if (activeStreamRef.current?.streamId === streamId) {
+            activeStreamRef.current = null;
+          }
 
           const noticeText = [`Used ${selectedProviderName} / ${selectedModelId}.`, ...fallbackNotices].join("\n");
           const responseText = `${noticeText}\n\n${finalText}`;
           let parsed = finalResp?.success ? await parseResponseAsync(finalText, collectExistingFiles()) : null;
           if (parsed && parsed.editOperations.length > 0) {
-            parsed = await resolveEditOperations(parsed, projectPath);
+            parsed = await resolveEditsWithPreview(parsed, agentMode);
           }
           const hasActions = parsed ? hasParsedActions(parsed) : false;
           recordResponseUsage(finalResp?.metrics);
@@ -1137,7 +1230,7 @@ export default function AiChat({
             setMessages((prev) => [...prev, { role: "assistant", content: "Provider not found." }]);
           } else {
             // Add placeholder message with unique stream ID for tracking
-            const streamId = `stream-${Date.now()}`;
+            const streamId = `stream-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
             setMessages((prev) => [...prev, { role: "assistant", content: "▍", mode, streamId } as ChatMessage & { streamId: string }]);
 
             // Listen for streaming tokens with incremental parsing
@@ -1165,8 +1258,10 @@ export default function AiChat({
               ));
             };
 
-            const unlisten = await listen<{ token: string; done: boolean }>("llm-stream", (event) => {
-              const { token, done } = event.payload;
+            const streamController = new AbortController();
+            const unlisten = await listen<{ stream_id: string; token: string; done: boolean }>("llm-stream", (event) => {
+              const { stream_id, token, done } = event.payload;
+              if (stream_id !== streamId) return;
               if (!done && token) {
                 streamedText += token;
                 tokenCount++;
@@ -1176,13 +1271,19 @@ export default function AiChat({
 
             resetParseState();
 
-            activeStreamRef.current = { cancel: () => { cancelAnimationFrame(rafId); unlisten(); }, streamId, kind: "chat" };
+            activeStreamRef.current = { cancel: () => { streamController.abort(); cancelAnimationFrame(rafId); unlisten(); }, streamId, kind: "chat" };
 
             // Send the streaming request
             const imagePayload = currentImages.length > 0
               ? currentImages.map((img) => ({ base64: img.base64, mimeType: img.mimeType }))
               : undefined;
-            const resp = await sendToProviderStreaming(provider, modelId, { systemPrompt: SYSTEM_PROMPT, userPrompt: prompt, images: imagePayload });
+            const resp = await sendToProviderStreaming(provider, modelId, {
+              systemPrompt: SYSTEM_PROMPT,
+              userPrompt: prompt,
+              images: imagePayload,
+              streamId,
+              signal: streamController.signal,
+            });
             unlisten();
             cancelAnimationFrame(rafId);
             flushStreamedText(); // final flush
@@ -1192,7 +1293,7 @@ export default function AiChat({
             let parsed = resp.success ? await parseResponseAsync(finalText, collectExistingFiles()) : null;
             // Resolve EDIT blocks into fileChanges
             if (parsed && parsed.editOperations.length > 0) {
-              parsed = await resolveEditOperations(parsed, projectPath);
+              parsed = await resolveEditsWithPreview(parsed, agentMode);
             }
             const hasActions = parsed ? hasParsedActions(parsed) : false;
 
@@ -1265,9 +1366,9 @@ export default function AiChat({
               return { content: resp.error || "Unknown error", metrics: resp.metrics };
             }
             recordResponseUsage(resp.metrics);
-            let parsed = parseResponse(resp.text, collectExistingFiles());
+            let parsed = await parseResponseAsync(resp.text, collectExistingFiles());
             if (parsed.editOperations.length > 0) {
-              parsed = await resolveEditOperations(parsed, projectPath);
+              parsed = await resolveEditsWithPreview(parsed, agentMode);
             }
             const hasActions = hasParsedActions(parsed);
             return { content: resp.text, parsed: hasActions ? parsed : undefined, applied: false, metrics: resp.metrics };
@@ -1295,9 +1396,9 @@ export default function AiChat({
           return;
         }
 
-        let parsed = parseResponse(response.text, collectExistingFiles());
+        let parsed = await parseResponseAsync(response.text, collectExistingFiles());
         if (parsed.editOperations.length > 0) {
-          parsed = await resolveEditOperations(parsed, projectPath);
+          parsed = await resolveEditsWithPreview(parsed, agentMode);
         }
         const hasActions = hasParsedActions(parsed);
         setMessages((prev) => [...prev, {
@@ -1789,7 +1890,7 @@ export default function AiChat({
     );
 
     // Load persistent memories
-    const memories = loadAgentMemories(projectPath);
+    const memories = await loadAgentMemories(projectPath);
     const compressedMemory = compressMemories(memories);
 
     // Summarize old messages
@@ -1812,7 +1913,7 @@ export default function AiChat({
       buildInternalToolInventoryPrompt(),
     ].filter(Boolean).join("\n\n");
 
-    const payload = assemblePersistentPayload({
+    const payload = await assemblePersistentPayload({
       globalGoal: activeTask.task,
       currentSubtask: `${currentTask} (attempt ${activeTask.attempt}/${activeTask.maxAttempts})${historyContext ? "\n" + historyContext : ""}`,
       fullHistory: messages,
@@ -1822,6 +1923,7 @@ export default function AiChat({
       projectPath,
       activeFilePath: activeFilePath || undefined,
       projectFiles: files,
+      openTabPaths: openTabs.map((t) => getRelativePath(projectPath, t.path)),
     });
 
     // ── Send to AI using the optimized payload ──────────────────────────────
@@ -1845,7 +1947,7 @@ export default function AiChat({
       }
 
       // Stream with block-parsed rendering at 60fps (incremental)
-      const streamId = `stream-${Date.now()}`;
+      const streamId = `stream-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
       setMessages(prev => [...prev, { role: "assistant", content: "▍", mode: "chat", streamId } as any]);
 
       const { listen } = await import("@tauri-apps/api/event");
@@ -1873,9 +1975,11 @@ export default function AiChat({
         ));
       };
 
-      const unlisten = await listen<{ token: string; done: boolean }>("llm-stream", (event) => {
+      const streamController = new AbortController();
+      const unlisten = await listen<{ stream_id: string; token: string; done: boolean }>("llm-stream", (event) => {
         if (!isCurrentAgentRun()) return;
-        const { token, done } = event.payload;
+        const { stream_id, token, done } = event.payload;
+        if (stream_id !== streamId) return;
         if (!done && token) {
           streamedText += token;
           tokenCount++;
@@ -1886,6 +1990,7 @@ export default function AiChat({
         streamId,
         kind: "agent_stream",
         cancel: () => {
+          streamController.abort();
           cancelAnimationFrame(rafId);
           unlisten();
           agentCancelledRef.current = true;
@@ -1903,7 +2008,7 @@ export default function AiChat({
         unlisten();
         cancelAnimationFrame(rafId);
         setMessages(prev => prev.filter(m => (m as any).streamId !== streamId));
-        const toolStreamId = `stream-${Date.now()}`;
+        const toolStreamId = `stream-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
         const toolTrace: Array<{ tool: string; input?: Record<string, unknown> }> = [];
         const formatTraceInput = (input?: Record<string, unknown>) => {
           const entries = Object.entries(input || {}).filter(([, value]) => value !== undefined && value !== null && value !== "");
@@ -1930,7 +2035,8 @@ export default function AiChat({
           mode: "chat",
           streamId: toolStreamId,
         } as any]);
-
+
+
         activeStreamRef.current = {
           streamId: toolStreamId,
           kind: "tool_loop",
@@ -1978,7 +2084,7 @@ export default function AiChat({
             const finalBlocks = parseStreamBlocks(finalText).completed;
             let parsed = await parseResponseAsync(finalText, existingFiles).catch(() => null);
             if (parsed && parsed.editOperations.length > 0) {
-              parsed = await resolveEditOperations(parsed, projectPath);
+              parsed = await resolveEditsWithPreview(parsed, agentMode);
             }
             const hasActions = parsed ? hasParsedActions(parsed) : false;
 
@@ -2000,7 +2106,7 @@ export default function AiChat({
 
             if (parsed) {
               const changedFiles = parsed.fileChanges.map(f => f.path);
-              extractMemoriesFromResponse(projectPath, currentTask, finalText, changedFiles);
+              void extractMemoriesFromResponse(projectPath, currentTask, finalText, changedFiles);
             }
             activeStreamRef.current = null;
             setAgentActivityText("");
@@ -2066,6 +2172,8 @@ export default function AiChat({
       const resp = await sendToProviderStreaming(provider, modelId, {
         systemPrompt: payload.systemInstruction,
         userPrompt: finalUserPrompt,
+        streamId,
+        signal: streamController.signal,
       });
       setAgentActivityText("Writing final answer...");
       unlisten();
@@ -2080,7 +2188,7 @@ export default function AiChat({
       const finalText = resp.success ? resp.text : (resp.error || "Unknown error");
       let parsed = resp.success ? await parseResponseAsync(finalText, existingFiles) : null;
       if (parsed && parsed.editOperations.length > 0) {
-        parsed = await resolveEditOperations(parsed, projectPath);
+        parsed = await resolveEditsWithPreview(parsed, agentMode);
       }
       const hasActions = parsed ? hasParsedActions(parsed) : false;
       recordResponseUsage(resp.metrics);
@@ -2107,7 +2215,7 @@ export default function AiChat({
       // Auto-extract memories from the response
       if (resp.success && parsed) {
         const changedFiles = parsed.fileChanges.map(f => f.path);
-        extractMemoriesFromResponse(projectPath, currentTask, finalText, changedFiles);
+        void extractMemoriesFromResponse(projectPath, currentTask, finalText, changedFiles);
       }
       activeStreamRef.current = null;
       setAgentActivityText("");
@@ -2416,6 +2524,8 @@ export default function AiChat({
   const workspaceName = getWorkspaceName(projectPath);
   const visibleFileCount = countFileEntries(files);
   const providerReady = Boolean(config.api_key) || aiProviders.some(hasUsableProvider);
+  const lastMessage = messages[messages.length - 1];
+  const hasVisibleAssistantStream = lastMessage?.role === "assistant" && lastMessage.isComplete === false;
 
   return (
     <div className="ai-chat" onDragOver={handleDragOver} onDragLeave={handleDragLeave} onDrop={handleDrop}>
@@ -2503,7 +2613,7 @@ export default function AiChat({
 
         {messages.length === 0 && (
           <div className="chat-welcome">
-            <img src="/logo-Transparent.png" alt="Punam" className="chat-welcome-logo" />
+            <img src="/logo_transparent.png" alt="Punam" className="chat-welcome-logo" />
             <p><strong>Hi, I'm Punam!</strong></p>
             <p className="chat-welcome-hint">Your AI coding assistant by Amritanshu Amar</p>
           </div>
@@ -2628,6 +2738,11 @@ export default function AiChat({
                     </>
                   )}
                   {msg.metrics && <ResponseMetricsDisplay metrics={msg.metrics} />}
+                  {i === messages.length - 1 && loading && agentMode === "agent" && !msg.isComplete && (
+                    <button className="agent-stream-stop" onClick={stopAgent} title="Stop Agent">
+                      Stop
+                    </button>
+                  )}
                   {msg.checkResult && (
                     <div className={`check-result ${msg.checkResult.exitCode === 0 ? "success" : "failure"}`}>
                       <div className="check-result-header">
@@ -2656,7 +2771,7 @@ export default function AiChat({
           );
         })}
 
-        {loading && (
+        {loading && !hasVisibleAssistantStream && (
           <div className="chat-message assistant working">
             <div className="chat-message-icon">
               <PunamAvatar active />
@@ -2665,7 +2780,7 @@ export default function AiChat({
               <div className="agent-working-card">
                 <div className="agent-working-main">
                   <Loader2 size={16} className="spin" />
-                  <div>
+                  <div className="agent-working-copy">
                     <strong>Working in {MODE_LABELS[agentMode]} mode</strong>
                     <span>
                       {agentMode === "agent" && agentTask?.active
@@ -2680,16 +2795,9 @@ export default function AiChat({
                   )}
                 </div>
                 {contextFiles.length > 0 && (
-                  <div className="context-chip-row">
-                    {contextFiles.slice(0, 4).map((file) => (
-                      <span className="context-chip" key={file}>
-                        <FileText size={10} />
-                        {file}
-                      </span>
-                    ))}
-                    {contextFiles.length > 4 && (
-                      <span className="context-chip muted">+{contextFiles.length - 4}</span>
-                    )}
+                  <div className="agent-working-context" title={contextFiles.join(", ")}>
+                    <FileText size={10} />
+                    {contextFiles.length} context file{contextFiles.length === 1 ? "" : "s"}
                   </div>
                 )}
               </div>
@@ -2707,6 +2815,19 @@ export default function AiChat({
             <button className="btn-secondary compact" onClick={agentSkipCommand}>Skip</button>
           </div>
         </div>
+      )}
+
+      {/* Edit Preview Panel — shown in chat mode when edits need review */}
+      {editPreview.items.length > 0 && (
+        <EditPreviewPanel
+          items={editPreview.items}
+          allAccepted={editPreview.allAccepted}
+          onToggleItem={toggleEditItem}
+          onAcceptAll={acceptAllEdits}
+          onRejectAll={rejectAllEdits}
+          onApply={handleApplyAcceptedEdits}
+          onDismiss={handleDismissEditPreview}
+        />
       )}
 
       {/* Input Area */}

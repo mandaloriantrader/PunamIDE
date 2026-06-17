@@ -1,0 +1,366 @@
+/* ─── Snapshot Manager Styles ──────────────────────────────────────────────── */
+
+.snapshot-manager {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  overflow: hidden;
+}
+
+.snapshot-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border);
+}
+
+.snapshot-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--text-secondary);
+}
+
+.snapshot-count {
+  font-size: 9px;
+  background: var(--accent);
+  color: var(--bg-primary);
+  border-radius: 8px;
+  padding: 1px 5px;
+  font-weight: 700;
+}
+
+.snapshot-header-actions {
+  display: flex;
+  gap: 2px;
+}
+
+.snapshot-quick-create {
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border);
+}
+
+.snapshot-create-btn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  padding: 7px 12px;
+  background: var(--accent);
+  color: var(--bg-primary);
+  border: none;
+  border-radius: 6px;
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: opacity 0.12s;
+}
+
+.snapshot-create-btn:hover:not(:disabled) { opacity: 0.9; }
+.snapshot-create-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+.snapshot-export-note {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  padding: 7px 12px;
+  border-bottom: 1px solid var(--border);
+  color: var(--text-secondary);
+  font-size: 10px;
+  line-height: 1.4;
+  word-break: break-word;
+}
+
+.snapshot-export-note svg {
+  flex-shrink: 0;
+  margin-top: 1px;
+  color: var(--accent);
+}
+
+.snapshot-filter {
+  padding: 6px 12px;
+  border-bottom: 1px solid var(--border);
+}
+
+.snapshot-filter input {
+  width: 100%;
+  padding: 5px 8px;
+  background: var(--bg-primary);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text-primary);
+  font-size: 11px;
+  outline: none;
+}
+
+.snapshot-filter input:focus { border-color: var(--accent); }
+
+.snapshot-list {
+  flex: 1;
+  overflow-y: auto;
+  padding: 8px;
+}
+
+.snapshot-empty {
+  color: var(--text-secondary);
+  font-size: 11px;
+  text-align: center;
+  padding: 20px 12px;
+  line-height: 1.5;
+}
+
+.snapshot-card {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px 12px;
+  margin-bottom: 8px;
+  background: var(--bg-secondary);
+  transition: border-color 0.12s;
+}
+
+.snapshot-card:hover { border-color: var(--accent); }
+
+.snapshot-card-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 4px;
+}
+
+.snapshot-card-name {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--accent);
+  font-family: "JetBrains Mono", "Fira Code", monospace;
+}
+
+.snapshot-card-time {
+  font-size: 10px;
+  color: var(--text-secondary);
+  background: var(--bg-primary);
+  padding: 1px 6px;
+  border-radius: 4px;
+}
+
+.snapshot-card-meta {
+  display: flex;
+  gap: 12px;
+  font-size: 10px;
+  color: var(--text-secondary);
+  margin-bottom: 8px;
+}
+
+.snapshot-card-actions {
+  display: flex;
+  gap: 4px;
+}
+
+.snapshot-card-actions button {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 8px;
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--text-secondary);
+  border-radius: 4px;
+  font-size: 10px;
+  cursor: pointer;
+  transition: all 0.12s;
+}
+
+.snapshot-card-actions button:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+  border-color: var(--accent);
+}
+
+.snapshot-card-actions button:disabled {
+  opacity: 0.55;
+  cursor: wait;
+}
+
+.snapshot-delete-btn:hover {
+  color: var(--red) !important;
+  border-color: var(--red) !important;
+}
+
+/* ─── Modals ──────────────────────────────────────────────────────────────── */
+
+.snapshot-modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.7);
+  z-index: 9000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  backdrop-filter: blur(3px);
+}
+
+.snapshot-modal {
+  background: var(--bg-primary);
+  border: 1px solid var(--accent);
+  border-radius: 12px;
+  width: 420px;
+  max-height: 80vh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
+}
+
+.snapshot-modal-wide { width: 520px; }
+
+.snapshot-modal-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--border);
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.snapshot-modal-header .icon-btn { margin-left: auto; }
+
+.snapshot-modal-body {
+  padding: 16px;
+  overflow-y: auto;
+}
+
+.snapshot-modal-body label {
+  display: block;
+  font-size: 11px;
+  color: var(--text-secondary);
+  margin-bottom: 4px;
+  margin-top: 10px;
+}
+
+.snapshot-modal-body label:first-child { margin-top: 0; }
+
+.snapshot-modal-body input {
+  width: 100%;
+  padding: 8px 10px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text-primary);
+  font-size: 12px;
+  font-family: "JetBrains Mono", monospace;
+  outline: none;
+  box-sizing: border-box;
+}
+
+.snapshot-modal-body input:focus { border-color: var(--accent); }
+
+.snapshot-reason-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+  margin-top: 4px;
+}
+
+.snapshot-reason-btn {
+  padding: 6px 10px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text-secondary);
+  font-size: 11px;
+  cursor: pointer;
+  text-align: left;
+  transition: all 0.12s;
+}
+
+.snapshot-reason-btn:hover { border-color: var(--accent); color: var(--text-primary); }
+.snapshot-reason-btn.active { border-color: var(--accent); color: var(--accent); background: var(--bg-hover); }
+
+.snapshot-includes-info {
+  margin-top: 12px;
+  padding: 10px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-size: 11px;
+  line-height: 1.6;
+}
+
+.snapshot-includes-info .includes { color: var(--green); }
+.snapshot-includes-info .excludes { color: var(--red); margin-top: 4px; }
+
+.snapshot-modal-footer {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+  padding: 12px 16px;
+  border-top: 1px solid var(--border);
+}
+
+/* ─── Restore Preview ─────────────────────────────────────────────────────── */
+
+.snapshot-safety-notice {
+  padding: 10px 16px;
+  background: rgba(249, 226, 175, 0.08);
+  border-bottom: 1px solid rgba(249, 226, 175, 0.2);
+  font-size: 11px;
+  color: var(--yellow);
+}
+
+.snapshot-preview-stats {
+  display: flex;
+  gap: 8px;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--border);
+}
+
+.snapshot-preview-stats .stat {
+  flex: 1;
+  text-align: center;
+  padding: 6px;
+  border-radius: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  background: var(--bg-secondary);
+}
+
+.stat.modified { color: var(--yellow); }
+.stat.added { color: var(--green); }
+.stat.deleted { color: var(--red); }
+.stat.total { color: var(--accent); }
+
+.snapshot-preview-files {
+  flex: 1;
+  overflow-y: auto;
+  padding: 12px 16px;
+  max-height: 300px;
+}
+
+.file-group { margin-bottom: 12px; }
+
+.file-group-label {
+  font-size: 11px;
+  font-weight: 600;
+  margin-bottom: 4px;
+  padding: 2px 6px;
+  border-radius: 3px;
+  display: inline-block;
+}
+
+.file-group-label.modified { color: var(--yellow); background: rgba(249, 226, 175, 0.1); }
+.file-group-label.added { color: var(--green); background: rgba(166, 227, 161, 0.1); }
+.file-group-label.deleted { color: var(--red); background: rgba(243, 139, 168, 0.1); }
+
+.file-item {
+  font-size: 11px;
+  color: var(--text-secondary);
+  padding: 2px 0 2px 10px;
+  font-family: "JetBrains Mono", monospace;
+  border-left: 2px solid var(--border);
+}

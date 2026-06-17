@@ -1,0 +1,285 @@
+.help-menu-root {
+  position: relative;
+}
+
+.help-menu-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 80;
+}
+
+.help-menu {
+  position: absolute;
+  top: 28px;
+  right: 0;
+  z-index: 90;
+  min-width: 190px;
+  padding: 6px;
+  border: 1px solid var(--border-primary);
+  border-radius: 8px;
+  background: var(--bg-secondary);
+  box-shadow: 0 18px 40px rgba(0, 0, 0, 0.38);
+}
+
+.help-menu button {
+  width: 100%;
+  min-height: 32px;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 6px;
+  color: var(--text-secondary);
+  background: transparent;
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.help-menu button:hover {
+  color: var(--text-primary);
+  background: var(--bg-hover);
+}
+
+.alpha-modal-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 120;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: rgba(0, 0, 0, 0.55);
+}
+
+.alpha-modal {
+  width: min(560px, calc(100vw - 48px));
+  max-height: calc(100vh - 64px);
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 18px;
+  border: 1px solid var(--border-primary);
+  border-radius: 8px;
+  background: var(--bg-primary);
+  box-shadow: 0 24px 70px rgba(0, 0, 0, 0.48);
+}
+
+.alpha-modal-wide {
+  width: min(860px, calc(100vw - 48px));
+}
+
+.alpha-modal-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 14px;
+}
+
+.alpha-modal-header h2 {
+  margin: 0;
+  color: var(--text-primary);
+  font-size: 16px;
+  font-weight: 650;
+}
+
+.alpha-modal-header p {
+  margin: 5px 0 0;
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.alpha-textarea,
+.alpha-report {
+  width: 100%;
+  min-height: 150px;
+  resize: vertical;
+  padding: 10px 12px;
+  border: 1px solid var(--border-primary);
+  border-radius: 7px;
+  color: var(--text-primary);
+  background: var(--bg-secondary);
+  font: 12px/1.45 var(--font-mono, ui-monospace, SFMono-Regular, Consolas, monospace);
+}
+
+.alpha-report {
+  min-height: 360px;
+  resize: none;
+  white-space: pre;
+}
+
+.alpha-checkbox-row {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.alpha-checkbox-row input {
+  width: 14px;
+  height: 14px;
+}
+
+.alpha-modal-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.alpha-modal-actions button {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.alpha-about-list {
+  display: grid;
+  gap: 8px;
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.alpha-about-title {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+}
+
+.alpha-about-title img {
+  width: 44px;
+  height: 44px;
+  object-fit: contain;
+  flex-shrink: 0;
+}
+
+.alpha-diagnostics-grid,
+.settings-about-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.alpha-diagnostics-item,
+.settings-about-grid > div {
+  min-width: 0;
+  padding: 9px 10px;
+  border: 1px solid var(--border-primary);
+  border-radius: 7px;
+  background: var(--bg-secondary);
+}
+
+.alpha-diagnostics-item span,
+.settings-about-grid span {
+  display: block;
+  margin-bottom: 4px;
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+.alpha-diagnostics-item strong,
+.settings-about-grid strong {
+  display: block;
+  overflow-wrap: anywhere;
+  color: var(--text-primary);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.alpha-changelog,
+.settings-about-list {
+  display: grid;
+  gap: 7px;
+  padding: 10px 12px;
+  border: 1px solid var(--border-primary);
+  border-radius: 7px;
+  background: var(--bg-secondary);
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.alpha-changelog-title,
+.settings-about-version {
+  color: var(--text-primary);
+  font-weight: 650;
+}
+
+.alpha-onboarding-steps {
+  display: grid;
+  gap: 9px;
+}
+
+.alpha-onboarding-steps button {
+  display: grid;
+  grid-template-columns: 30px 1fr;
+  grid-template-areas:
+    "num title"
+    "num desc";
+  gap: 2px 10px;
+  min-height: 58px;
+  padding: 10px;
+  border: 1px solid var(--border-primary);
+  border-radius: 7px;
+  background: var(--bg-secondary);
+  color: var(--text-secondary);
+  text-align: left;
+  cursor: pointer;
+}
+
+.alpha-onboarding-steps button:hover {
+  border-color: var(--accent);
+  background: var(--bg-hover);
+}
+
+.alpha-onboarding-steps span {
+  grid-area: num;
+  width: 28px;
+  height: 28px;
+  display: grid;
+  place-items: center;
+  border-radius: 999px;
+  background: var(--accent);
+  color: var(--accent-contrast, #fff);
+  font-weight: 700;
+}
+
+.alpha-onboarding-steps strong {
+  grid-area: title;
+  color: var(--text-primary);
+  font-size: 13px;
+}
+
+.alpha-onboarding-steps small {
+  grid-area: desc;
+  color: var(--text-muted);
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+@media (max-width: 720px) {
+  .alpha-modal-overlay {
+    align-items: stretch;
+    padding: 12px;
+  }
+
+  .alpha-modal,
+  .alpha-modal-wide {
+    width: 100%;
+    max-height: calc(100vh - 24px);
+  }
+
+  .alpha-report {
+    min-height: 280px;
+  }
+
+  .alpha-diagnostics-grid,
+  .settings-about-grid {
+    grid-template-columns: 1fr;
+  }
+}

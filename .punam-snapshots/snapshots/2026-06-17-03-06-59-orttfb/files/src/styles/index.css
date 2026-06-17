@@ -1,0 +1,34 @@
+﻿/*
+ * PunamIDE style entrypoint.
+ * Keep this import order stable: older support styles first, recovered app shell chunks next,
+ * feature/debugger overrides last.
+ */
+@import "../index.css";
+@import "./layout.css";
+@import "./phase1.css";
+@import "./right-panel.css";
+@import "./kanban.css";
+@import "./terminal-panel.css";
+@import "./polish.css";
+
+@import "./app/01-tokens-reset.css";
+@import "./app/02-app-shell-sidebar.css";
+@import "./app/03-git-command-diff.css";
+@import "./app/04-editor-bottom-terminal.css";
+@import "./app/05-ai-panel.css";
+@import "./app/06-settings-controls.css";
+@import "./app/07-splash-settings.css";
+@import "./app/08-visual-enhancements.css";
+@import "./app/09-ai-chat-overhaul.css";
+@import "./app/10-bug-hunt.css";
+@import "./app/11-widgets-tools.css";
+@import "./app/12-polish-pass-one.css";
+@import "./app/13-polish-pass-two.css";
+@import "./app/14-feature-panels.css";
+@import "./app/15-shell-final-fixes.css";
+@import "./app/16-cinematic-theme-final.css";
+@import "./app/17-cline-chat-blocks.css";
+@import "./debugger.css";
+@import "./github.css";
+@import "./snapshot.css";
+@import "./alpha-feedback.css";

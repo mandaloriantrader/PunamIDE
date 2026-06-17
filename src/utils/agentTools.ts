@@ -157,6 +157,79 @@ export const AGENT_TOOL_DEFINITIONS = [
       required: ["command"],
     },
   },
+  {
+    name: "symbol_lookup",
+    description:
+      "Find where a function, class, struct, type, or interface is defined across the project. " +
+      "Returns file path, line number, kind (function/class/struct/etc.), and signature. " +
+      "Use BEFORE editing to locate definitions. Case-insensitive matching.",
+    input_schema: {
+      type: "object",
+      properties: {
+        name: {
+          type: "string",
+          description: "Symbol name to look up (e.g. 'handleSubmit', 'UserService', 'AppConfig')",
+        },
+      },
+      required: ["name"],
+    },
+  },
+  {
+    name: "find_callers",
+    description:
+      "Find all functions that call a given function. " +
+      "Returns caller name, file path, and line number for each call site. " +
+      "Use to understand impact before modifying a function signature.",
+    input_schema: {
+      type: "object",
+      properties: {
+        function_name: {
+          type: "string",
+          description: "Name of the function to find callers for",
+        },
+      },
+      required: ["function_name"],
+    },
+  },
+  {
+    name: "find_callees",
+    description:
+      "Find all functions called by a given function. " +
+      "Returns callee name, call expression, and line number. " +
+      "Use to trace call chains and understand dependencies before refactoring.",
+    input_schema: {
+      type: "object",
+      properties: {
+        function_name: {
+          type: "string",
+          description: "Name of the function to find callees for",
+        },
+      },
+      required: ["function_name"],
+    },
+  },
+  {
+    name: "semantic_search",
+    description:
+      "Search for code by meaning, not just text. " +
+      "Find code snippets semantically similar to a natural language description. " +
+      "Use when you need to find related logic, similar implementations, or " +
+      "code relevant to a concept (e.g. 'authentication flow', 'error handling').",
+    input_schema: {
+      type: "object",
+      properties: {
+        query: {
+          type: "string",
+          description: "Natural language description of what you're looking for (e.g. 'user authentication logic', 'database connection setup')",
+        },
+        top_k: {
+          type: "number",
+          description: "Number of results to return (default: 5, max: 10)",
+        },
+      },
+      required: ["query"],
+    },
+  },
 ] as const;
 
 export type AgentToolName = typeof AGENT_TOOL_DEFINITIONS[number]["name"];
@@ -166,6 +239,10 @@ const READ_ONLY_AGENT_TOOLS: AgentToolName[] = [
   "search_in_project",
   "read_file",
   "read_lines",
+  "symbol_lookup",
+  "find_callers",
+  "find_callees",
+  "semantic_search",
 ];
 
 const GUARDED_ACTION_AGENT_TOOLS: AgentToolName[] = [
@@ -281,6 +358,23 @@ export function normalizeAgentToolCall(
       assignAlias("command", ["cmd", "shell", "script"]);
       requireField(name, input, "command");
       break;
+    case "symbol_lookup":
+      assignAlias("name", ["symbol", "symbolName", "symbol_name", "identifier", "function_name", "className"]);
+      requireField(name, input, "name");
+      break;
+    case "find_callers":
+      assignAlias("function_name", ["name", "functionName", "fn_name", "symbol", "callee"]);
+      requireField(name, input, "function_name");
+      break;
+    case "find_callees":
+      assignAlias("function_name", ["name", "functionName", "fn_name", "symbol", "caller"]);
+      requireField(name, input, "function_name");
+      break;
+    case "semantic_search":
+      assignAlias("query", ["search", "description", "text", "meaning"]);
+      requireField(name, input, "query");
+      if (input.top_k !== undefined) input.top_k = Math.min(Number(input.top_k) || 5, 10);
+      break;
   }
 
   return { ...toolCall, input };
@@ -386,6 +480,43 @@ export async function executeAgentTool(
 
   try {
     let resultText: string;
+
+    if (name === "run_command") {
+      const command = String(input.command || "");
+      const validation = await invoke<{
+        risk_level: "safe" | "needs_approval" | "blocked";
+        sanitized_command: string;
+        feedback_message: string;
+      }>("inspect_command", { command, workspacePath: projectPath });
+      if (validation.risk_level === "blocked") {
+        return {
+          tool_use_id: id,
+          content: `Command blocked by safety policy: ${validation.feedback_message}`,
+          is_error: true,
+        };
+      }
+      const approved = window.confirm(
+        `Punam agent wants to run:\n\n${validation.sanitized_command}\n\n${validation.feedback_message}\n\nAllow?`
+      );
+      if (!approved) {
+        return { tool_use_id: id, content: "Command rejected by user.", is_error: true };
+      }
+      input.command = validation.sanitized_command;
+    } else if (name === "apply_patch") {
+      const approved = window.confirm(
+        `Punam agent wants to modify:\n\n${String(input.path)}\nLines ${String(input.start_line)}-${String(input.end_line)}\n\nAllow this patch?`
+      );
+      if (!approved) {
+        return { tool_use_id: id, content: "Patch rejected by user.", is_error: true };
+      }
+    } else if (name === "write_file") {
+      const approved = window.confirm(
+        `Punam agent wants to create or overwrite:\n\n${String(input.path)}\n\nAllow this file write?`
+      );
+      if (!approved) {
+        return { tool_use_id: id, content: "File write rejected by user.", is_error: true };
+      }
+    }
 
     switch (name) {
       // ── read_lines (new Rust command) ──────────────────────────────────────
@@ -506,6 +637,137 @@ export async function executeAgentTool(
           `Exit code: ${result.exit_code}\n` +
           (result.stdout ? `stdout:\n${result.stdout.slice(0, 3000)}` : "") +
           (result.stderr ? `\nstderr:\n${result.stderr.slice(0, 1000)}` : "");
+        break;
+      }
+
+      // ── symbol_lookup (AST-based symbol index) ───────────────────────────
+      case "symbol_lookup": {
+        const result = await invoke<{
+          query: string;
+          matches: Array<{
+            name: string;
+            file: string;
+            line: number;
+            kind: string;
+            signature: string;
+          }>;
+          total_count: number;
+          query_time_ms: number;
+        }>("symbol_lookup", { name: String(input.name) });
+
+        if (result.matches.length === 0) {
+          // Fallback: try tree-sitter extraction on likely files via search
+          try {
+            const { extractSymbolsFromFile } = await import("../services/intelligence/TreeSitterSymbolExtractor");
+            const searchResults = await invoke<
+              Array<{ path: string; line: number; column: number; preview: string }>
+            >("search_project", { query: String(input.name) });
+            const uniqueFiles = [...new Set(searchResults.slice(0, 5).map(r => r.path))];
+            const tsMatches: Array<{ name: string; file: string; line: number; kind: string; signature: string }> = [];
+            for (const filePath of uniqueFiles) {
+              try {
+                const content = await invoke<string>("read_file", { path: filePath });
+                const symbols = await extractSymbolsFromFile(content, filePath);
+                if (symbols) {
+                  const matches = symbols.filter(s => s.name.toLowerCase() === input.name.toLowerCase());
+                  tsMatches.push(...matches);
+                }
+              } catch { /* skip */ }
+            }
+            if (tsMatches.length > 0) {
+              const entries = tsMatches.slice(0, 20).map(
+                (m) => `  ${m.kind.padEnd(10)} ${m.file}:${m.line}  ${m.signature}`
+              );
+              resultText =
+                `Found ${tsMatches.length} definition(s) for "${input.name}" (tree-sitter fallback):\n` +
+                entries.join("\n");
+              break;
+            }
+          } catch { /* tree-sitter unavailable, fall through */ }
+          resultText = `No definitions found for symbol: "${input.name}"`;
+        } else {
+          const entries = result.matches.slice(0, 20).map(
+            (m) => `  ${m.kind.padEnd(10)} ${m.file}:${m.line}  ${m.signature}`
+          );
+          resultText =
+            `Found ${result.total_count} definition(s) for "${result.query}" (${result.query_time_ms}ms):\n` +
+            entries.join("\n");
+        }
+        break;
+      }
+
+      // ── find_callers (call graph: who calls this function?) ───────────────
+      case "find_callers": {
+        const result = await invoke<{
+          function_name: string;
+          callers: Array<{
+            caller: string;
+            caller_file: string;
+            call_line: number;
+            callee: string;
+            call_expression: string;
+          }>;
+          total_callers: number;
+          query_time_ms: number;
+        }>("callgraph_lookup", { functionName: String(input.function_name) });
+
+        if (result.callers.length === 0) {
+          resultText = `No callers found for function: "${input.function_name}".\nThis may mean: (1) function is unused, (2) only called dynamically, or (3) call graph needs rebuilding.`;
+        } else {
+          const entries = result.callers.slice(0, 25).map(
+            (c) => `  ${c.caller_file}:${c.call_line}  ${c.caller}() → ${c.call_expression}`
+          );
+          resultText =
+            `Found ${result.total_callers} caller(s) of "${result.function_name}" (${result.query_time_ms}ms):\n` +
+            entries.join("\n");
+        }
+        break;
+      }
+
+      // ── find_callees (call graph: what does this function call?) ──────────
+      case "find_callees": {
+        const result = await invoke<{
+          function_name: string;
+          callees: Array<{
+            caller: string;
+            caller_file: string;
+            call_line: number;
+            callee: string;
+            call_expression: string;
+          }>;
+          total_callees: number;
+          query_time_ms: number;
+        }>("callgraph_callees", { functionName: String(input.function_name) });
+
+        if (result.callees.length === 0) {
+          resultText = `No callees found for function: "${input.function_name}".\nThis may mean: (1) function is a leaf node, (2) only calls external/built-in functions, or (3) call graph needs rebuilding.`;
+        } else {
+          const entries = result.callees.slice(0, 25).map(
+            (c) => `  ${c.caller_file}:${c.call_line}  → ${c.call_expression}`
+          );
+          resultText =
+            `Found ${result.total_callees} callee(s) of "${result.function_name}" (${result.query_time_ms}ms):\n` +
+            entries.join("\n");
+        }
+        break;
+      }
+
+      // ── semantic_search (embedding-based code search by meaning) ──────────
+      case "semantic_search": {
+        const { semanticCodeSearch } = await import("../services/intelligence/EmbeddingOrchestrator");
+        const topK = Math.min(Number(input.top_k) || 5, 10);
+        const searchResult = await semanticCodeSearch(String(input.query), topK);
+
+        if (!searchResult || searchResult.hits.length === 0) {
+          resultText = `No semantic search results for: "${input.query}".\nThis may mean: (1) embedding index is not built yet, (2) no similar code exists, or (3) run the project once to build the index.`;
+        } else {
+          const entries = searchResult.hits.map(
+            (hit) => `  [${hit.score.toFixed(3)}] ${hit.file_path}:${hit.start_line}-${hit.end_line} (${hit.chunk_type}: ${hit.name})\n         ${hit.chunk_text.slice(0, 120).replace(/\n/g, " ")}`
+          );
+          resultText =
+            `Semantic search for "${input.query}" — ${searchResult.hits.length} result(s) (${searchResult.query_time_ms}ms):\n` +
+            entries.join("\n");
+        }
         break;
       }
 

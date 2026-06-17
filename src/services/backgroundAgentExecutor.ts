@@ -7,7 +7,7 @@ import { useBackgroundAgentStore } from "../store/backgroundAgentStore";
 import { sendToProviderStreaming } from "../utils/providers";
 import type { AIProviderConfig } from "../utils/providers";
 import { parseResponse, SYSTEM_PROMPT } from "../utils/prompts";
-import { readFile, writeFile, runTerminalCommand } from "../utils/tauri";
+import { inspectCommand, readFile, writeFile, runTerminalCommand } from "../utils/tauri";
 import {
   assemblePersistentPayload,
   loadAgentMemories,
@@ -223,6 +223,7 @@ export async function startBackgroundExecution(config: ExecutorConfig): Promise<
       }
 
       // Step 3: Run commands if any
+      let commandApprovalStoppedTask = false;
       if (result.commands && result.commands.length > 0) {
         for (const cmd of result.commands) {
           if (executorCancelled) break;
@@ -230,7 +231,21 @@ export async function startBackgroundExecution(config: ExecutorConfig): Promise<
           store.updateStep("running_command", `Running: ${cmd.slice(0, 40)}`);
           console.log("[BG-Agent] Running command:", cmd);
           try {
-            const cmdResult = await runTerminalCommand(cmd, projectPath);
+            const validation = await inspectCommand(cmd, projectPath);
+            if (validation.risk_level === "blocked") {
+              store.addLog("failed", `Command blocked by safety policy: ${validation.feedback_message}`);
+              commandApprovalStoppedTask = true;
+              break;
+            }
+            const approved = window.confirm(
+              `Punam background agent wants to run:\n\n${validation.sanitized_command}\n\n${validation.feedback_message}\n\nAllow?`
+            );
+            if (!approved) {
+              store.addLog("analyzing_output", `Command rejected by user: ${cmd}`);
+              commandApprovalStoppedTask = true;
+              break;
+            }
+            const cmdResult = await runTerminalCommand(validation.sanitized_command, projectPath);
             const output = `$ ${cmd}\n${cmdResult.stdout}${cmdResult.stderr ? `\n${cmdResult.stderr}` : ""}`;
             store.appendTerminalOutput(output + "\n");
 
@@ -241,8 +256,14 @@ export async function startBackgroundExecution(config: ExecutorConfig): Promise<
             }
           } catch (err) {
             store.addLog("failed", `Command error: ${err}`);
+            commandApprovalStoppedTask = true;
+            break;
           }
         }
+      }
+      if (commandApprovalStoppedTask) {
+        store.fail("Background task stopped because a command was blocked or not approved.");
+        break;
       }
 
       // Advance to next subtask
@@ -316,7 +337,7 @@ async function executeOneStep(
   if (!model) return { success: false, error: "No model enabled" };
 
   // Build context
-  const memories = loadAgentMemories(projectPath);
+  const memories = await loadAgentMemories(projectPath);
   const compressedMemory = compressMemories(memories);
 
   // Load relevant files from context snapshot
@@ -337,7 +358,7 @@ async function executeOneStep(
     .map((l) => l.message)
     .join("\n");
 
-  const payload = assemblePersistentPayload({
+  const payload = await assemblePersistentPayload({
     globalGoal: session.task,
     currentSubtask: `${task} (attempt ${session.attempt}/${session.maxAttempts})${historyContext ? "\nPrevious issues:\n" + historyContext : ""}`,
     fullHistory: [],

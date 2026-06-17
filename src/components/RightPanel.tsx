@@ -5,7 +5,7 @@
 
 import { useState, useRef, useEffect, useLayoutEffect, useCallback } from "react";
 import { createPortal } from "react-dom";
-import { MessageSquare, Layers, StickyNote, BarChart3, FileCode, ShieldCheck, Monitor, Bot, TrendingUp, Activity, MoreHorizontal, Brain } from "lucide-react";
+import { MessageSquare, Layers, StickyNote, BarChart3, FileCode, ShieldCheck, Monitor, Bot, TrendingUp, Activity, MoreHorizontal, Brain, Search } from "lucide-react";
 import { PanelErrorBoundary } from "./ErrorBoundary";
 import AiChat from "./AiChat";
 import NotepadsPanel from "./NotepadsPanel";
@@ -22,8 +22,9 @@ const MultiAgentDashboard = lazy(() => import("./MultiAgentDashboard"));
 const TechnicalDebtDashboard = lazy(() => import("./TechnicalDebtDashboard"));
 const CiDashboard = lazy(() => import("./CiDashboard"));
 const RagWorkbenchPanel = lazy(() => import("./RagWorkbenchPanel"));
+const IntelligencePanel = lazy(() => import("./IntelligencePanel"));
 
-export type RightPanelTab = "chat" | "composer" | "notepads" | "usage" | "impact" | "security" | "environment" | "agents" | "debt" | "cicd" | "rag";
+export type RightPanelTab = "chat" | "composer" | "notepads" | "usage" | "impact" | "security" | "environment" | "agents" | "debt" | "cicd" | "rag" | "intelligence";
 
 interface RightPanelProps {
   // AiChat props (pass-through)
@@ -58,6 +59,7 @@ const TABS: { id: RightPanelTab; label: string; icon: typeof MessageSquare }[] =
   { id: "chat", label: "Chat", icon: MessageSquare },
   { id: "composer", label: "Composer", icon: Layers },
   { id: "notepads", label: "Notepads", icon: StickyNote },
+  { id: "intelligence", label: "Intel", icon: Search },
   { id: "usage", label: "Usage", icon: BarChart3 },
   { id: "impact", label: "Impact", icon: FileCode },
   { id: "security", label: "Security", icon: ShieldCheck },
@@ -330,6 +332,14 @@ export default function RightPanel(props: RightPanelProps) {
           <PanelErrorBoundary fallbackLabel="RAG Workbench">
             <Suspense fallback={null}>
               <RagWorkbenchPanel />
+            </Suspense>
+          </PanelErrorBoundary>
+        )}
+
+        {activeTab === "intelligence" && (
+          <PanelErrorBoundary fallbackLabel="Intelligence">
+            <Suspense fallback={null}>
+              <IntelligencePanel />
             </Suspense>
           </PanelErrorBoundary>
         )}

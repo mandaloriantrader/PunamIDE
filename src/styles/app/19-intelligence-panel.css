@@ -1,0 +1,229 @@
+/* ═══════════════════════════════════════════════════════════════════════════════
+   IntelligencePanel — Symbol Index, Call Graph, Embeddings browser
+   ═══════════════════════════════════════════════════════════════════════════════ */
+
+.intelligence-panel {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  background: var(--bg-primary);
+  font-size: 12px;
+}
+
+.intelligence-tabs {
+  display: flex;
+  border-bottom: 1px solid var(--border);
+  padding: 0 4px;
+  gap: 2px;
+  flex-shrink: 0;
+}
+
+.intelligence-tab {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 6px 10px;
+  border: none;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 11px;
+  cursor: pointer;
+  border-bottom: 2px solid transparent;
+  transition: all 0.15s;
+}
+
+.intelligence-tab:hover {
+  color: var(--text-primary);
+  background: var(--bg-hover);
+}
+
+.intelligence-tab.active {
+  color: var(--accent);
+  border-bottom-color: var(--accent);
+}
+
+.intelligence-body {
+  flex: 1;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+.intelligence-tab-content {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px;
+  height: 100%;
+  overflow: hidden;
+}
+
+.intelligence-search-row {
+  display: flex;
+  gap: 4px;
+  align-items: center;
+}
+
+.intelligence-input {
+  flex: 1;
+  padding: 5px 8px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+  font-size: 11.5px;
+  font-family: inherit;
+  outline: none;
+  transition: border-color 0.15s;
+}
+
+.intelligence-input:focus {
+  border-color: var(--accent);
+}
+
+.intelligence-input::placeholder {
+  color: var(--text-secondary);
+  opacity: 0.7;
+}
+
+.intelligence-search-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  padding: 5px 8px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.intelligence-search-btn:hover:not(:disabled) {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+  border-color: var(--accent);
+}
+
+.intelligence-search-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.intelligence-mode-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.intelligence-mode-btn:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.intelligence-mode-btn.active {
+  border-color: var(--accent);
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+}
+
+.intelligence-stats {
+  font-size: 10.5px;
+  color: var(--text-secondary);
+  padding: 2px 4px;
+}
+
+.intelligence-results {
+  flex: 1;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.intelligence-result-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 6px;
+  border-radius: 3px;
+  transition: background 0.1s;
+  min-width: 0;
+}
+
+.intelligence-result-item.clickable {
+  cursor: pointer;
+}
+
+.intelligence-result-item.clickable:hover {
+  background: var(--bg-hover);
+}
+
+.intelligence-result-item .result-kind {
+  flex-shrink: 0;
+  font-size: 9.5px;
+  padding: 1px 4px;
+  border-radius: 3px;
+  background: color-mix(in srgb, var(--accent) 15%, transparent);
+  color: var(--accent);
+  font-weight: 500;
+  text-transform: lowercase;
+}
+
+.intelligence-result-item .result-name {
+  font-weight: 500;
+  color: var(--text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.intelligence-result-item .result-location {
+  margin-left: auto;
+  flex-shrink: 0;
+  font-size: 10px;
+  color: var(--text-secondary);
+  opacity: 0.7;
+  max-width: 160px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Embeddings stats grid */
+.intelligence-stats-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  padding: 8px 4px;
+}
+
+.stat-item {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 8px;
+  border-radius: 4px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+}
+
+.stat-label {
+  font-size: 10px;
+  color: var(--text-secondary);
+}
+
+.stat-value {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-primary);
+}

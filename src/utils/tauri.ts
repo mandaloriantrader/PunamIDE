@@ -58,8 +58,36 @@ export interface RunProfile {
 }
 
 // Project root (sandbox boundary)
-export const setProjectRoot = (path: string) =>
-  invoke<void>("set_project_root", { path });
+export const setProjectRoot = async (path: string) => {
+  await invoke<void>("set_project_root", { path });
+  // Auto-trigger background indexing (fire-and-forget)
+  setTimeout(() => {
+    // Phase 1: Rust regex-based indexes (instant, ~ms)
+    invoke<number>("symbol_rebuild").catch(() => {});
+    invoke<number>("callgraph_build").catch(() => {});
+
+    // Phase 2: TF-IDF codebase index → embedding pipeline
+    invoke<void>("index_codebase").then(() => {
+      // Embedding pipeline runs after codebase is indexed
+      import("../services/intelligence/EmbeddingOrchestrator")
+        .then(({ runEmbeddingPipeline }) => runEmbeddingPipeline())
+        .catch(() => {}); // Non-fatal: embeddings are optional
+    }).catch(() => {});
+
+    // Phase 3: Tree-sitter enhancement pass (after regex index is built)
+    // Refines TS/JS symbols with full AST accuracy; regex results remain for Python/Rust
+    setTimeout(() => {
+      import("../services/intelligence/TreeSitterSymbolExtractor")
+        .then(({ enhanceSymbolIndexWithTreeSitter }) => enhanceSymbolIndexWithTreeSitter())
+        .then((stats) => {
+          if (stats.filesProcessed > 0) {
+            console.log(`[Index] Tree-sitter enhanced ${stats.filesProcessed} files, ${stats.symbolsExtracted} symbols`);
+          }
+        })
+        .catch(() => {}); // Non-fatal: regex index still works
+    }, 2000); // Wait 2s for Rust indexes to finish
+  }, 500);
+};
 
 // File System
 export const readDirectory = (path: string) =>
@@ -93,8 +121,8 @@ export const searchProject = (query: string) =>
   invoke<SearchResult[]>("search_project", { query });
 
 // Terminal
-export const runTerminalCommand = (command: string, cwd: string) =>
-  invoke<CmdResult>("run_terminal_command", { command, cwd });
+export const runTerminalCommand = (command: string, cwd: string, timeoutMs = 600_000) =>
+  invoke<CmdResult>("run_terminal_command", { command, cwd, timeoutMs });
 
 export const checkTcpPort = (host: string, port: number) =>
   invoke<PortCheckResult>("check_tcp_port", { host, port });

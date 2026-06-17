@@ -1,0 +1,5 @@
+﻿/*
+ * Compatibility wrapper only.
+ * Do not add feature styles here; use src/styles/index.css and the module files under src/styles/app/.
+ */
+@import "./styles/index.css";

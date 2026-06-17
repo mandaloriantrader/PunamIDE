@@ -1,0 +1,35 @@
+// ─────────────────────────────────────────────────────────────────────────────
+// lib.rs — TWO CHANGES ONLY (Phase 1 agent tools)
+// Do NOT paste this whole file. Apply only the two diffs below.
+// ─────────────────────────────────────────────────────────────────────────────
+
+// ── CHANGE 1 ──────────────────────────────────────────────────────────────────
+// Location: top of lib.rs, alongside the other `pub mod` declarations
+// (after the existing: pub mod snapshot; pub mod github;)
+//
+// ADD this line:
+pub mod agent_tools;
+
+// ── CHANGE 2 ──────────────────────────────────────────────────────────────────
+// Location: inside .invoke_handler(tauri::generate_handler![  ...  ])
+// Add these two lines anywhere in the handler list
+// (e.g. right after the existing `read_file,` line):
+//
+//   agent_tools::read_lines,
+//   agent_tools::apply_patch,
+//
+// Example — your handler block will look like this after the change:
+//
+//   .invoke_handler(tauri::generate_handler![
+//       set_project_root,
+//       read_directory,
+//       read_file,
+//       agent_tools::read_lines,   // ← ADD
+//       agent_tools::apply_patch,  // ← ADD
+//       path_exists,
+//       write_file,
+//       ...rest unchanged...
+//   ])
+//
+// That's it. No other changes to lib.rs are needed.
+// ─────────────────────────────────────────────────────────────────────────────

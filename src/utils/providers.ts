@@ -26,6 +26,8 @@ export interface AIRequest {
   temperature?: number;
   maxTokens?: number;
   images?: Array<{ base64: string; mimeType: string }>; // For vision API support
+  streamId?: string;
+  signal?: AbortSignal;
 }
 
 export interface AIResponse {
@@ -262,6 +264,10 @@ export async function sendToProvider(
       return callGemini(config, model, request);
     case "openai-compatible":
       return callOpenAICompatible(config, model, request);
+    case "anthropic": {
+      const { sendToAnthropic } = await import("../providers/anthropic");
+      return sendToAnthropic(config, model, request);
+    }
     default:
       return {
         text: "",
@@ -325,17 +331,34 @@ export async function sendToProviderStreaming(
   model: string,
   request: AIRequest
 ): Promise<AIResponse> {
+  const streamId = request.streamId ?? `llm-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+  const { invoke } = await import("@tauri-apps/api/core");
+  const cancelNativeStream = () => {
+    void invoke("cancel_llm_stream", { streamId }).catch(() => {});
+  };
+  if (request.signal?.aborted) {
+    cancelNativeStream();
+    return {
+      text: "",
+      success: false,
+      error: "Request cancelled",
+      metrics: buildMetrics(config.name, model, request, "", 0, "error"),
+    };
+  }
+  request.signal?.addEventListener("abort", cancelNativeStream, { once: true });
+
+  try {
   if (config.type === "gemini") {
     // Gemini: use native SSE streaming via Rust backend
     const startTime = performance.now();
     try {
-      const { invoke } = await import("@tauri-apps/api/core");
       const result = await invoke<{ text: string; success: boolean; error?: string }>("call_gemini_stream", {
         apiKey: config.apiKey,
         model,
         systemPrompt: request.systemPrompt,
         userPrompt: request.userPrompt,
         images: request.images?.map((img) => ({ base64: img.base64, mime_type: img.mimeType })) || null,
+        streamId,
       });
 
       const durationMs = performance.now() - startTime;
@@ -365,11 +388,16 @@ export async function sendToProviderStreaming(
     }
   }
 
+  // Anthropic: use isolated provider module (direct fetch, no Rust proxy)
+  if (config.type === "anthropic") {
+    const { sendToAnthropicStreaming } = await import("../providers/anthropic");
+    return sendToAnthropicStreaming(config, model, { ...request, streamId });
+  }
+
   const startTime = performance.now();
   const baseUrl = config.baseUrl?.replace(/\/+$/, "") || "https://api.openai.com/v1";
 
   try {
-    const { invoke } = await import("@tauri-apps/api/core");
     const result = await invoke<{ text: string; success: boolean; error?: string }>("call_openai_compatible_stream", {
       apiKey: config.apiKey,
       baseUrl,
@@ -378,6 +406,7 @@ export async function sendToProviderStreaming(
       userPrompt: request.userPrompt,
       images: request.images?.map((img) => ({ base64: img.base64, mime_type: img.mimeType })) || null,
       isOpenRouter: baseUrl.includes("openrouter.ai"),
+      streamId,
     });
 
     const durationMs = performance.now() - startTime;
@@ -405,6 +434,9 @@ export async function sendToProviderStreaming(
       metrics: buildMetrics(config.name, model, request, "", durationMs, "error"),
     };
   }
+  } finally {
+    request.signal?.removeEventListener("abort", cancelNativeStream);
+  }
 }
 
 /** Test a provider connection with a minimal request */
@@ -426,6 +458,14 @@ export const PROVIDER_PRESETS: Array<{ type: AIProviderConfig["type"]; name: str
     defaultModel: "gemini-2.5-flash",
     keyLabel: "Gemini API Key",
     getKeyUrl: "https://aistudio.google.com/apikey",
+  },
+  {
+    type: "anthropic",
+    name: "Anthropic (Claude)",
+    baseUrl: "https://api.anthropic.com/v1",
+    defaultModel: "claude-sonnet-4-20250514",
+    keyLabel: "Anthropic API Key",
+    getKeyUrl: "https://console.anthropic.com/settings/keys",
   },
   {
     type: "openai-compatible",

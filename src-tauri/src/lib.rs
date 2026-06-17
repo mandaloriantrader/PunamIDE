@@ -5,10 +5,11 @@ use std::net::{TcpStream, ToSocketAddrs};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex, RwLock};
 use tauri::{AppHandle, Emitter, Manager, State};
 use tokio::io::AsyncReadExt;
 use tokio::process::Command as TokioCommand;
+use tokio::sync::Notify;
 use notify_debouncer_mini::{new_debouncer, DebouncedEventKind};
 use std::time::Duration;
 use sysinfo::System;
@@ -19,6 +20,7 @@ pub mod dap_manager;
 pub mod snapshot;
 pub mod architecture;
 pub mod memory;
+pub mod embeddings;
 pub mod github;
 pub mod security_scanner;
 pub mod environment_scanner;
@@ -30,6 +32,9 @@ pub mod search_commands;
 pub mod terminal_commands;
 pub mod git_commands;
 pub mod index_commands;
+pub mod symbol_index;
+pub mod embedding_pipeline;
+pub mod call_graph;
 
 #[cfg(target_os = "windows")]
 use std::os::windows::process::CommandExt;
@@ -106,8 +111,6 @@ pub struct PortCheckResult {
 pub struct ProjectRoot(pub Mutex<Option<String>>);
 
 // --- Terminal Process State ---
-
-use std::sync::Arc;
 
 #[derive(Clone)]
 pub struct TerminalProcessHandle {
@@ -317,8 +320,11 @@ async fn call_gemini_stream(
     systemPrompt: String,
     userPrompt: String,
     images: Option<Vec<ImageData>>,
+    streamId: String,
     app: AppHandle,
+    stream_state: State<'_, LlmStreamState>,
 ) -> Result<LlmResponse, String> {
+    let cancellation = stream_state.register(&streamId)?;
     let url = format!(
         "https://generativelanguage.googleapis.com/v1beta/models/{}:streamGenerateContent?alt=sse&key={}",
         model, apiKey
@@ -356,20 +362,35 @@ async fn call_gemini_stream(
         .timeout(Duration::from_secs(120))
         .build()
         .map_err(|e| format!("Failed to build HTTP client: {}", e))?;
-    let resp = match client.post(&url).json(&body).send().await {
+    let resp = match tokio::select! {
+        result = client.post(&url).json(&body).send() => Some(result),
+        _ = cancellation.notify.notified() => None,
+    } {
+        None => {
+            stream_state.remove(&streamId);
+            return Ok(LlmResponse {
+                text: String::new(),
+                success: false,
+                error: Some("Request cancelled".to_string()),
+            });
+        }
+        Some(result) => match result {
         Ok(r) => r,
         Err(e) => {
+            stream_state.remove(&streamId);
             return Ok(LlmResponse {
                 text: String::new(),
                 success: false,
                 error: Some(format!("Network error: {}", e)),
             });
         }
+        },
     };
 
     if !resp.status().is_success() {
         let status = resp.status();
         let err_body = resp.text().await.unwrap_or_default();
+        stream_state.remove(&streamId);
         if status == reqwest::StatusCode::TOO_MANY_REQUESTS {
             return Ok(LlmResponse {
                 text: String::new(),
@@ -390,7 +411,12 @@ async fn call_gemini_stream(
     use futures_util::StreamExt;
     let mut buffer = String::new();
 
-    while let Some(chunk) = stream.next().await {
+    loop {
+        let chunk = tokio::select! {
+            next = stream.next() => next,
+            _ = cancellation.notify.notified() => None,
+        };
+        let Some(chunk) = chunk else { break };
         let chunk = match chunk {
             Ok(c) => c,
             Err(_) => break,
@@ -411,7 +437,11 @@ async fn call_gemini_stream(
                     // Gemini streaming format: candidates[0].content.parts[0].text
                     if let Some(text) = parsed["candidates"][0]["content"]["parts"][0]["text"].as_str() {
                         full_text.push_str(text);
-                        let _ = app.emit("llm-stream", LlmStreamEvent { token: text.to_string(), done: false });
+                        let _ = app.emit("llm-stream", LlmStreamEvent {
+                            stream_id: streamId.clone(),
+                            token: text.to_string(),
+                            done: false,
+                        });
                     }
                 }
             }
@@ -419,8 +449,22 @@ async fn call_gemini_stream(
     }
 
     // Final done signal
-    let _ = app.emit("llm-stream", LlmStreamEvent { token: String::new(), done: true });
+    let cancelled = cancellation.cancelled.load(Ordering::SeqCst);
+    stream_state.remove(&streamId);
+    let _ = app.emit("llm-stream", LlmStreamEvent {
+        stream_id: streamId,
+        token: String::new(),
+        done: true,
+    });
     tokio::task::yield_now().await;
+
+    if cancelled {
+        return Ok(LlmResponse {
+            text: String::new(),
+            success: false,
+            error: Some("Request cancelled".to_string()),
+        });
+    }
 
     if full_text.is_empty() {
         return Ok(LlmResponse {
@@ -476,7 +520,11 @@ async fn call_openai_compatible(req: &LlmRequest) -> Result<String, String> {
         "max_tokens": 16384
     });
 
-    let client = reqwest::Client::new();
+    let client = reqwest::Client::builder()
+        .connect_timeout(Duration::from_secs(10))
+        .timeout(Duration::from_secs(120))
+        .build()
+        .map_err(|e| format!("Failed to build HTTP client: {}", e))?;
     let resp = client
         .post(&url)
         .header("Authorization", format!("Bearer {}", req.api_key))
@@ -502,8 +550,51 @@ async fn call_openai_compatible(req: &LlmRequest) -> Result<String, String> {
 
 #[derive(Serialize, Clone)]
 struct LlmStreamEvent {
+    stream_id: String,
     token: String,
     done: bool,
+}
+
+struct LlmCancellation {
+    cancelled: AtomicBool,
+    notify: Notify,
+}
+
+pub struct LlmStreamState(Mutex<HashMap<String, Arc<LlmCancellation>>>);
+
+impl LlmStreamState {
+    fn register(&self, stream_id: &str) -> Result<Arc<LlmCancellation>, String> {
+        let cancellation = Arc::new(LlmCancellation {
+            cancelled: AtomicBool::new(false),
+            notify: Notify::new(),
+        });
+        self.0
+            .lock()
+            .map_err(|_| "LLM stream state lock error".to_string())?
+            .insert(stream_id.to_string(), cancellation.clone());
+        Ok(cancellation)
+    }
+
+    fn remove(&self, stream_id: &str) {
+        if let Ok(mut streams) = self.0.lock() {
+            streams.remove(stream_id);
+        }
+    }
+}
+
+#[tauri::command]
+fn cancel_llm_stream(stream_id: String, state: State<'_, LlmStreamState>) -> Result<(), String> {
+    let cancellation = state
+        .0
+        .lock()
+        .map_err(|_| "LLM stream state lock error".to_string())?
+        .get(&stream_id)
+        .cloned();
+    if let Some(cancellation) = cancellation {
+        cancellation.cancelled.store(true, Ordering::SeqCst);
+        cancellation.notify.notify_one();
+    }
+    Ok(())
 }
 
 #[tauri::command]
@@ -516,8 +607,11 @@ async fn call_openai_compatible_stream(
     userPrompt: String,
     images: Option<Vec<ImageData>>,
     isOpenRouter: bool,
+    streamId: String,
     app: AppHandle,
+    stream_state: State<'_, LlmStreamState>,
 ) -> Result<LlmResponse, String> {
+    let cancellation = stream_state.register(&streamId)?;
     let url = format!("{}/chat/completions", baseUrl.trim_end_matches('/'));
 
     // Build user content with optional images
@@ -569,20 +663,35 @@ async fn call_openai_compatible_stream(
             .header("X-Title", "PunamIDE");
     }
 
-    let resp = match req_builder.json(&body).send().await {
+    let resp = match tokio::select! {
+        result = req_builder.json(&body).send() => Some(result),
+        _ = cancellation.notify.notified() => None,
+    } {
+        None => {
+            stream_state.remove(&streamId);
+            return Ok(LlmResponse {
+                text: String::new(),
+                success: false,
+                error: Some("Request cancelled".to_string()),
+            });
+        }
+        Some(result) => match result {
         Ok(r) => r,
         Err(e) => {
+            stream_state.remove(&streamId);
             return Ok(LlmResponse {
                 text: String::new(),
                 success: false,
                 error: Some(format!("Network error: {}", e)),
             });
         }
+        },
     };
 
     if !resp.status().is_success() {
         let status = resp.status();
         let err_body = resp.text().await.unwrap_or_default();
+        stream_state.remove(&streamId);
         if status == reqwest::StatusCode::TOO_MANY_REQUESTS {
             return Ok(LlmResponse {
                 text: String::new(),
@@ -603,7 +712,12 @@ async fn call_openai_compatible_stream(
     use futures_util::StreamExt;
     let mut buffer = String::new();
 
-    while let Some(chunk) = stream.next().await {
+    loop {
+        let chunk = tokio::select! {
+            next = stream.next() => next,
+            _ = cancellation.notify.notified() => None,
+        };
+        let Some(chunk) = chunk else { break };
         let chunk = match chunk {
             Ok(c) => c,
             Err(_) => break,
@@ -618,13 +732,21 @@ async fn call_openai_compatible_stream(
             if line.starts_with("data: ") {
                 let data = &line[6..];
                 if data == "[DONE]" {
-                    let _ = app.emit("llm-stream", LlmStreamEvent { token: String::new(), done: true });
+                    let _ = app.emit("llm-stream", LlmStreamEvent {
+                        stream_id: streamId.clone(),
+                        token: String::new(),
+                        done: true,
+                    });
                     break;
                 }
                 if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(data) {
                     if let Some(token) = parsed["choices"][0]["delta"]["content"].as_str() {
                         full_text.push_str(token);
-                        let _ = app.emit("llm-stream", LlmStreamEvent { token: token.to_string(), done: false });
+                        let _ = app.emit("llm-stream", LlmStreamEvent {
+                            stream_id: streamId.clone(),
+                            token: token.to_string(),
+                            done: false,
+                        });
                     }
                 }
             }
@@ -632,7 +754,21 @@ async fn call_openai_compatible_stream(
     }
 
     // Final done signal
-    let _ = app.emit("llm-stream", LlmStreamEvent { token: String::new(), done: true });
+    let cancelled = cancellation.cancelled.load(Ordering::SeqCst);
+    stream_state.remove(&streamId);
+    let _ = app.emit("llm-stream", LlmStreamEvent {
+        stream_id: streamId,
+        token: String::new(),
+        done: true,
+    });
+
+    if cancelled {
+        return Ok(LlmResponse {
+            text: String::new(),
+            success: false,
+            error: Some("Request cancelled".to_string()),
+        });
+    }
 
     Ok(LlmResponse {
         text: full_text,
@@ -654,11 +790,9 @@ async fn call_openai_compatible_cmd(
 ) -> Result<LlmResponse, String> {
     // Normalize common model ID typos for OpenRouter
     if isOpenRouter {
-        // Fix missing hyphen in qwen2.5 → qwen-2.5
         if model.contains("qwen2.5") && !model.contains("qwen-2.5") {
             model = model.replace("qwen2.5", "qwen-2.5");
         }
-        // Fix missing hyphen in deepseek-r1 variants
         if model.contains("deepseekr1") {
             model = model.replace("deepseekr1", "deepseek-r1");
         }
@@ -944,7 +1078,7 @@ pub struct FileIndexEntry {
     pub is_binary: bool,
 }
 
-pub struct ProjectIndexCache(pub Mutex<Vec<FileIndexEntry>>);
+pub struct ProjectIndexCache(pub RwLock<Vec<FileIndexEntry>>);
 
 // --- Git Engine (using libgit2 via git2 crate) ---
 // Moved to git_commands.rs module
@@ -972,23 +1106,35 @@ pub struct CodeSearchHit {
     pub score: f64,
 }
 
-pub struct CodebaseIndex(pub Mutex<Option<TfIdfIndex>>);
+pub struct CodebaseIndex(pub RwLock<Option<TfIdfIndex>>);
 
 pub struct TfIdfIndex {
     pub chunks: Vec<CodeChunk>,
     pub inverted: HashMap<String, Vec<(usize, f64)>>, // token -> [(chunk_idx, tf)]
 }
 
+#[derive(Serialize, Debug, Clone)]
 pub struct CodeChunk {
     pub path: String,
     pub start_line: usize,
     pub end_line: usize,
     pub content: String,
     pub token_count: usize,
+    /// Type of code unit: "function", "class", "method", "struct", "trait",
+    /// "impl_block", "module", "arrow_function", "block" (fallback)
+    pub chunk_type: String,
+    /// Name of the function/class/struct/etc. (empty for unnamed blocks)
+    pub name: String,
+    /// First line of the chunk (signature/declaration line)
+    pub signature: String,
+    /// Extracted import statements from file header (populated only on first chunk of each file)
+    pub imports: Vec<String>,
 }
 
 pub const CHUNK_LINES: usize = 30;
 pub const CHUNK_OVERLAP: usize = 5;
+/// Max line lookback for docstring/comment detection above a function boundary
+pub const DOCSTRING_LOOKBACK: usize = 8;
 
 // --- App Entry ---
 
@@ -1286,9 +1432,13 @@ pub struct ContextFile {
 // --- SQLite Persistence ---
 
 use rusqlite::Connection;
-use std::sync::Once;
 
-static DB_INIT: Once = Once::new();
+static DB_MAINTENANCE_LOCK: Mutex<()> = Mutex::new(());
+const DAY_MS: i64 = 86_400_000;
+const CHAT_RETENTION_DAYS: i64 = 180;
+const MEMORY_RETENTION_DAYS: i64 = 365;
+const EMBEDDING_RETENTION_DAYS: i64 = 180;
+const VACUUM_INTERVAL_DAYS: i64 = 7;
 
 fn get_db_path() -> std::path::PathBuf {
     let data_dir = dirs::data_local_dir().unwrap_or_else(|| std::path::PathBuf::from("."));
@@ -1309,12 +1459,200 @@ fn get_connection() -> Result<Connection, String> {
     Ok(conn)
 }
 
+fn table_exists(conn: &Connection, table: &str) -> bool {
+    conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?1)",
+        [table],
+        |row| row.get::<_, i64>(0),
+    )
+    .map(|value| value == 1)
+    .unwrap_or(false)
+}
+
+fn unix_timestamp_ms() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as i64
+}
+
+fn log_prune(result: rusqlite::Result<usize>, label: &str, log: &mut Vec<String>) {
+    match result {
+        Ok(count) if count > 0 => log.push(format!("Pruned {} {}", count, label)),
+        Ok(_) => {}
+        Err(error) => log.push(format!("{} prune error: {}", label, error)),
+    }
+}
+
+/// Periodic database maintenance. Serialized so startup and write-triggered runs cannot overlap.
+#[tauri::command]
+fn db_maintenance() -> Result<String, String> {
+    let _maintenance_guard = DB_MAINTENANCE_LOCK
+        .lock()
+        .map_err(|_| "Database maintenance lock was poisoned".to_string())?;
+    let conn = get_connection()?;
+    let mut log = Vec::new();
+    let now = unix_timestamp_ms();
+
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS maintenance_meta (
+            key TEXT PRIMARY KEY,
+            value INTEGER NOT NULL
+        );",
+    )
+    .map_err(|e| format!("Maintenance metadata error: {}", e))?;
+
+    if table_exists(&conn, "chat_sessions") {
+        let cutoff = now - CHAT_RETENTION_DAYS * DAY_MS;
+        log_prune(
+            conn.execute(
+                "DELETE FROM chat_sessions AS old
+                 WHERE old.updated_at < ?1
+                   AND 10 <= (
+                     SELECT COUNT(*) FROM chat_sessions AS newer
+                     WHERE newer.project_path = old.project_path
+                       AND (newer.updated_at > old.updated_at
+                         OR (newer.updated_at = old.updated_at AND newer.id >= old.id))
+                   )",
+                [cutoff],
+            ),
+            "old chat sessions",
+            &mut log,
+        );
+        log_prune(
+            conn.execute(
+                "DELETE FROM chat_sessions
+                 WHERE id IN (
+                   SELECT id FROM (
+                     SELECT id,
+                            ROW_NUMBER() OVER (
+                              PARTITION BY project_path
+                              ORDER BY updated_at DESC, id DESC
+                            ) AS row_num
+                     FROM chat_sessions
+                   )
+                   WHERE row_num > 100
+                 )",
+                [],
+            ),
+            "excess chat sessions",
+            &mut log,
+        );
+    }
+
+    if table_exists(&conn, "project_memory") {
+        let cutoff = now - MEMORY_RETENTION_DAYS * DAY_MS;
+        log_prune(
+            conn.execute(
+                "DELETE FROM project_memory
+                 WHERE updated_at < ?1
+                   AND severity NOT IN ('critical', 'high')
+                   AND memory_type <> 'convention'",
+                [cutoff],
+            ),
+            "stale memory entries",
+            &mut log,
+        );
+        log_prune(
+            conn.execute(
+                "DELETE FROM project_memory
+                 WHERE id IN (
+                   SELECT id FROM project_memory
+                   WHERE severity NOT IN ('critical', 'high')
+                     AND memory_type <> 'convention'
+                   ORDER BY updated_at DESC
+                   LIMIT -1 OFFSET 2000
+                 )",
+                [],
+            ),
+            "excess memory entries",
+            &mut log,
+        );
+    }
+
+    if table_exists(&conn, "embeddings") {
+        let cutoff = now - EMBEDDING_RETENTION_DAYS * DAY_MS;
+        log_prune(
+            conn.execute("DELETE FROM embeddings WHERE created_at < ?1", [cutoff]),
+            "stale code embeddings",
+            &mut log,
+        );
+        log_prune(
+            conn.execute(
+                "DELETE FROM embeddings
+                 WHERE chunk_id IN (
+                   SELECT chunk_id FROM embeddings
+                   ORDER BY created_at DESC
+                   LIMIT -1 OFFSET 50000
+                 )",
+                [],
+            ),
+            "excess code embeddings",
+            &mut log,
+        );
+    }
+
+    if table_exists(&conn, "embedding_vectors") {
+        let cutoff = now - MEMORY_RETENTION_DAYS * DAY_MS;
+        log_prune(
+            conn.execute("DELETE FROM embedding_vectors WHERE created_at < ?1", [cutoff]),
+            "stale memory embeddings",
+            &mut log,
+        );
+    }
+
+    if table_exists(&conn, "memory_fts") {
+        match conn.execute_batch("INSERT INTO memory_fts(memory_fts) VALUES('optimize');") {
+            Ok(_) => log.push("FTS5 optimize: ok".to_string()),
+            Err(e) => log.push(format!("FTS5 optimize error: {}", e)),
+        }
+    }
+
+    match conn.execute_batch("ANALYZE; PRAGMA optimize;") {
+        Ok(_) => log.push("Analyze and optimize: ok".to_string()),
+        Err(e) => log.push(format!("Analyze/optimize error: {}", e)),
+    }
+
+    match conn.execute_batch("PRAGMA wal_checkpoint(TRUNCATE);") {
+        Ok(_) => log.push("WAL checkpoint: ok".to_string()),
+        Err(e) => log.push(format!("WAL checkpoint error: {}", e)),
+    }
+
+    let last_vacuum = conn
+        .query_row(
+            "SELECT value FROM maintenance_meta WHERE key = 'last_vacuum_ms'",
+            [],
+            |row| row.get::<_, i64>(0),
+        )
+        .unwrap_or(0);
+    if now - last_vacuum >= VACUUM_INTERVAL_DAYS * DAY_MS {
+        let free_pages = conn
+            .query_row("PRAGMA freelist_count", [], |row| row.get::<_, i64>(0))
+            .unwrap_or(0);
+        if free_pages >= 256 {
+            match conn.execute_batch("VACUUM;") {
+                Ok(_) => log.push(format!("Vacuum: reclaimed {} free pages", free_pages)),
+                Err(e) => log.push(format!("Vacuum error: {}", e)),
+            }
+        }
+        conn.execute(
+            "INSERT INTO maintenance_meta (key, value) VALUES ('last_vacuum_ms', ?1)
+             ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            [now],
+        )
+        .map_err(|e| format!("Vacuum timestamp error: {}", e))?;
+    }
+
+    Ok(log.join("\n"))
+}
+
 #[tauri::command]
 fn db_init() -> Result<(), String> {
     let conn = get_connection()?;
     conn.execute_batch(
         "CREATE TABLE IF NOT EXISTS chat_sessions (
             id TEXT PRIMARY KEY,
+            project_path TEXT NOT NULL DEFAULT '',
             title TEXT NOT NULL,
             provider TEXT NOT NULL,
             model TEXT NOT NULL,
@@ -1324,15 +1662,43 @@ fn db_init() -> Result<(), String> {
             created_at INTEGER NOT NULL,
             updated_at INTEGER NOT NULL
         );
-        CREATE INDEX IF NOT EXISTS idx_sessions_updated ON chat_sessions(updated_at DESC);
         "
     ).map_err(|e| format!("DB init error: {}", e))?;
+    let has_project_path = {
+        let mut stmt = conn
+            .prepare("PRAGMA table_info(chat_sessions)")
+            .map_err(|e| format!("DB migration check error: {}", e))?;
+        let columns = stmt
+            .query_map([], |row| row.get::<_, String>(1))
+            .map_err(|e| format!("DB migration check error: {}", e))?;
+        let mut found = false;
+        for column in columns {
+            if column.map_err(|e| format!("DB migration check error: {}", e))? == "project_path" {
+                found = true;
+                break;
+            }
+        }
+        found
+    };
+    if !has_project_path {
+        conn.execute(
+            "ALTER TABLE chat_sessions ADD COLUMN project_path TEXT NOT NULL DEFAULT ''",
+            [],
+        ).map_err(|e| format!("DB migration error: {}", e))?;
+    }
+    conn.execute_batch(
+        "DROP INDEX IF EXISTS idx_sessions_updated;
+         CREATE INDEX IF NOT EXISTS idx_sessions_project_updated
+         ON chat_sessions(project_path, updated_at DESC);"
+    ).map_err(|e| format!("DB index migration error: {}", e))?;
+    embeddings::ensure_embeddings_table()?;
     Ok(())
 }
 
 #[derive(Deserialize, Debug)]
 pub struct ChatSessionData {
     pub id: String,
+    pub project_path: String,
     pub title: String,
     pub provider: String,
     pub model: String,
@@ -1346,6 +1712,7 @@ pub struct ChatSessionData {
 #[derive(Serialize, Debug)]
 pub struct ChatSessionRow {
     pub id: String,
+    pub project_path: String,
     pub title: String,
     pub provider: String,
     pub model: String,
@@ -1360,36 +1727,37 @@ pub struct ChatSessionRow {
 fn db_save_chat_session(session: ChatSessionData) -> Result<(), String> {
     let conn = get_connection()?;
     conn.execute(
-        "INSERT OR REPLACE INTO chat_sessions (id, title, provider, model, messages, token_count, cost, created_at, updated_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+        "INSERT OR REPLACE INTO chat_sessions (id, project_path, title, provider, model, messages, token_count, cost, created_at, updated_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
         rusqlite::params![
-            session.id, session.title, session.provider, session.model,
-            session.messages, session.token_count, session.cost,
-            session.created_at, session.updated_at
+            session.id, session.project_path, session.title, session.provider,
+            session.model, session.messages, session.token_count,
+            session.cost, session.created_at, session.updated_at
         ],
     ).map_err(|e| format!("DB save error: {}", e))?;
     Ok(())
 }
 
 #[tauri::command]
-fn db_load_chat_sessions(limit: usize) -> Result<Vec<ChatSessionRow>, String> {
+fn db_load_chat_sessions(project_path: String, limit: usize) -> Result<Vec<ChatSessionRow>, String> {
     let conn = get_connection()?;
     let mut stmt = conn.prepare(
-        "SELECT id, title, provider, model, messages, token_count, cost, created_at, updated_at
-         FROM chat_sessions ORDER BY updated_at DESC LIMIT ?1"
+        "SELECT id, project_path, title, provider, model, messages, token_count, cost, created_at, updated_at
+         FROM chat_sessions WHERE project_path = ?1 ORDER BY updated_at DESC LIMIT ?2"
     ).map_err(|e| format!("DB query error: {}", e))?;
 
-    let rows = stmt.query_map(rusqlite::params![limit as i64], |row| {
+    let rows = stmt.query_map(rusqlite::params![project_path, limit as i64], |row| {
         Ok(ChatSessionRow {
             id: row.get(0)?,
-            title: row.get(1)?,
-            provider: row.get(2)?,
-            model: row.get(3)?,
-            messages: row.get(4)?,
-            token_count: row.get(5)?,
-            cost: row.get(6)?,
-            created_at: row.get(7)?,
-            updated_at: row.get(8)?,
+            project_path: row.get(1)?,
+            title: row.get(2)?,
+            provider: row.get(3)?,
+            model: row.get(4)?,
+            messages: row.get(5)?,
+            token_count: row.get(6)?,
+            cost: row.get(7)?,
+            created_at: row.get(8)?,
+            updated_at: row.get(9)?,
         })
     }).map_err(|e| format!("DB query error: {}", e))?;
 
@@ -1401,9 +1769,39 @@ fn db_load_chat_sessions(limit: usize) -> Result<Vec<ChatSessionRow>, String> {
 }
 
 #[tauri::command]
-fn db_delete_chat_session(id: String) -> Result<(), String> {
+fn db_load_chat_session(id: String, project_path: String) -> Result<Option<ChatSessionRow>, String> {
     let conn = get_connection()?;
-    conn.execute("DELETE FROM chat_sessions WHERE id = ?1", rusqlite::params![id])
+    let mut stmt = conn.prepare(
+        "SELECT id, project_path, title, provider, model, messages, token_count, cost, created_at, updated_at
+         FROM chat_sessions WHERE id = ?1 AND project_path = ?2"
+    ).map_err(|e| format!("DB query error: {}", e))?;
+    let mut rows = stmt
+        .query(rusqlite::params![id, project_path])
+        .map_err(|e| format!("DB query error: {}", e))?;
+    let Some(row) = rows.next().map_err(|e| format!("DB row error: {}", e))? else {
+        return Ok(None);
+    };
+    Ok(Some(ChatSessionRow {
+        id: row.get(0).map_err(|e| format!("DB row error: {}", e))?,
+        project_path: row.get(1).map_err(|e| format!("DB row error: {}", e))?,
+        title: row.get(2).map_err(|e| format!("DB row error: {}", e))?,
+        provider: row.get(3).map_err(|e| format!("DB row error: {}", e))?,
+        model: row.get(4).map_err(|e| format!("DB row error: {}", e))?,
+        messages: row.get(5).map_err(|e| format!("DB row error: {}", e))?,
+        token_count: row.get(6).map_err(|e| format!("DB row error: {}", e))?,
+        cost: row.get(7).map_err(|e| format!("DB row error: {}", e))?,
+        created_at: row.get(8).map_err(|e| format!("DB row error: {}", e))?,
+        updated_at: row.get(9).map_err(|e| format!("DB row error: {}", e))?,
+    }))
+}
+
+#[tauri::command]
+fn db_delete_chat_session(id: String, project_path: String) -> Result<(), String> {
+    let conn = get_connection()?;
+    conn.execute(
+        "DELETE FROM chat_sessions WHERE id = ?1 AND project_path = ?2",
+        rusqlite::params![id, project_path],
+    )
         .map_err(|e| format!("DB delete error: {}", e))?;
     Ok(())
 }
@@ -1639,9 +2037,12 @@ pub fn run() {
     tauri::Builder::default()
         .manage(ProjectRoot(Mutex::new(None)))
         .manage(TerminalProcesses(Arc::new(Mutex::new(HashMap::new()))))
+        .manage(LlmStreamState(Mutex::new(HashMap::new())))
         .manage(FileWatcherHandle(Mutex::new(None)))
-        .manage(ProjectIndexCache(Mutex::new(Vec::new())))
-        .manage(CodebaseIndex(Mutex::new(None)))
+        .manage(ProjectIndexCache(RwLock::new(Vec::new())))
+        .manage(CodebaseIndex(RwLock::new(None)))
+        .manage(symbol_index::SymbolIndexState(RwLock::new(symbol_index::SymbolIndex::new())))
+        .manage(call_graph::CallGraphState(RwLock::new(call_graph::CallGraph::new())))
         .manage(github::auth::GitHubAuthState::new())
         .manage(pty_state)
         .manage(lsp_state)
@@ -1670,6 +2071,7 @@ pub fn run() {
             fs_commands::read_file,
             agent_tools::read_lines,
             agent_tools::apply_patch,
+            agent_tools::apply_multi_patch,
             fs_commands::path_exists,
             fs_commands::write_file,
             fs_commands::create_file,
@@ -1688,6 +2090,7 @@ pub fn run() {
             call_gemini_stream,
             call_openai_compatible_cmd,
             call_openai_compatible_stream,
+            cancel_llm_stream,
             inspect_command,
             verify_path_safety,
             index_commands::get_project_index,
@@ -1708,8 +2111,10 @@ pub fn run() {
             index_commands::get_relevant_context,
             // SQLite persistence commands
             db_init,
+            db_maintenance,
             db_save_chat_session,
             db_load_chat_sessions,
+            db_load_chat_session,
             db_delete_chat_session,
             // DAP commands
             dap_manager::dap_start,
@@ -1845,6 +2250,21 @@ pub fn run() {
             memory::retrieval_engine::retrieve_memories,
             memory::retrieval_engine::retrieve_memories_semantic,
             memory::retrieval_engine::inject_memories_into_prompt,
+            // Phase 2: AST-Based Symbol Index
+            symbol_index::symbol_lookup,
+            symbol_index::symbol_list_file,
+            symbol_index::symbol_rebuild,
+            symbol_index::symbol_stats,
+            // Phase 3: Code Embedding Pipeline
+            embedding_pipeline::embedding_pipeline_get_chunks,
+            embedding_pipeline::embedding_pipeline_store_batch,
+            embedding_pipeline::embedding_pipeline_semantic_search,
+            embedding_pipeline::embedding_pipeline_stats,
+            // Phase 3: Function-Level Call Graph
+            call_graph::callgraph_lookup,
+            call_graph::callgraph_callees,
+            call_graph::callgraph_build,
+            call_graph::callgraph_stats,
             request_app_exit,
             get_system_diagnostics,
             open_logs_folder,
