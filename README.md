@@ -73,7 +73,7 @@ Multi-provider AI, agentic tool-calling, technical debt analysis, and a full IDE
 ## Screenshots
 
 ### Main Interface
-![PunamIDE Main Interface](media/screenshots/photos-of-features/homepage.png)
+![PunamIDE Main Interface](media/screenshots/new-images-to-replace-where-see-fits/punamIDE-homepage-with--editor.gif)
 
 ### BYOK — Bring Your Own Key (Multi-Provider)
 ![AI Providers](media/screenshots/photos-of-features/BYOK_providers.png)
@@ -202,7 +202,7 @@ PunamIDE supports **7 AI providers** with independent API key management, per-mo
 
 ### AI Chat & Agentic System
 
-![AI Chat](media/screenshots/photos-of-features/BYOK_providers.png)
+![AI Chat](media/screenshots/new-images-to-replace-where-see-fits/punamide-Aiagent.png)
 
 The AI panel is a full agentic loop — the model can autonomously use tools, read and write files, run commands, and iterate until the task is complete.
 
@@ -229,7 +229,7 @@ The AI panel is a full agentic loop — the model can autonomously use tools, re
 
 **Multi-Agent Orchestration:**
 
-![Multi-Agent Dashboard](media/screenshots/photos-of-features/architectural_dependency_graph.png)
+![Multi-Agent Dashboard](media/screenshots/new-images-to-replace-where-see-fits/punamide-Aiagent.png)
 
 Spawn multiple specialized agents running in parallel:
 
@@ -266,7 +266,7 @@ Spawn multiple specialized agents running in parallel:
 
 ### Code Editor
 
-![Code Editor](media/screenshots/photos-of-features/homepage.png)
+![Code Editor](media/screenshots/new-images-to-replace-where-see-fits/punamide-code-editor.png)
 
 - **Monaco Editor** — identical to VS Code's editing engine
 - **Split editor** — side-by-side file comparison
@@ -298,7 +298,7 @@ Ghost-text inline completion powered by AI with zero external services required.
 
 ### Terminal
 
-![Terminal](media/screenshots/photos-of-features/homepage.png)
+![Terminal](media/screenshots/new-images-to-replace-where-see-fits/punamide-code-editor.png)
 
 - **Real PTY terminal** via `portable-pty` (Rust) — not a fake shell simulation
 - **xterm.js** rendering with full ANSI color, fit, and web links
@@ -337,7 +337,11 @@ Ghost-text inline completion powered by AI with zero external services required.
 
 ### Debugger
 
-![Debugger](media/screenshots/photos-of-features/homepage.png)
+![Debugger](media/screenshots/new-images-to-replace-where-see-fits/punamIDE-debug-1.png)
+
+![Debugger � Variables](media/screenshots/new-images-to-replace-where-see-fits/punamIDe-debug-2.png)
+
+![Debugger � Full Report](media/screenshots/new-images-to-replace-where-see-fits/punamIDE-debug-fullreport.png)
 
 - **DAP (Debug Adapter Protocol)** — industry-standard debug protocol via Rust backend
 - **DAPBridge** — frontend ↔ Rust communication layer
