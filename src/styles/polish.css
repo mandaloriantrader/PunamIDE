@@ -1914,16 +1914,6 @@ select:focus-visible {
 .context-budget-indicator {
   display: none; /* Replaced by inline badge */
 }
-  gap: 8px;
-  padding: 4px 12px;
-  margin: 2px 0 4px 44px;
-  font-size: 11px;
-  color: var(--text-muted, #6c7086);
-  letter-spacing: 0.01em;
-  opacity: 0.85;
-  user-select: text;
-  transition: opacity 0.15s ease;
-}
 
 .context-budget-indicator:hover {
   opacity: 1;
