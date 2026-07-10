@@ -339,9 +339,9 @@ Ghost-text inline completion powered by AI with zero external services required.
 
 ![Debugger](media/screenshots/new-images-to-replace-where-see-fits/punamIDE-debug-1.png)
 
-![Debugger � Variables](media/screenshots/new-images-to-replace-where-see-fits/punamIDe-debug-2.png)
+![Debugger � Variables](media/screenshots/new-images-to-replace-where-see-fits/punamIDe-debug-2.png)
 
-![Debugger � Full Report](media/screenshots/new-images-to-replace-where-see-fits/punamIDE-debug-fullreport.png)
+![Debugger � Full Report](media/screenshots/new-images-to-replace-where-see-fits/punamIDE-debug-fullreport.png)
 
 - **DAP (Debug Adapter Protocol)** — industry-standard debug protocol via Rust backend
 - **DAPBridge** — frontend ↔ Rust communication layer
@@ -448,71 +448,71 @@ AST-powered analysis that runs entirely in a **Web Worker** — no blocking the 
 
 ```
 PunamIDE v2.1.2/
-├── src/
-│   ├── components/          # 70+ UI components
-│   │   ├── chat/            # Message bubbles, tool cards, context bar
-│   │   ├── github/          # GitHub panels
-│   │   └── settings/        # Settings UI
-│   ├── services/            # Business logic (no direct UI)
-│   │   ├── agent/           # Orchestration, budget, loop guard, approval
-│   │   ├── architecture/    # Rule engine, impact analysis
-│   │   ├── autocomplete/    # Ghost-text completion engine
-│   │   ├── ci/              # CI/CD integration
-│   │   ├── embeddings/      # RAG, vector store, hallucination detection
-│   │   ├── intelligence/    # Context assembly, compression, injection
-│   │   ├── lsp/             # LSP client and Monaco bridge
-│   │   ├── mcp/             # MCP server management
-│   │   ├── memory/          # Session memory, decision store
-│   │   ├── refactor/        # Changeset-based refactoring
-│   │   ├── security/        # Security scanning
-│   │   ├── technicalDebt/   # AST engine, debt scoring, graph
-│   │   └── testgen/         # AI test generation
-│   ├── store/               # Zustand state stores
-│   ├── utils/
-│   │   └── toolLoops/       # Per-provider agent tool loops
-│   ├── workers/             # Web Workers (AI, debt, embeddings)
-│   └── providers/anthropic/ # Anthropic streaming provider
-│
-├── src-tauri/src/
-│   ├── architecture/        # Rust dependency analysis
-│   ├── github/              # GitHub API client (Rust)
-│   ├── memory/              # Rust embedding store
-│   ├── snapshot/            # Project snapshots
-│   ├── agent_tools.rs       # Tauri commands for agent tools
-│   ├── autocomplete.rs      # Autocomplete backend
-│   ├── call_graph.rs        # Call graph analysis
-│   ├── context_compressor.rs
-│   ├── dap_manager.rs       # Debug Adapter Protocol
-│   ├── docker_controller.rs
-│   ├── embedding_pipeline.rs
-│   ├── embeddings.rs
-│   ├── environment_scanner.rs
-│   ├── fs_commands.rs
-│   ├── git_commands.rs      # Git operations (libgit2)
-│   ├── index_commands.rs
-│   ├── lsp_manager.rs
-│   ├── package_manager.rs
-│   ├── pty_manager.rs       # Real PTY terminal
-│   ├── safety.rs            # Path validation
-│   ├── search_commands.rs
-│   ├── security_scanner.rs
-│   ├── symbol_index.rs      # Tree-sitter symbol index
-│   ├── terminal_commands.rs
-│   └── workspace_import.rs
-│
-├── public/
-│   ├── icons/               # 63 file-type SVG icons
-│   └── *.wasm               # Tree-sitter parsers (JS, TS, Python, Rust)
-│
-├── media/
-│   └── screenshots/         # Screenshots and GIFs for this README
-│
-├── README.md
-├── CHANGELOG.md
-├── CONTRIBUTING.md
-├── SECURITY.md
-├── LICENSE
-└── autorun.bat              # Windows one-click dev launcher
+|-- src/
+|   |-- components/          # 70+ UI components
+|   |   |-- chat/            # Message bubbles, tool cards, context bar
+|   |   |-- github/          # GitHub panels
+|   |   +-- settings/        # Settings UI
+|   |-- services/            # Business logic (no direct UI)
+|   |   |-- agent/           # Orchestration, budget, loop guard, approval
+|   |   |-- architecture/    # Rule engine, impact analysis
+|   |   |-- autocomplete/    # Ghost-text completion engine
+|   |   |-- ci/              # CI/CD integration
+|   |   |-- embeddings/      # RAG, vector store, hallucination detection
+|   |   |-- intelligence/    # Context assembly, compression, injection
+|   |   |-- lsp/             # LSP client and Monaco bridge
+|   |   |-- mcp/             # MCP server management
+|   |   |-- memory/          # Session memory, decision store
+|   |   |-- refactor/        # Changeset-based refactoring
+|   |   |-- security/        # Security scanning
+|   |   |-- technicalDebt/   # AST engine, debt scoring, graph
+|   |   +-- testgen/         # AI test generation
+|   |-- store/               # Zustand state stores
+|   |-- utils/
+|   |   +-- toolLoops/       # Per-provider agent tool loops
+|   |-- workers/             # Web Workers (AI, debt, embeddings)
+|   +-- providers/anthropic/ # Anthropic streaming provider
+|
+|-- src-tauri/src/
+|   |-- architecture/        # Rust dependency analysis
+|   |-- github/              # GitHub API client (Rust)
+|   |-- memory/              # Rust embedding store
+|   |-- snapshot/            # Project snapshots
+|   |-- agent_tools.rs       # Tauri commands for agent tools
+|   |-- autocomplete.rs      # Autocomplete backend
+|   |-- call_graph.rs        # Call graph analysis
+|   |-- context_compressor.rs
+|   |-- dap_manager.rs       # Debug Adapter Protocol
+|   |-- docker_controller.rs
+|   |-- embedding_pipeline.rs
+|   |-- embeddings.rs
+|   |-- environment_scanner.rs
+|   |-- fs_commands.rs
+|   |-- git_commands.rs      # Git operations (libgit2)
+|   |-- index_commands.rs
+|   |-- lsp_manager.rs
+|   |-- package_manager.rs
+|   |-- pty_manager.rs       # Real PTY terminal
+|   |-- safety.rs            # Path validation
+|   |-- search_commands.rs
+|   |-- security_scanner.rs
+|   |-- symbol_index.rs      # Tree-sitter symbol index
+|   |-- terminal_commands.rs
+|   +-- workspace_import.rs
+|
+|-- public/
+|   |-- icons/               # 63 file-type SVG icons
+|   +-- *.wasm               # Tree-sitter parsers (JS, TS, Python, Rust)
+|
+|-- media/
+|   +-- screenshots/         # Screenshots and GIFs for this README
+|
+|-- README.md
+|-- CHANGELOG.md
+|-- CONTRIBUTING.md
+|-- SECURITY.md
+|-- LICENSE
++-- autorun.bat              # Windows one-click dev launcher
 ```
 
 ---
