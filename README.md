@@ -16,7 +16,14 @@ Multi-provider AI, agentic tool-calling, technical debt analysis, and a full IDE
 [![Rust](https://img.shields.io/badge/Rust-1.77+-orange?style=flat-square&logo=rust)](https://www.rust-lang.org)
 [![TypeScript](https://img.shields.io/badge/TypeScript-6.0-3178C6?style=flat-square&logo=typescript)](https://www.typescriptlang.org)
 [![Monaco](https://img.shields.io/badge/Monaco_Editor-0.55-0078D4?style=flat-square)](https://microsoft.github.io/monaco-editor)
-[![Platform](https://img.shields.io/badge/platform-Windows-0078D4?style=flat-square&logo=windows)](https://github.com/mandaloriantrader/punamIDe-v2.0-full-update)
+[![Platform](https://img.shields.io/badge/platform-Windows-0078D4?style=flat-square&logo=windows)](https://punamide.com)
+
+<br/>
+
+[![Download](https://img.shields.io/badge/Download-v2.1.2-brightgreen?style=flat-square&logo=windows)](https://github.com/punamide/punamide-downloads/releases/tag/v2.1.2)
+[![Website](https://img.shields.io/badge/Website-punamide.com-blue?style=flat-square&logo=googlechrome)](https://punamide.com)
+[![Discord](https://img.shields.io/badge/Discord-Join_Community-5865F2?style=flat-square&logo=discord)](https://discord.gg/PFp9KWY3eY)
+[![X](https://img.shields.io/badge/X-@PunamIDE-000000?style=flat-square&logo=x)](https://x.com/PunamIDE)
 
 <br/>
 
@@ -98,7 +105,39 @@ Multi-provider AI, agentic tool-calling, technical debt analysis, and a full IDE
 
 ---
 
-## Quick Start
+## Download
+
+> **Windows only (alpha).** macOS and Linux builds are planned.
+
+| Installer | Link |
+|---|---|
+| Windows Installer (recommended) | [PunamIDE v2.0_2.1.2_x64-setup.exe](https://github.com/punamide/punamide-downloads/releases/download/v2.1.2/PunamIDE.v2.0_2.1.2_x64-setup.exe) |
+| Windows MSI (admin/enterprise) | [PunamIDE v2.0_2.1.2_x64_en-US.msi](https://github.com/punamide/punamide-downloads/releases/download/v2.1.2/PunamIDE.v2.0_2.1.2_x64_en-US.msi) |
+
+All releases → [github.com/punamide/punamide-downloads/releases](https://github.com/punamide/punamide-downloads/releases)
+
+**Installation:**
+1. Download the `.exe` installer
+2. Run it — upgrades in-place if v2.1.x is already installed
+3. Launch PunamIDE
+4. Open **Settings → Providers** and add your AI API key
+5. Start coding
+
+---
+
+## Community
+
+| | |
+|---|---|
+| 🌐 Website | [punamide.com](https://punamide.com) |
+| 💬 Discord | [discord.gg/PFp9KWY3eY](https://discord.gg/PFp9KWY3eY) |
+| 🐦 X / Twitter | [@PunamIDE](https://x.com/PunamIDE) |
+| 📦 Releases | [punamide/punamide-downloads](https://github.com/punamide/punamide-downloads/releases) |
+| 🐛 Issues | [GitHub Issues](https://github.com/mandaloriantrader/PunamIDE/issues) |
+
+---
+
+
 
 **Prerequisites:** Node.js 20+, Rust 1.77.2+
 
@@ -590,6 +629,10 @@ MIT © 2025 Amritanshu Amar — see [LICENSE](LICENSE) for details.
 ---
 
 <div align="center">
+
+**[Website](https://punamide.com) · [Download](https://github.com/punamide/punamide-downloads/releases) · [Discord](https://discord.gg/PFp9KWY3eY) · [X](https://x.com/PunamIDE)**
+
+<br/>
 
 Built with ❤️ using Tauri, React, and Rust.
 
