@@ -6,8 +6,8 @@
  *  - Lazily loads per-language grammars on first use
  *  - Exposes a single parse() method used by ASTMetricsExtractor
  *
- * Supported languages (Phase 2): TypeScript, TSX, JavaScript, JSX
- * Phase 3 additions: Python, Rust, Go — add grammar imports + LANG_MAP entries
+ * Supported languages: TypeScript, TSX, JavaScript, JSX, Python, Rust
+ * Phase 3 additions: Go — add grammar import + LANG_MAP entry
  *
  * WASM loading strategy:
  *  - ?url imports let Vite hash and emit WASM files as static assets
@@ -33,10 +33,12 @@ const treeSitterWasmUrl = '/tree-sitter.wasm'
 const tsGrammarUrl      = '/tree-sitter-typescript.wasm'
 const tsxGrammarUrl     = '/tree-sitter-tsx.wasm'
 const jsGrammarUrl      = '/tree-sitter-javascript.wasm'
+const pyGrammarUrl      = '/tree-sitter-python.wasm'
+const rustGrammarUrl    = '/tree-sitter-rust.wasm'
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
-export type SupportedLanguage = 'typescript' | 'tsx' | 'javascript' | 'jsx'
+export type SupportedLanguage = 'typescript' | 'tsx' | 'javascript' | 'jsx' | 'python' | 'rust'
 
 export interface ASTEngineDiagnostics {
   coreInitStarted: boolean
@@ -62,6 +64,8 @@ export function extensionToLanguage(filePath: string): SupportedLanguage | null 
     case 'tsx': return 'tsx'
     case 'js':  return 'javascript'
     case 'jsx': return 'jsx'
+    case 'py':  return 'python'
+    case 'rs':  return 'rust'
     default:    return null
   }
 }
@@ -75,6 +79,8 @@ const GRAMMAR_URL: Record<SupportedLanguage, string> = {
   tsx:        tsxGrammarUrl,
   javascript: jsGrammarUrl,
   jsx:        jsGrammarUrl,   // same grammar as JS
+  python:     pyGrammarUrl,
+  rust:       rustGrammarUrl,
 }
 
 // ── ASTEngine ──────────────────────────────────────────────────────────────────
@@ -95,10 +101,14 @@ class ASTEngine {
    */
   private initCore(): Promise<void> {
     if (!this.coreReady) {
+      console.log('[ASTEngine] Initializing Tree-sitter core WASM from:', treeSitterWasmUrl)
       this.coreReady = Parser.init({
-        // locateFile is Tree-sitter's hook for resolving the core WASM path.
-        // We return the Vite-hashed URL directly — no path guessing needed.
         locateFile: (_path: string, _prefix: string) => treeSitterWasmUrl,
+      }).then(() => {
+        console.log('[ASTEngine] ✅ Core WASM initialized successfully')
+      }).catch((err) => {
+        console.error('[ASTEngine] ❌ Core WASM initialization FAILED:', err)
+        throw err
       })
     }
     return this.coreReady!
@@ -123,12 +133,13 @@ class ASTEngine {
       await this.initCore()
 
       const grammarUrl = GRAMMAR_URL[language]
+      console.log(`[ASTEngine] Loading grammar for "${language}" from:`, grammarUrl)
       const lang = await Language.load(grammarUrl)
+      console.log(`[ASTEngine] ✅ Grammar "${language}" loaded successfully`)
 
       const parser = new Parser()
       parser.setLanguage(lang)
 
-      // For JSX, store under both 'jsx' and reuse JS parser
       this.parsers.set(language, parser)
     })()
 
@@ -136,9 +147,9 @@ class ASTEngine {
 
     try {
       await loading
+    } catch (err) {
+      console.error(`[ASTEngine] ❌ Grammar load FAILED for "${language}":`, err)
     } finally {
-      // Remove loading promise whether it succeeded or failed
-      // so a retry on failure creates a fresh promise
       this.grammarLoading.delete(language)
     }
   }
@@ -177,7 +188,8 @@ class ASTEngine {
     } catch (error) {
       this.failedParses++
       this.lastError = error instanceof Error ? error.message : String(error)
-      // WASM load failure, parse error, memory pressure — degrade silently
+      console.error(`[ASTEngine] ❌ parse() FAILED for "${language}":`, error)
+      console.error(`[ASTEngine] State: coreReady=${!!this.coreReady}, parsers=${[...this.parsers.keys()].join(',')}, successfulParses=${this.successfulParses}, failedParses=${this.failedParses}`)
       return null
     }
   }
@@ -191,8 +203,15 @@ class ASTEngine {
     filePath: string,
   ): Promise<Tree | null> {
     const language = extensionToLanguage(filePath)
-    if (!language) return null
-    return this.parse(content, language)
+    if (!language) {
+      console.log(`[ASTEngine] Skipping unsupported file: ${filePath}`)
+      return null
+    }
+    const result = await this.parse(content, language)
+    if (!result) {
+      console.warn(`[ASTEngine] parseFile returned null for: ${filePath} (language: ${language})`)
+    }
+    return result
   }
 
   /**
@@ -210,7 +229,11 @@ class ASTEngine {
    * parsers.size > 0 for a stronger "at least one grammar loaded" signal.
    */
   isASTAvailable(): boolean {
-    return this.parsers.size > 0 && this.successfulParses > 0
+    const available = this.parsers.size > 0 && this.successfulParses > 0
+    if (!available) {
+      console.warn(`[ASTEngine] isASTAvailable = false | parsers.size=${this.parsers.size}, successfulParses=${this.successfulParses}, failedParses=${this.failedParses}, lastError=${this.lastError}`)
+    }
+    return available
   }
 
   getDiagnostics(): ASTEngineDiagnostics {
@@ -229,7 +252,7 @@ class ASTEngine {
    * Non-blocking — returns a promise that resolves when all grammars are ready.
    */
   async preload(): Promise<void> {
-    const languages: SupportedLanguage[] = ['typescript', 'tsx', 'javascript', 'jsx']
+    const languages: SupportedLanguage[] = ['typescript', 'tsx', 'javascript', 'jsx', 'python', 'rust']
     await Promise.allSettled(languages.map((l) => this.loadGrammar(l)))
   }
 }

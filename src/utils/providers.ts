@@ -18,6 +18,7 @@ export interface ModelConfig {
   id: string;
   name: string;
   enabled: boolean; // checked in model selector
+  contextWindow?: number; // max context tokens (auto-resolved or user override)
 }
 
 export interface AIRequest {
@@ -69,6 +70,10 @@ const MODEL_PRICING: Array<{ match: RegExp; pricing: ModelPricing }> = [
   { match: /gemini-2\.5-pro/i, pricing: { inputPerMillionUsd: 1.25, outputPerMillionUsd: 10.00 } },
   { match: /gemini-2\.0-flash-lite/i, pricing: { inputPerMillionUsd: 0.075, outputPerMillionUsd: 0.30 } },
   { match: /gemini-2\.0-flash/i, pricing: { inputPerMillionUsd: 0.10, outputPerMillionUsd: 0.40 } },
+  { match: /deepseek-v4-flash/i, pricing: { inputPerMillionUsd: 0.14, outputPerMillionUsd: 0.28 } },
+  { match: /deepseek-v4-pro/i, pricing: { inputPerMillionUsd: 2.19, outputPerMillionUsd: 8.87 } },
+  { match: /deepseek-v3/i, pricing: { inputPerMillionUsd: 0.27, outputPerMillionUsd: 1.10 } },
+  { match: /deepseek-r1/i, pricing: { inputPerMillionUsd: 0.55, outputPerMillionUsd: 2.19 } },
 ];
 
 function getPricing(model: string): ModelPricing | null {

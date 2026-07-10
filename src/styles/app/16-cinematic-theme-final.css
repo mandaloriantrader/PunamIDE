@@ -972,8 +972,8 @@
 }
 
 .editor-empty .welcome-title {
-  margin: 0 !important;
-  font-size: clamp(24px, 3.1vh, 34px) !important;
+  margin: 0 0 16px !important;
+  font-size: clamp(18px, 2.5vh, 22px) !important;
   line-height: 1.12 !important;
 }
 
@@ -1058,7 +1058,7 @@
   }
 
   .editor-empty .welcome-title {
-    font-size: 24px !important;
+    font-size: 18px !important;
   }
 
   .welcome-shortcut-btn,

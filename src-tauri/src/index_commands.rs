@@ -17,10 +17,14 @@ use crate::FuzzyMatchResult;
 use crate::RelevantContext;
 use crate::ContextFile;
 use crate::AIContext;
+use crate::RepoSymbol;
 use crate::get_project_root;
 use crate::validate_path_within_project;
 use crate::SKIP_DIRS;
 use crate::SKIP_FILES;
+use crate::ASTChunk;
+use crate::ASTIndex;
+use crate::ASTSearchResult;
 
 // --- Project Context Cache ---
 
@@ -772,7 +776,8 @@ pub fn get_relevant_context(
         let full_path = root_path.join(path);
         let content = fs::read_to_string(&full_path).ok().unwrap_or_default();
         let trimmed = if content.len() > 3000 {
-            format!("{}...\n[truncated]", &content[..3000])
+            let end = content.floor_char_boundary(3000);
+            format!("{}...\n[truncated]", &content[..end])
         } else { content };
         top_files.push(ContextFile { path: path.clone(), content: trimmed, relevance: *score });
     }
@@ -785,7 +790,8 @@ pub fn get_relevant_context(
         let full_path = root_path.join(path);
         if let Ok(content) = fs::read_to_string(&full_path) {
             let trimmed = if content.len() > 1500 {
-                format!("{}...\n[truncated]", &content[..1500])
+                let end = content.floor_char_boundary(1500);
+                format!("{}...\n[truncated]", &content[..end])
             } else { content };
             top_files.push(ContextFile {
                 path: path.clone(),
@@ -872,7 +878,8 @@ pub fn build_ai_context(query: String, max_files: usize, state: State<ProjectRoo
             let content = fs::read_to_string(&full_path).ok()?;
             // Limit to 2000 chars per file for context
             let trimmed = if content.len() > 2000 {
-                format!("{}...\n[truncated]", &content[..2000])
+                let end = content.floor_char_boundary(2000);
+                format!("{}...\n[truncated]", &content[..end])
             } else {
                 content
             };
@@ -900,5 +907,738 @@ pub fn build_ai_context(query: String, max_files: usize, state: State<ProjectRoo
         project_summary,
         relevant_files: top_files,
         total_tokens_estimate,
+    })
+}
+
+
+// --- Repo Map: Extract exported symbols for system prompt ---
+
+/// Walks the project directory (max depth 4) and extracts top-level exported symbols
+/// from supported file types (.ts, .tsx, .rs, .py).
+/// Returns a compact list of file paths + their exported symbol names for the system prompt.
+#[tauri::command]
+pub fn get_repo_map(project_path: String, state: State<ProjectRoot>) -> Result<Vec<RepoSymbol>, String> {
+    let root = if project_path.is_empty() {
+        get_project_root(&state)?
+    } else {
+        project_path
+    };
+    let root_path = Path::new(&root);
+
+    if !root_path.exists() || !root_path.is_dir() {
+        return Ok(Vec::new());
+    }
+
+    let mut symbols: Vec<RepoSymbol> = Vec::new();
+    collect_repo_symbols(root_path, root_path, &mut symbols, 0);
+    Ok(symbols)
+}
+
+/// Recursively collects symbols from supported files, max depth 4.
+fn collect_repo_symbols(dir: &Path, root: &Path, symbols: &mut Vec<RepoSymbol>, depth: usize) {
+    if depth > 4 || symbols.len() > 2000 {
+        return;
+    }
+
+    let items = match fs::read_dir(dir) {
+        Ok(items) => items,
+        Err(_) => return,
+    };
+
+    for item in items.filter_map(|e| e.ok()) {
+        let name = item.file_name().to_string_lossy().to_string();
+        let path = item.path();
+        let is_dir = item.file_type().map(|t| t.is_dir()).unwrap_or(false);
+
+        // Skip hidden dirs/files and known skip directories
+        if name.starts_with('.') { continue; }
+        if is_dir && SKIP_DIRS.contains(&name.as_str()) { continue; }
+        if !is_dir && SKIP_FILES.contains(&name.as_str()) { continue; }
+
+        if is_dir {
+            collect_repo_symbols(&path, root, symbols, depth + 1);
+        } else {
+            let ext = path.extension()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .to_string();
+
+            // Only process supported file types
+            match ext.as_str() {
+                "ts" | "tsx" | "rs" | "py" => {}
+                _ => continue,
+            }
+
+            // Skip large files (> 200KB)
+            if let Ok(meta) = fs::metadata(&path) {
+                if meta.len() > 200_000 { continue; }
+            }
+
+            // Read and extract symbols
+            let content = match fs::read_to_string(&path) {
+                Ok(c) => c,
+                Err(_) => continue, // skip files where reading fails
+            };
+
+            let exports = match ext.as_str() {
+                "ts" | "tsx" => extract_typescript_exports(&content),
+                "rs" => extract_rust_exports(&content),
+                "py" => extract_python_exports(&content),
+                _ => continue,
+            };
+
+            if exports.is_empty() {
+                continue;
+            }
+
+            let relative_path = path.strip_prefix(root)
+                .unwrap_or(&path)
+                .to_string_lossy()
+                .replace('\\', "/");
+
+            symbols.push(RepoSymbol {
+                file_path: relative_path,
+                exports: exports.into_iter().take(8).collect(),
+                file_type: ext,
+            });
+        }
+    }
+}
+
+/// Extract exported symbols from TypeScript/TSX files.
+/// Looks for: export function, export class, export const, export interface
+fn extract_typescript_exports(content: &str) -> Vec<String> {
+    let mut exports: Vec<String> = Vec::new();
+
+    let re = match regex_lite::Regex::new(
+        r"(?m)^(?:export\s+(?:default\s+)?(?:async\s+)?(?:function|class|interface)\s+(\w+)|export\s+(?:const|let|var|type|enum)\s+(\w+))"
+    ) {
+        Ok(r) => r,
+        Err(_) => return exports,
+    };
+
+    for caps in re.captures_iter(content) {
+        let name = caps.get(1)
+            .or_else(|| caps.get(2))
+            .map(|m| m.as_str().to_string());
+
+        if let Some(name) = name {
+            if !exports.contains(&name) {
+                exports.push(name);
+            }
+            if exports.len() >= 8 {
+                break;
+            }
+        }
+    }
+
+    exports
+}
+
+/// Extract public symbols from Rust files.
+/// Looks for: pub fn, pub struct, pub enum, pub trait
+fn extract_rust_exports(content: &str) -> Vec<String> {
+    let mut exports: Vec<String> = Vec::new();
+
+    let re = match regex_lite::Regex::new(
+        r"(?m)^\s*pub(?:\s*\(\s*(?:crate|super)\s*\))?\s+(?:async\s+)?(?:fn|struct|enum|trait)\s+(\w+)"
+    ) {
+        Ok(r) => r,
+        Err(_) => return exports,
+    };
+
+    for caps in re.captures_iter(content) {
+        if let Some(name) = caps.get(1) {
+            let name_str = name.as_str().to_string();
+            if !exports.contains(&name_str) {
+                exports.push(name_str);
+            }
+            if exports.len() >= 8 {
+                break;
+            }
+        }
+    }
+
+    exports
+}
+
+/// Extract module-level symbols from Python files.
+/// Looks for: def and class at zero indentation (column 0)
+fn extract_python_exports(content: &str) -> Vec<String> {
+    let mut exports: Vec<String> = Vec::new();
+
+    let re = match regex_lite::Regex::new(
+        r"(?m)^(?:async\s+)?(?:def|class)\s+(\w+)"
+    ) {
+        Ok(r) => r,
+        Err(_) => return exports,
+    };
+
+    for caps in re.captures_iter(content) {
+        if let Some(name) = caps.get(1) {
+            let name_str = name.as_str().to_string();
+            if !exports.contains(&name_str) {
+                exports.push(name_str);
+            }
+            if exports.len() >= 8 {
+                break;
+            }
+        }
+    }
+
+    exports
+}
+
+
+// --- AST-Aware Codebase Indexing (Regex-based) ---
+
+/// Supported file extensions for AST-aware chunking
+const AST_SUPPORTED_EXTS: &[&str] = &["ts", "tsx", "js", "rs", "py"];
+
+/// Maximum lines per chunk before splitting
+const AST_MAX_CHUNK_LINES: usize = 200;
+
+/// Fallback chunk size for unsupported languages
+const AST_FALLBACK_CHUNK_LINES: usize = 40;
+
+/// Fallback overlap lines
+const AST_FALLBACK_OVERLAP: usize = 10;
+
+/// Detect function/class/struct boundaries using regex patterns.
+/// Returns Vec<(start_line_0idx, chunk_type, symbol_name)>
+fn detect_ast_boundaries(lines: &[&str], ext: &str) -> Vec<(usize, String, String)> {
+    let patterns: Vec<(&str, &str)> = match ext {
+        "ts" | "tsx" | "js" => vec![
+            (r"(?:export\s+)?(?:async\s+)?function\s+(\w+)", "function"),
+            (r"(?:export\s+)?class\s+(\w+)", "class"),
+            (r"(?:export\s+)?interface\s+(\w+)", "class"),
+            (r"(?:export\s+)?(?:const|let|var)\s+(\w+)\s*=\s*(?:async\s*)?\(", "function"),
+        ],
+        "rs" => vec![
+            (r"(?:pub\s+)?(?:async\s+)?fn\s+(\w+)", "function"),
+            (r"(?:pub\s+)?struct\s+(\w+)", "class"),
+            (r"(?:pub\s+)?enum\s+(\w+)", "class"),
+            (r"(?:pub\s+)?trait\s+(\w+)", "class"),
+            (r"impl\s+(\w+)", "class"),
+        ],
+        "py" => vec![
+            (r"^(?:async\s+)?def\s+(\w+)", "function"),
+            (r"^class\s+(\w+)", "class"),
+        ],
+        _ => return Vec::new(),
+    };
+
+    let mut boundaries: Vec<(usize, String, String)> = Vec::new();
+
+    for (pattern, chunk_type) in &patterns {
+        let re = match regex_lite::Regex::new(pattern) {
+            Ok(r) => r,
+            Err(_) => continue,
+        };
+
+        for (line_idx, line) in lines.iter().enumerate() {
+            let trimmed = line.trim();
+            // For Python, only match at column 0 (no leading whitespace for top-level)
+            if ext == "py" && !line.starts_with(|c: char| c.is_alphabetic() || c == '@') && !line.starts_with("async") {
+                continue;
+            }
+
+            if let Some(caps) = re.captures(trimmed) {
+                if let Some(name_match) = caps.get(1) {
+                    boundaries.push((line_idx, chunk_type.to_string(), name_match.as_str().to_string()));
+                }
+            }
+        }
+    }
+
+    // Sort by line number
+    boundaries.sort_by_key(|(line, _, _)| *line);
+
+    // Deduplicate: if two boundaries start on the same line, keep the first
+    boundaries.dedup_by_key(|(line, _, _)| *line);
+
+    boundaries
+}
+
+/// Determine the end of a chunk by tracking brace depth (for brace-based languages)
+/// or by finding the next boundary.
+fn find_chunk_end(lines: &[&str], start: usize, next_boundary: usize, ext: &str) -> usize {
+    match ext {
+        "ts" | "tsx" | "js" | "rs" => {
+            // Track brace depth starting from the boundary line
+            let mut depth: i32 = 0;
+            let mut found_open = false;
+            for i in start..next_boundary {
+                for ch in lines[i].chars() {
+                    if ch == '{' {
+                        depth += 1;
+                        found_open = true;
+                    } else if ch == '}' {
+                        depth -= 1;
+                    }
+                }
+                if found_open && depth <= 0 {
+                    return (i + 1).min(next_boundary);
+                }
+            }
+            // If brace tracking didn't find closure, use next boundary
+            next_boundary
+        }
+        "py" => {
+            // For Python: track indentation — the function/class ends when
+            // we encounter a non-empty line with indentation <= the declaration line
+            if start >= lines.len() {
+                return next_boundary;
+            }
+            let base_indent = lines[start].len() - lines[start].trim_start().len();
+            for i in (start + 1)..next_boundary {
+                let line = lines[i];
+                if line.trim().is_empty() {
+                    continue;
+                }
+                let indent = line.len() - line.trim_start().len();
+                if indent <= base_indent && !line.trim().starts_with('#') && !line.trim().starts_with('@') {
+                    return i;
+                }
+            }
+            next_boundary
+        }
+        _ => next_boundary,
+    }
+}
+
+/// Calculate tokens_estimate as word_count / 0.75
+fn estimate_tokens(content: &str) -> usize {
+    let word_count = content.split_whitespace().count();
+    ((word_count as f64) / 0.75).ceil() as usize
+}
+
+/// Determine the language name from file extension
+fn ext_to_language(ext: &str) -> &str {
+    match ext {
+        "ts" | "tsx" => "typescript",
+        "js" => "javascript",
+        "rs" => "rust",
+        "py" => "python",
+        _ => "unknown",
+    }
+}
+
+/// Split a chunk that exceeds AST_MAX_CHUNK_LINES at the midpoint.
+/// Returns two chunks (first half, second half).
+fn split_oversized_chunk(chunk: &ASTChunk) -> Vec<ASTChunk> {
+    let lines: Vec<&str> = chunk.content.lines().collect();
+    let total_lines = lines.len();
+
+    if total_lines <= AST_MAX_CHUNK_LINES {
+        return vec![chunk.clone()];
+    }
+
+    let mid = total_lines / 2;
+    let first_content = lines[..mid].join("\n");
+    let second_content = lines[mid..].join("\n");
+
+    vec![
+        ASTChunk {
+            file_path: chunk.file_path.clone(),
+            chunk_type: chunk.chunk_type.clone(),
+            symbol_name: format!("{}_part1", chunk.symbol_name),
+            start_line: chunk.start_line,
+            end_line: chunk.start_line + mid - 1,
+            content: first_content.clone(),
+            language: chunk.language.clone(),
+            tokens_estimate: estimate_tokens(&first_content),
+        },
+        ASTChunk {
+            file_path: chunk.file_path.clone(),
+            chunk_type: chunk.chunk_type.clone(),
+            symbol_name: format!("{}_part2", chunk.symbol_name),
+            start_line: chunk.start_line + mid,
+            end_line: chunk.end_line,
+            content: second_content.clone(),
+            language: chunk.language.clone(),
+            tokens_estimate: estimate_tokens(&second_content),
+        },
+    ]
+}
+
+/// Generate fallback chunks (40-line chunks with 10-line overlap) for unsupported languages.
+fn generate_fallback_chunks(
+    lines: &[&str],
+    relative_path: &str,
+    language: &str,
+) -> Vec<ASTChunk> {
+    let mut chunks = Vec::new();
+    let mut i = 0;
+
+    while i < lines.len() {
+        let end = (i + AST_FALLBACK_CHUNK_LINES).min(lines.len());
+        let content = lines[i..end].join("\n");
+
+        chunks.push(ASTChunk {
+            file_path: relative_path.to_string(),
+            chunk_type: "fallback".to_string(),
+            symbol_name: format!("lines_{}_to_{}", i + 1, end),
+            start_line: i + 1,
+            end_line: end,
+            content: content.clone(),
+            language: language.to_string(),
+            tokens_estimate: estimate_tokens(&content),
+        });
+
+        if end >= lines.len() {
+            break;
+        }
+        i += AST_FALLBACK_CHUNK_LINES - AST_FALLBACK_OVERLAP;
+    }
+
+    chunks
+}
+
+/// Walk and collect AST chunks from a single file.
+fn collect_ast_chunks_from_file(
+    file_path: &Path,
+    root: &Path,
+) -> Vec<ASTChunk> {
+    let ext = file_path
+        .extension()
+        .unwrap_or_default()
+        .to_string_lossy()
+        .to_string();
+
+    let content = match fs::read_to_string(file_path) {
+        Ok(c) => c,
+        Err(_) => return Vec::new(),
+    };
+
+    // Skip huge files
+    if content.len() > 500_000 {
+        return Vec::new();
+    }
+
+    let relative = file_path
+        .strip_prefix(root)
+        .unwrap_or(file_path)
+        .to_string_lossy()
+        .replace('\\', "/");
+
+    let lines: Vec<&str> = content.lines().collect();
+    let language = ext_to_language(&ext);
+
+    // Check if this is a supported language
+    if !AST_SUPPORTED_EXTS.contains(&ext.as_str()) {
+        return generate_fallback_chunks(&lines, &relative, language);
+    }
+
+    // Detect boundaries
+    let boundaries = detect_ast_boundaries(&lines, &ext);
+
+    if boundaries.is_empty() {
+        // No boundaries found, use fallback
+        return generate_fallback_chunks(&lines, &relative, language);
+    }
+
+    let mut chunks: Vec<ASTChunk> = Vec::new();
+
+    for idx in 0..boundaries.len() {
+        let (start, ref chunk_type, ref symbol_name) = boundaries[idx];
+
+        let next_boundary = if idx + 1 < boundaries.len() {
+            boundaries[idx + 1].0
+        } else {
+            lines.len()
+        };
+
+        let end = find_chunk_end(&lines, start, next_boundary, &ext);
+
+        let chunk_content = lines[start..end].join("\n");
+
+        let chunk = ASTChunk {
+            file_path: relative.clone(),
+            chunk_type: chunk_type.clone(),
+            symbol_name: symbol_name.clone(),
+            start_line: start + 1, // 1-based
+            end_line: end,         // 1-based (inclusive of last line)
+            content: chunk_content.clone(),
+            language: language.to_string(),
+            tokens_estimate: estimate_tokens(&chunk_content),
+        };
+
+        // Split oversized chunks
+        let split_chunks = split_oversized_chunk(&chunk);
+        chunks.extend(split_chunks);
+    }
+
+    chunks
+}
+
+/// Recursively walk the directory and collect AST chunks.
+fn collect_ast_chunks_recursive(
+    dir: &Path,
+    root: &Path,
+    chunks: &mut Vec<ASTChunk>,
+    depth: usize,
+) {
+    if depth > 8 || chunks.len() > 50000 {
+        return;
+    }
+
+    let items = match fs::read_dir(dir) {
+        Ok(items) => items,
+        Err(_) => return,
+    };
+
+    for item in items.filter_map(|e| e.ok()) {
+        let name = item.file_name().to_string_lossy().to_string();
+        let path = item.path();
+        let is_dir = item.file_type().map(|t| t.is_dir()).unwrap_or(false);
+
+        if name.starts_with('.') {
+            continue;
+        }
+        if is_dir && SKIP_DIRS.contains(&name.as_str()) {
+            continue;
+        }
+        if !is_dir && SKIP_FILES.contains(&name.as_str()) {
+            continue;
+        }
+
+        if is_dir {
+            collect_ast_chunks_recursive(&path, root, chunks, depth + 1);
+        } else {
+            let ext = path
+                .extension()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .to_string();
+
+            // Only process code files
+            let code_exts = [
+                "ts", "tsx", "js", "jsx", "rs", "py", "go", "java", "c", "cpp",
+                "h", "hpp", "cs", "rb", "php", "swift", "kt",
+            ];
+            if !code_exts.contains(&ext.as_str()) {
+                continue;
+            }
+
+            // Skip binary-like extensions
+            let binary_exts = [
+                "png", "jpg", "jpeg", "gif", "webp", "ico", "bmp", "woff",
+                "woff2", "ttf", "eot", "otf", "mp3", "mp4", "wav", "zip",
+                "tar", "gz", "rar", "pdf", "exe", "dll",
+            ];
+            if binary_exts.contains(&ext.as_str()) {
+                continue;
+            }
+
+            let file_chunks = collect_ast_chunks_from_file(&path, root);
+            chunks.extend(file_chunks);
+        }
+    }
+}
+
+/// Index the codebase using regex-based AST-aware chunking.
+/// Supported: .ts, .tsx, .js, .rs, .py
+/// For each supported file:
+///   1. Detect function/class boundaries via regex
+///   2. Extract chunks per top-level node
+///   3. Split chunks exceeding 200 lines at midpoint
+/// Unsupported languages: 40-line chunks with 10-line overlap
+#[tauri::command]
+pub fn index_codebase_ast(
+    project_path: String,
+    state: State<ProjectRoot>,
+    index_state: State<ASTIndex>,
+) -> Result<usize, String> {
+    let root = if project_path.is_empty() {
+        get_project_root(&state)?
+    } else {
+        project_path
+    };
+    let root_path = Path::new(&root);
+
+    if !root_path.exists() || !root_path.is_dir() {
+        return Err("Project path does not exist or is not a directory".to_string());
+    }
+
+    let mut chunks: Vec<ASTChunk> = Vec::new();
+    collect_ast_chunks_recursive(root_path, root_path, &mut chunks, 0);
+
+    let chunk_count = chunks.len();
+
+    // Store in managed state
+    let mut idx = index_state.0.write().map_err(|_| "Lock error".to_string())?;
+    *idx = chunks;
+
+    Ok(chunk_count)
+}
+
+// --- BM25 Scoring for AST Chunks ---
+
+/// BM25 parameters
+const BM25_K1: f64 = 1.2;
+const BM25_B: f64 = 0.75;
+
+/// Tokenize text for BM25 (similar to existing tokenize_code but simpler)
+fn bm25_tokenize(text: &str) -> Vec<String> {
+    text.to_lowercase()
+        .split(|c: char| !c.is_alphanumeric() && c != '_')
+        .filter(|t| t.len() > 1 && t.len() < 50)
+        .map(|t| t.to_string())
+        .collect()
+}
+
+/// Compute BM25 score for a single document given query terms.
+/// - doc_tokens: the tokenized document
+/// - query_tokens: the tokenized query
+/// - avg_dl: average document length across corpus
+/// - n: total number of documents
+/// - df: document frequency map (term -> number of docs containing term)
+fn bm25_score(
+    doc_tokens: &[String],
+    query_tokens: &[String],
+    avg_dl: f64,
+    n: usize,
+    df: &HashMap<String, usize>,
+) -> f64 {
+    let dl = doc_tokens.len() as f64;
+    let mut score = 0.0;
+
+    // Count term frequencies in this document
+    let mut tf_map: HashMap<&str, usize> = HashMap::new();
+    for token in doc_tokens {
+        *tf_map.entry(token.as_str()).or_insert(0) += 1;
+    }
+
+    for qt in query_tokens {
+        let tf = *tf_map.get(qt.as_str()).unwrap_or(&0) as f64;
+        if tf == 0.0 {
+            continue;
+        }
+
+        let doc_freq = *df.get(qt.as_str()).unwrap_or(&0) as f64;
+        // IDF component: log((N - df + 0.5) / (df + 0.5) + 1)
+        let idf = ((n as f64 - doc_freq + 0.5) / (doc_freq + 0.5) + 1.0).ln();
+
+        // TF component with BM25 saturation
+        let tf_component = (tf * (BM25_K1 + 1.0)) / (tf + BM25_K1 * (1.0 - BM25_B + BM25_B * (dl / avg_dl)));
+
+        score += idf * tf_component;
+    }
+
+    score
+}
+
+/// Search AST-indexed chunks using BM25 ranking.
+/// Ranks over (symbol_name + content), with 1.5x boost for chunk_type == "function".
+/// Returns max top_k results (default 8, max 20).
+/// If AST index not built: triggers index_codebase_ast inline.
+#[tauri::command]
+pub fn search_codebase_ast(
+    query: String,
+    project_path: String,
+    top_k: Option<usize>,
+    state: State<ProjectRoot>,
+    index_state: State<ASTIndex>,
+) -> Result<ASTSearchResult, String> {
+    let k = top_k.unwrap_or(8).min(20).max(1);
+
+    // Check if index is built; if not, build it inline
+    {
+        let idx = index_state.0.read().map_err(|_| "Lock error".to_string())?;
+        if idx.is_empty() {
+            drop(idx);
+            // Build index inline
+            let root = if project_path.is_empty() {
+                get_project_root(&state)?
+            } else {
+                project_path.clone()
+            };
+            let root_path = Path::new(&root);
+
+            if !root_path.exists() || !root_path.is_dir() {
+                return Err("Project path does not exist or is not a directory".to_string());
+            }
+
+            let mut chunks: Vec<ASTChunk> = Vec::new();
+            collect_ast_chunks_recursive(root_path, root_path, &mut chunks, 0);
+
+            let mut idx_write = index_state.0.write().map_err(|_| "Lock error".to_string())?;
+            *idx_write = chunks;
+        }
+    }
+
+    let idx = index_state.0.read().map_err(|_| "Lock error".to_string())?;
+
+    if idx.is_empty() {
+        return Ok(ASTSearchResult {
+            chunks: Vec::new(),
+            total_matches: 0,
+            search_method: "bm25_ast".to_string(),
+        });
+    }
+
+    let query_tokens = bm25_tokenize(&query);
+    if query_tokens.is_empty() {
+        return Ok(ASTSearchResult {
+            chunks: Vec::new(),
+            total_matches: 0,
+            search_method: "bm25_ast".to_string(),
+        });
+    }
+
+    // Tokenize all documents (symbol_name + content) and compute document frequencies
+    let n = idx.len();
+    let mut doc_token_lists: Vec<Vec<String>> = Vec::with_capacity(n);
+    let mut df: HashMap<String, usize> = HashMap::new();
+    let mut total_len: usize = 0;
+
+    for chunk in idx.iter() {
+        let combined = format!("{} {}", chunk.symbol_name, chunk.content);
+        let tokens = bm25_tokenize(&combined);
+
+        // Count unique terms for DF
+        let mut seen: std::collections::HashSet<&str> = std::collections::HashSet::new();
+        for token in &tokens {
+            if seen.insert(token.as_str()) {
+                *df.entry(token.clone()).or_insert(0) += 1;
+            }
+        }
+
+        total_len += tokens.len();
+        doc_token_lists.push(tokens);
+    }
+
+    let avg_dl = if n > 0 { total_len as f64 / n as f64 } else { 1.0 };
+
+    // Score each document
+    let mut scored: Vec<(usize, f64)> = Vec::with_capacity(n);
+    for (i, doc_tokens) in doc_token_lists.iter().enumerate() {
+        let mut score = bm25_score(doc_tokens, &query_tokens, avg_dl, n, &df);
+
+        // Apply 1.5x boost for function chunks
+        if idx[i].chunk_type == "function" {
+            score *= 1.5;
+        }
+
+        if score > 0.0 {
+            scored.push((i, score));
+        }
+    }
+
+    // Sort by score descending
+    scored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+
+    let total_matches = scored.len();
+    let results: Vec<ASTChunk> = scored
+        .into_iter()
+        .take(k)
+        .map(|(i, _)| idx[i].clone())
+        .collect();
+
+    Ok(ASTSearchResult {
+        chunks: results,
+        total_matches,
+        search_method: "bm25_ast".to_string(),
     })
 }

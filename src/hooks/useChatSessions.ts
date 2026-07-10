@@ -294,6 +294,59 @@ export function useChatSessions({ projectPath, messages, setMessages }: UseChatS
     }
   };
 
+  /**
+   * Fork the current session from a specific message index.
+   * Creates a new session containing messages[0..fromMessageIndex] (inclusive),
+   * switches to it immediately. The original session remains untouched.
+   */
+  const handleForkSession = async (fromMessageIndex: number) => {
+    if (!projectPath) return;
+
+    // Slice messages up to and including the target index
+    const forkedMessages = messages.slice(0, fromMessageIndex + 1);
+
+    // Build a title from the fork point
+    const lastUserMsg = [...forkedMessages].reverse().find((m) => m.role === "user");
+    const forkTitle = lastUserMsg
+      ? `Fork: ${lastUserMsg.content.slice(0, 40)}${lastUserMsg.content.length > 40 ? "…" : ""}`
+      : `Fork at message ${fromMessageIndex + 1}`;
+
+    // Persist forked messages
+    const toSave: PersistedChatMessage[] = forkedMessages.map((m) => ({
+      role: m.role,
+      content: m.content,
+      thinking: m.thinking,
+      toolEvents: m.toolEvents,
+      mode: m.mode,
+      timestamp: Date.now(),
+      attachments: m.attachments,
+      parsed: m.parsed,
+      applied: m.applied,
+      metrics: m.metrics,
+      multiResponses: m.multiResponses,
+      checkResult: m.checkResult,
+    }));
+
+    const newRecord: ChatSessionRecord = {
+      id: generateSessionId(),
+      project_path: projectPath,
+      title: forkTitle,
+      provider: "",
+      model: "",
+      messages: JSON.stringify(toSave),
+      token_count: 0,
+      cost: 0,
+      created_at: Date.now(),
+      updated_at: Date.now(),
+    };
+
+    await saveChatSession(newRecord);
+    setSessions((prev) => [recordToSession(newRecord), ...prev]);
+    setActiveSessionId(newRecord.id);
+    setMessages(forkedMessages);
+    setShowSessionList(false);
+  };
+
   return {
     sessions,
     activeSessionId,
@@ -302,5 +355,6 @@ export function useChatSessions({ projectPath, messages, setMessages }: UseChatS
     handleNewSession,
     handleSwitchSession,
     handleDeleteSession,
+    handleForkSession,
   };
 }

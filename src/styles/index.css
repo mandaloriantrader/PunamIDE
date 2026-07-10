@@ -30,7 +30,10 @@
 @import "./app/17-cline-chat-blocks.css";
 @import "./app/18-edit-preview.css";
 @import "./app/19-intelligence-panel.css";
+@import "./app/20-merge-conflict.css";
 @import "./debugger.css";
 @import "./github.css";
 @import "./snapshot.css";
 @import "./alpha-feedback.css";
+@import "./import-panel.css";
+@import "./context-sidebar.css";

@@ -138,6 +138,22 @@ class McpManager {
   hasConnectedServers(): boolean {
     return [...this.servers.values()].some((s) => s.connected);
   }
+
+  /**
+   * Auto-connect all enabled servers on project load.
+   * Call this when a project is opened. Non-blocking — failures are silent.
+   */
+  async autoConnect(): Promise<void> {
+    const enabledServers = [...this.servers.entries()].filter(
+      ([, state]) => state.config.enabled && !state.connected
+    );
+    if (enabledServers.length === 0) return;
+
+    // Connect in parallel, don't block on failures
+    await Promise.allSettled(
+      enabledServers.map(([id]) => this.connect(id).catch(() => {}))
+    );
+  }
 }
 
 export const mcpManager = new McpManager();

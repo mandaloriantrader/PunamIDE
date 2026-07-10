@@ -200,6 +200,8 @@ interface CachedFileScore {
 }
 
 const memCache = new Map<string, CachedFileScore>();
+const MEM_CACHE_MAX = 2000;
+const CACHE_TTL_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
 let storePromise: Promise<Awaited<ReturnType<typeof load>>> | null = null;
 
 function getStore() {
@@ -217,11 +219,11 @@ export async function sha256(content: string): Promise<string> {
 
 async function getCached(filePath: string, hash: string): Promise<FileDebtMetrics | null> {
   const mem = memCache.get(filePath);
-  if (mem && mem.sha256 === hash) return mem.metrics;
+  if (mem && mem.sha256 === hash && Date.now() - mem.timestamp < CACHE_TTL_MS) return mem.metrics;
   try {
     const store = await getStore();
     const entry = await store.get<CachedFileScore>(`file:${filePath}`);
-    if (entry && entry.sha256 === hash) {
+    if (entry && entry.sha256 === hash && Date.now() - entry.timestamp < CACHE_TTL_MS) {
       memCache.set(filePath, entry);
       return entry.metrics;
     }
@@ -230,6 +232,16 @@ async function getCached(filePath: string, hash: string): Promise<FileDebtMetric
 }
 
 async function setCached(filePath: string, hash: string, metrics: FileDebtMetrics): Promise<void> {
+  // Evict oldest entries if memCache exceeds limit
+  if (memCache.size >= MEM_CACHE_MAX) {
+    const entries = [...memCache.entries()]
+      .sort((a, b) => a[1].timestamp - b[1].timestamp);
+    const evictCount = Math.floor(MEM_CACHE_MAX * 0.2);
+    for (let i = 0; i < evictCount; i++) {
+      memCache.delete(entries[i][0]);
+    }
+  }
+
   const entry: CachedFileScore = { filePath, metrics, sha256: hash, timestamp: Date.now() };
   memCache.set(filePath, entry);
   try {
@@ -446,9 +458,15 @@ export class DebtAnalyzer {
     }).length;
     const commentRatio = loc > 0 ? commentLines / loc : 0;
 
+    // Strip string contents and comments to avoid false positive function matches
+    const stripped = content
+      .replace(/\/\*[\s\S]*?\*\//g, '/* */')
+      .replace(/\/\/.*/g, '//')
+      .replace(/(["'`])(?:(?!\1|\\).|\\.)*\1/g, '""');
+
     const functionPattern =
-      /(?:function\s+\w+|const\s+\w+\s*=\s*(?:\([^)]*\)\s*=>|function)|(?:async\s+)?\w+\s*\([^)]*\)\s*\{|def\s+\w+|fn\s+\w+|func\s+\w+)/g;
-    const functionMatches   = content.match(functionPattern) ?? [];
+      /(?:^|\n)\s*(?:export\s+)?(?:async\s+)?function\s+\w+|(?:^|\n)\s*(?:export\s+)?(?:const|let|var)\s+\w+\s*=\s*(?:async\s+)?(?:\([^)]*\)|[\w$]+)\s*=>|(?:^|\n)\s*(?:export\s+)?(?:async\s+)?(?:public|private|protected|static)?\s*\w+\s*\([^)]*\)\s*[:{]|(?:^|\n)\s*(?:async\s+)?def\s+\w+\s*\(|(?:^|\n)\s*(?:pub\s+)?(?:async\s+)?fn\s+\w+|(?:^|\n)\s*func\s+\w+/g;
+    const functionMatches   = stripped.match(functionPattern) ?? [];
     const functionCount     = functionMatches.length;
     const avgFunctionLength = functionCount > 0 ? Math.round(loc / functionCount) : loc;
 

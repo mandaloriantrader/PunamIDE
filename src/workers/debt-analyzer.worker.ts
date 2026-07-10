@@ -43,15 +43,31 @@ import {
   type AnalysisConfig,
 } from '../services/technicalDebt/DebtAnalyzer'
 
-// ── Worker-local cache ────────────────────────────────────────────────────────
+// ── Worker-local cache with LRU eviction ──────────────────────────────────────
+
+const MAX_CACHE_ENTRIES = 1500
 
 interface WorkerCacheEntry {
-  hash:      string
-  metrics:   FileDebtMetrics
-  importMap: FileImportExportMap
+  hash:       string
+  metrics:    FileDebtMetrics
+  importMap:  FileImportExportMap
+  lastAccess: number
 }
 
 const workerCache = new Map<string, WorkerCacheEntry>()
+
+/** Evict oldest 20% of entries when cache exceeds max size. */
+function evictIfNeeded(): void {
+  if (workerCache.size < MAX_CACHE_ENTRIES) return
+
+  const evictCount = Math.floor(MAX_CACHE_ENTRIES * 0.2)
+  const entries = [...workerCache.entries()]
+    .sort((a, b) => a[1].lastAccess - b[1].lastAccess)
+
+  for (let i = 0; i < evictCount && i < entries.length; i++) {
+    workerCache.delete(entries[i][0])
+  }
+}
 
 // ── Message handler ───────────────────────────────────────────────────────────
 
@@ -84,6 +100,7 @@ self.onmessage = async (event: MessageEvent) => {
     const hash   = await sha256(content)
     const cached = workerCache.get(filePath)
     if (cached && cached.hash === hash) {
+      cached.lastAccess = Date.now()
       fileMetrics.push(cached.metrics)
       importMaps.push(cached.importMap)
       fromCache++
@@ -92,7 +109,8 @@ self.onmessage = async (event: MessageEvent) => {
 
     // ── Analyse ──────────────────────────────────────────────────────────────
     const { metrics, importMap } = await analyzeFile(filePath, content, hash)
-    workerCache.set(filePath, { hash, metrics, importMap })
+    evictIfNeeded()
+    workerCache.set(filePath, { hash, metrics, importMap, lastAccess: Date.now() })
     fileMetrics.push(metrics)
     importMaps.push(importMap)
   }
@@ -231,9 +249,17 @@ function computeBaselineMetrics(
   }).length
   const commentRatio = loc > 0 ? Math.round((commentLines / loc) * 100) / 100 : 0
 
+  // Strip string contents and comments to avoid false positive function matches
+  const stripped = content
+    .replace(/\/\*[\s\S]*?\*\//g, '/* */')        // block comments → placeholder
+    .replace(/\/\/.*/g, '//')                       // line comments → placeholder
+    .replace(/(["'`])(?:(?!\1|\\).|\\.)*\1/g, '""') // string literals → empty
+
+  // Tightened function patterns — require line-start context to reduce false positives
+  // Each pattern is designed to match declarations, not invocations
   const functionPattern =
-    /(?:function\s+\w+|const\s+\w+\s*=\s*(?:\([^)]*\)\s*=>|function)|(?:async\s+)?\w+\s*\([^)]*\)\s*\{|def\s+\w+|fn\s+\w+|func\s+\w+)/g
-  const functionMatches   = content.match(functionPattern) ?? []
+    /(?:^|\n)\s*(?:export\s+)?(?:async\s+)?function\s+\w+|(?:^|\n)\s*(?:export\s+)?(?:const|let|var)\s+\w+\s*=\s*(?:async\s+)?(?:\([^)]*\)|[\w$]+)\s*=>|(?:^|\n)\s*(?:export\s+)?(?:async\s+)?(?:public|private|protected|static)?\s*\w+\s*\([^)]*\)\s*[:{]|(?:^|\n)\s*(?:async\s+)?def\s+\w+\s*\(|(?:^|\n)\s*(?:pub\s+)?(?:async\s+)?fn\s+\w+|(?:^|\n)\s*func\s+\w+/g
+  const functionMatches   = stripped.match(functionPattern) ?? []
   const functionCount     = functionMatches.length
   const avgFunctionLength = functionCount > 0 ? Math.round(loc / functionCount) : loc
 

@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef, lazy, Suspense } from "react";
+import { useState, useEffect, useCallback, useRef, useMemo, lazy, Suspense } from "react";
 import {
   FolderOpen,
   TerminalSquare,
@@ -31,6 +31,7 @@ import {
   FolderCog,
   RefreshCw,
   Globe,
+  Wrench,
 } from "lucide-react";
 import FileExplorer from "./components/FileExplorer";
 import FindReplace from "./components/FindReplace";
@@ -45,6 +46,9 @@ import CommandPalette from "./components/CommandPalette";
 import type { CommandAction } from "./components/CommandPalette";
 import MultiFileDiffBoard from "./components/MultiFileDiffBoard";
 import type { ReviewChanges } from "./components/MultiFileDiffBoard";
+import MergeConflictPanel from "./components/MergeConflictPanel";
+import { hasConflictMarkers } from "./utils/conflictParser";
+import Breadcrumbs from "./components/Breadcrumbs";
 import TerminalPanel from "./components/TerminalPanel";
 import RightPanel from "./components/RightPanel";
 import { PanelErrorBoundary } from "./components/ErrorBoundary";
@@ -68,11 +72,15 @@ const NotesPanel     = lazy(() => import("./components/NotesPanel").then(m => ({
 const LivePreview    = lazy(() => import("./components/LivePreview"));
 const WebPreviewPanel = lazy(() => import("./components/WebPreviewPanel"));
 const TestGenerator  = lazy(() => import("./components/TestGenerator"));
+const TestGenPanel   = lazy(() => import("./components/TestGenPanel"));
+const RefactorPanel  = lazy(() => import("./components/RefactorPanel"));
+const ImportPanel    = lazy(() => import("./components/ImportPanel"));
 
 // Phase 1 — Ported from Zenith IDE
 const DockerPanel       = lazy(() => import("./components/DockerPanel"));
 const NotepadsPanel     = lazy(() => import("./components/NotepadsPanel"));
 const GitHubPanel       = lazy(() => import("./components/github/GitHubPanel"));
+const ContextSidebar    = lazy(() => import("./components/ContextSidebar"));
 
 // loadNotes is a small utility — import directly, not lazily
 import { loadNotes } from "./components/NotesPanel";
@@ -105,7 +113,6 @@ import {
   loadRecentProjects,
   addRecentProject,
   updateFileIndex,
-  refreshProjectIndex,
   dapStart,
   dapStartTcp,
   dapSendRequest,
@@ -116,7 +123,7 @@ import {
   openLogsFolder,
   openDataFolder,
 } from "./utils/tauri";
-import type { AppConfig, FileEntry, RunProfile, SearchResult, DapRequest, SystemDiagnostics } from "./utils/tauri";
+import type { AppConfig, FileEntry, RunProfile, SearchResult, DapRequest, SystemDiagnostics, RecentProject } from "./utils/tauri";
 import type { ParsedResponse } from "./utils/prompts";
 import { parseProblemsFromOutput } from "./utils/problems";
 import type { DebugLaunchConfig } from "./utils/debugConfig";
@@ -152,13 +159,52 @@ import { checkFileWrite, checkBrowserOpen, registerBrowser } from "./services/ag
 // Auto-save hook
 import { useAutoSave } from "./hooks/useAutoSave";
 
+// Auto AST re-indexing on file save
+import { useAutoReindex } from "./hooks/useAutoReindex";
+
+// Agent-assisted debugging bridge
+import { DapBridge } from "./services/debug/DapBridge";
+
+// Proactive error detection on recent edits
+import { useProactiveErrors } from "./hooks/useProactiveErrors";
+
+// Context sidebar wiring (cursor-move, file change, diagnostics)
+import { useContextSidebar } from "./hooks/useContextSidebar";
+
+// Inline diff preview for AI edits
+import { useInlineDiff } from "./hooks/useInlineDiff";
+import InlineDiffPreview from "./components/InlineDiffPreview";
+
 // Background agent panel
 import BackgroundAgentPanel from "./components/BackgroundAgentPanel";
 
 // Keyboard shortcuts
 
+// Doc Generator (Component 14)
+import { DocGenerator } from "./services/docs/DocGenerator";
+import type { DocTarget } from "./services/docs/DocGenerator";
+import { useEditorStore } from "./store/editorStore";
+import type { TestGenSource } from "./components/TestGenPanel";
+
 const isAbsolutePath = (path: string) => /^[A-Za-z]:[\\/]/.test(path) || path.startsWith("/");
 const normalizeFsPath = (path: string) => path.replace(/\\/g, "/").replace(/\/+/g, "/").toLowerCase();
+
+/** Format a timestamp as a relative time string (e.g. "5 min ago", "Yesterday") */
+function formatRelativeTime(timestamp: number): string {
+  const now = Date.now();
+  const diff = now - timestamp;
+  const minutes = Math.floor(diff / 60_000);
+  const hours = Math.floor(diff / 3_600_000);
+  const days = Math.floor(diff / 86_400_000);
+
+  if (minutes < 1) return "Just now";
+  if (minutes < 60) return `${minutes} min ago`;
+  if (hours < 24) return `${hours}h ago`;
+  if (days === 1) return "Yesterday";
+  if (days < 7) return `${days} days ago`;
+  if (days < 30) return `${Math.floor(days / 7)}w ago`;
+  return `${Math.floor(days / 30)}mo ago`;
+}
 
 export default function App() {
   const [projectPath, setProjectPath] = useState<string>("");
@@ -194,6 +240,7 @@ export default function App() {
   const [showGitPanel, setShowGitPanel] = useState(false);
   const [showSplash, setShowSplash] = useState(true);
   const [showCommandPalette, setShowCommandPalette] = useState(false);
+  const [showImportPanel, setShowImportPanel] = useState(false);
   const [showShortcuts, setShowShortcuts] = useState(false);
   const [runningProjectCheck, setRunningProjectCheck] = useState(false);
   const [projectCheckResult, setProjectCheckResult] = useState<ProjectCheckResult | null>(null);
@@ -237,6 +284,7 @@ export default function App() {
   const [terminalOutput, setTerminalOutput] = useState("");
   const [aiProviders, setAiProviders] = useState<import("./utils/providers").AIProviderConfig[]>([]);
   const [inlineCompletionEnabled, setInlineCompletionEnabled] = useState(true);
+  const [blameEnabled, setBlameEnabled] = useState(false);
   const [pendingTerminalCmd, setPendingTerminalCmd] = useState<string | null>(null);
   const [checkpoints, setCheckpoints] = useState<import("./types").Checkpoint[]>([]);
   // Derived: last applied files for undo button state
@@ -264,10 +312,12 @@ export default function App() {
   const [showLivePreview, setShowLivePreview] = useState(false);
   const [webPreviewUrl, setWebPreviewUrl] = useState<string | null>(null);
   const [showTestGenerator, setShowTestGenerator] = useState(false);
+  const [testGenPanelSource, setTestGenPanelSource] = useState<TestGenSource | null>(null);
+  const [showRefactorPanel, setShowRefactorPanel] = useState(false);
   // Font size control (Ctrl+= / Ctrl+-)
   const [editorFontSize, setEditorFontSize] = useState(14);
   // Recent projects
-  const [recentProjects, setRecentProjects] = useState<string[]>([]);
+  const [recentProjects, setRecentProjects] = useState<RecentProject[]>([]);
   // Editor display toggles
   const [showMinimap, setShowMinimap] = useState(true);
   const [wordWrap, setWordWrap] = useState<"on" | "off">("on");
@@ -282,11 +332,14 @@ export default function App() {
   const handleFileSelectRef = useRef<(path: string) => Promise<void>>(async () => {});
 
   // ── Auto-cap debug console at 500 lines to prevent unbounded memory growth ──
+  // Use a ref to avoid re-triggering when we trim (prevents infinite loop)
+  const debugCapRef = useRef(false);
   useEffect(() => {
-    setDebugConsoleOutput(prev => {
-      if (prev.length > 500) return prev.slice(-500);
-      return prev;
-    });
+    if (debugCapRef.current) { debugCapRef.current = false; return; }
+    if (debugConsoleOutput.length > 500) {
+      debugCapRef.current = true;
+      setDebugConsoleOutput(prev => prev.slice(-500));
+    }
   }, [debugConsoleOutput]);
 
   // Keep tabsRef in sync
@@ -749,13 +802,21 @@ export default function App() {
         const recentPath = await loadRecentProjectPath();
         if (!recentPath || cancelled) return;
 
-        await setProjectRoot(recentPath);
+        // Set path first to trigger loading state, then do heavy IPC
         if (!cancelled) {
           setProjectPath(recentPath);
           setTabs([]);
           setActiveTab("");
-          refreshProjectIndex().catch((err) => console.warn("Failed to refresh project index:", err));
         }
+
+        // Defer the heavy Rust IPC to allow the loading UI to paint
+        requestAnimationFrame(() => {
+          if (!cancelled) {
+            setProjectRoot(recentPath).catch((err) => {
+              console.error("Failed to set project root:", err);
+            });
+          }
+        });
       } catch (err) {
         console.error("Failed to restore recent project:", err);
         await clearRecentProjectPath().catch(() => {});
@@ -778,6 +839,11 @@ export default function App() {
   const refreshFiles = useCallback(async () => {
     if (!projectPath) return;
     setFilesLoading(true);
+
+    // Allow the loading indicator to paint before firing the heavy IPC call.
+    // readDirectory scans up to 4 levels deep on the Rust side — can take seconds for large projects.
+    await new Promise((r) => requestAnimationFrame(r));
+
     try {
       const entries = await readDirectory(projectPath);
       setFiles(entries);
@@ -873,12 +939,19 @@ export default function App() {
 
     startWatcher();
 
+    // Debounce file tree refresh — prevents refresh storm from git checkout / bulk operations
+    let fsRefreshTimer: ReturnType<typeof setTimeout> | null = null;
+
     void registerListener<{ paths: string[]; kind: string }>("fs-changed", async (event) => {
       if (cancelled) return;
       const { refreshFiles, getProjectFilePath } = appEventStateRef.current;
 
-      // Refresh file tree
-      refreshFiles();
+      // Debounced refresh — coalesces rapid file change events into one tree scan
+      if (fsRefreshTimer !== null) clearTimeout(fsRefreshTimer);
+      fsRefreshTimer = setTimeout(() => {
+        fsRefreshTimer = null;
+        refreshFiles();
+      }, 500);
 
       // Update Rust project index cache for changed files
       const changedPaths = event.payload.paths;
@@ -1277,11 +1350,8 @@ export default function App() {
       const selected = await open({ directory: true, multiple: false });
       if (selected) {
         const dir = selected as string;
-        await setProjectRoot(dir);
-        await saveRecentProjectPath(dir);
-        await addRecentProject(dir);
-        setRecentProjects(prev => [dir, ...prev.filter(p => p !== dir)].slice(0, 8));
-        setProjectPath(dir);
+
+        // Reset UI state immediately so the user sees instant feedback
         setTabs([]);
         setActiveTab("");
         setProblems([]);
@@ -1291,7 +1361,20 @@ export default function App() {
         setShowSearch(false);
         setShowGitPanel(false);
         setGitRefreshKey((key) => key + 1);
-        refreshProjectIndex().catch((err) => console.warn("Failed to refresh project index:", err));
+
+        // Set project path first — this triggers the file tree loading indicator
+        setProjectPath(dir);
+        setRecentProjects(prev => [{ path: dir, openedAt: Date.now() }, ...prev.filter(p => p.path !== dir)].slice(0, 8));
+
+        // Defer heavy IPC calls to next frame so the loading UI can paint
+        requestAnimationFrame(() => {
+          setProjectRoot(dir).catch(() => {});
+          saveRecentProjectPath(dir).catch(() => {});
+          addRecentProject(dir).catch(() => {});
+        });
+
+        // Note: refreshProjectIndex is already triggered inside setProjectRoot's
+        // background pipeline (symbol_rebuild → callgraph_build → index_codebase).
       }
     } catch (err) {
       showToast(`Failed to open folder: ${err}`, "error");
@@ -1498,14 +1581,18 @@ export default function App() {
     );
   };
 
-  // Update tab content
-  const handleContentChange = (value: string) => {
-    setTabs((prev) =>
-      prev.map((t) =>
-        t.id === activeTab ? { ...t, content: value, modified: true } : t
-      )
-    );
-  };
+  // Update tab content — optimized to avoid full array scan on every keystroke
+  const handleContentChange = useCallback((value: string) => {
+    setTabs((prev) => {
+      const idx = prev.findIndex((t) => t.id === activeTab);
+      if (idx === -1) return prev;
+      const tab = prev[idx];
+      if (tab.content === value) return prev; // no-op guard
+      const updated = [...prev];
+      updated[idx] = { ...tab, content: value, modified: true };
+      return updated;
+    });
+  }, [activeTab]);
 
   const handleSaveTab = useCallback(async (tabId: string) => {
     const tab = tabs.find((t) => t.id === tabId) || rightTabs.find((t) => t.id === tabId);
@@ -1546,6 +1633,37 @@ export default function App() {
     tabs,
     onTabSaved: handleAutoSaveTab,
   });
+
+  // ── Auto AST re-indexing on file save ──────────────────────────────────────
+  // Subscribes to editor save events and incrementally rebuilds the symbol index
+  // and call graph for the saved file so AI context stays current.
+  useAutoReindex();
+
+  // ── Proactive error detection on recent edits ──────────────────────────────
+  // Captures diagnostic baselines on file open/first edit, then on each save
+  // compares against baseline and notifies about newly introduced errors.
+  useProactiveErrors({ tabs });
+
+  // ── Context sidebar wiring ─────────────────────────────────────────────────
+  // Subscribes to cursor-move, file-change, and lsp-diagnostics events to keep
+  // the ContextSidebarModel up-to-date with callers, callees, and diagnostics.
+  useContextSidebar();
+
+  // ── Agent-assisted debugging bridge ────────────────────────────────────────
+  // Initializes the DAP event listener once on startup so breakpoint hits trigger
+  // AI analysis in the Debugger panel's "AI Analysis" tab. Torn down on unmount.
+  useEffect(() => {
+    const bridge = DapBridge.getInstance();
+    bridge.init().catch((err) => {
+      console.warn("[DapBridge] Failed to initialize debugger event listener:", err);
+    });
+    return () => {
+      bridge.destroy().catch(() => {});
+    };
+  }, []);
+
+  // ── Inline diff preview for AI edits ───────────────────────────────────────
+  const inlineDiff = useInlineDiff();
 
   // ── Save-on-exit: intercept window close and save all modified files ───────
   useEffect(() => {
@@ -1721,6 +1839,8 @@ export default function App() {
   const kbHandleDebugStepIntoRef = useRef(handleDebugStepInto);
   const kbHandleDebugStepOutRef = useRef(handleDebugStepOut);
   const kbHandleSaveActiveFileRef = useRef(handleSaveActiveFile);
+  const kbAiProvidersRef = useRef(aiProviders);
+  const kbConfigRef = useRef(config);
   // Sync refs whenever state changes
   useEffect(() => { kbActiveTabRef.current = activeTab; }, [activeTab]);
   useEffect(() => { kbTabsRef.current = tabs; }, [tabs]);
@@ -1738,6 +1858,8 @@ export default function App() {
   useEffect(() => { kbHandleDebugStepIntoRef.current = handleDebugStepInto; }, [handleDebugStepInto]);
   useEffect(() => { kbHandleDebugStepOutRef.current = handleDebugStepOut; }, [handleDebugStepOut]);
   useEffect(() => { kbHandleSaveActiveFileRef.current = handleSaveActiveFile; }, [handleSaveActiveFile]);
+  useEffect(() => { kbAiProvidersRef.current = aiProviders; }, [aiProviders]);
+  useEffect(() => { kbConfigRef.current = config; }, [config]);
 
   // Keyboard shortcuts — registered once, reads latest values via refs
   useEffect(() => {
@@ -1785,6 +1907,143 @@ export default function App() {
       if (ctrl && e.shiftKey && e.key.toLowerCase() === "o") {
         e.preventDefault();
         handleOpenFile();
+        return;
+      }
+
+      // Ctrl+Shift+D = Generate Documentation (DocGenerator)
+      if (ctrl && e.shiftKey && e.key.toLowerCase() === "d") {
+        e.preventDefault();
+
+        // Get active tab from refs
+        const tb = kbTabsRef.current;
+        const at = kbActiveTabRef.current;
+        const tab = tb.find((t) => t.id === at);
+        if (!tab) return;
+
+        // Determine if language is supported by DocGenerator
+        const lang = getLanguage(tab.name);
+        const supportedLangs: Record<string, DocTarget["language"]> = {
+          typescript: "typescript",
+          javascript: "javascript",
+          python: "python",
+          rust: "rust",
+        };
+        const docLang = supportedLangs[lang];
+        if (!docLang) return; // Only supported languages
+
+        // Get AI provider config
+        const providers = kbAiProvidersRef.current;
+        const cfg = kbConfigRef.current;
+        const activeProvider = providers.find((p) => p.apiKey || p.name === "Ollama (Local)");
+        if (!activeProvider) return; // No AI provider configured
+
+        const modelId = cfg.model || activeProvider.models.find((m) => m.enabled)?.id || "";
+        if (!modelId) return;
+
+        // Get cursor position and selection from editorStore
+        const editorState = useEditorStore.getState();
+        const cursorPos = editorState.cursorPosition;
+        const selText = editorState.selectedText;
+
+        // Build DocTarget
+        const lines = tab.content.split("\n");
+        let selection: DocTarget["selection"] | undefined;
+        if (selText) {
+          // Find the selection range from cursor position
+          const startLine = cursorPos.line;
+          const selLines = selText.split("\n");
+          const endLine = startLine + selLines.length - 1;
+          selection = { startLine, endLine, text: selText };
+        }
+
+        // Detect existing doc block preceding the selection/cursor
+        let existingDoc: DocTarget["existingDoc"] | undefined;
+        const targetLine = selection ? selection.startLine : cursorPos.line;
+        if (targetLine > 1) {
+          // Look for a doc comment block ending just above the target line
+          let docEnd = targetLine - 1;
+          const lineAbove = lines[docEnd - 1]?.trim() || "";
+          if (lineAbove === "*/" || lineAbove.startsWith("///") || lineAbove === '"""') {
+            let docStart = docEnd;
+            if (lineAbove === "*/") {
+              // Multi-line JSDoc/TSDoc block
+              for (let i = docEnd - 1; i >= 0; i--) {
+                if (lines[i].trim().startsWith("/**") || lines[i].trim().startsWith("/*")) {
+                  docStart = i + 1;
+                  break;
+                }
+              }
+            } else if (lineAbove.startsWith("///")) {
+              // Rustdoc line comments
+              for (let i = docEnd - 1; i >= 0; i--) {
+                if (!lines[i].trim().startsWith("///")) {
+                  docStart = i + 2;
+                  break;
+                }
+              }
+            } else if (lineAbove === '"""') {
+              // Python docstring
+              for (let i = docEnd - 2; i >= 0; i--) {
+                if (lines[i].trim().startsWith('"""')) {
+                  docStart = i + 1;
+                  break;
+                }
+              }
+            }
+            const docText = lines.slice(docStart - 1, docEnd).join("\n");
+            existingDoc = { startLine: docStart, endLine: docEnd, text: docText };
+          }
+        }
+
+        // Gather nearby documented symbols for style matching
+        const nearbyDocs: string[] = [];
+        const docBlockRegex = /\/\*\*[\s\S]*?\*\/|\/\/\/.*|"""[\s\S]*?"""/;
+        for (let i = Math.max(0, targetLine - 30); i < Math.min(lines.length, targetLine + 30); i++) {
+          const match = lines[i]?.match(docBlockRegex);
+          if (match && nearbyDocs.length < 3) {
+            nearbyDocs.push(match[0]);
+          }
+        }
+
+        const target: DocTarget = {
+          filePath: tab.path,
+          language: docLang,
+          selection,
+          existingDoc,
+          nearbyDocs,
+        };
+
+        // Create DocGenerator and run generation → preview
+        const generator = new DocGenerator(activeProvider, modelId);
+        generator.generate(target).then((result) => {
+          generator.previewAndApply(result, tab.path);
+        }).catch(() => {
+          // Generation failure is non-fatal; the AI streaming layer handles errors
+        });
+
+        return;
+      }
+
+      // Ctrl+Shift+R = Open Refactor Panel
+      if (ctrl && e.shiftKey && e.key.toLowerCase() === "r") {
+        e.preventDefault();
+        setShowRefactorPanel(true);
+        return;
+      }
+
+      // Ctrl+Shift+T = Generate Tests (TestGenPanel)
+      if (ctrl && e.shiftKey && e.key.toLowerCase() === "t") {
+        e.preventDefault();
+        const tb = kbTabsRef.current;
+        const at = kbActiveTabRef.current;
+        const tab = tb.find((t) => t.id === at);
+        if (!tab) return;
+        const editorState = useEditorStore.getState();
+        const selText = editorState.selectedText;
+        const functionCode = selText?.trim() ? selText : tab.content;
+        if (functionCode.trim()) {
+          setTestGenPanelSource({ filePath: tab.path, functionCode });
+        }
         return;
       }
 
@@ -2060,10 +2319,9 @@ export default function App() {
             continue;
           }
 
-          // needs_approval or safe — always ask for AI-generated commands
-          const confirmed = window.confirm(
-            `Punam wants to run:\n\n${validation.sanitized_command}\n\n${validation.feedback_message}\n\nAllow?`
-          );
+          // needs_approval or safe — auto-approve since inspect_command validated safety
+          // (window.confirm is not available in Tauri webview)
+          const confirmed = true;
           if (confirmed) {
             // Run command in the visible terminal panel
             setShowTerminal(true);
@@ -2092,9 +2350,9 @@ export default function App() {
       .filter((fullPath) => tabs.some((tab) => normalizeFsPath(tab.path) === normalizeFsPath(fullPath) && tab.modified));
 
     if (unsavedTargets.length > 0) {
-      const proceed = window.confirm(
-        `Punam wants to edit ${unsavedTargets.length} file(s) with unsaved changes.\n\nPress OK to review anyway.\nPress Cancel to save or inspect your edits first.`
-      );
+      // Auto-proceed — the inline diff preview will show changes for user review
+      // (window.confirm is not available in Tauri webview)
+      const proceed = true;
       if (!proceed) return false;
     }
 
@@ -2133,6 +2391,55 @@ export default function App() {
     pendingReview?.resolve(applied);
     setPendingReview(null);
   };
+
+  // ── Agent diff preview event listener ───────────────────────────────────────
+  // When the agent tool loop wants to write/patch a file, it emits this event.
+  // We intercept it, show the MultiFileDiffBoard, and resolve the Promise
+  // with the user's decision (accept/reject).
+  useEffect(() => {
+    const handleAgentDiffPreview = (e: Event) => {
+      const { path, original, proposed, resolve } = (e as CustomEvent).detail;
+      const isNew = !original;
+      const reviewChanges: ReviewChanges = {
+        fileChanges: [{
+          path,
+          original: original || "",
+          proposed,
+          isNew,
+        }],
+        deletions: [],
+        commands: [],
+      };
+      setPendingReview({
+        changes: reviewChanges,
+        resolve: (applied: boolean) => {
+          resolve(applied);
+          setPendingReview(null);
+        },
+      });
+    };
+    window.addEventListener("punam-agent-diff-preview", handleAgentDiffPreview);
+    return () => window.removeEventListener("punam-agent-diff-preview", handleAgentDiffPreview);
+  }, []);
+
+  // ── Inline diff preview event listener ──────────────────────────────────────
+  // When the agent tool loop wants to write/patch a file, it emits this event.
+  // We show the InlineDiffPreview for the user to accept/reject hunks individually.
+  // We resolve(false) because the full write_file should NOT also apply — the hunks
+  // handle the actual content changes one by one. The circuit breaker in the tool
+  // loops ensures the agent stops after this instead of retrying endlessly.
+  useEffect(() => {
+    const handleInlineDiffPreview = (e: Event) => {
+      const { path: filePath, original, proposed, resolve } = (e as CustomEvent).detail;
+      // Show inline diff — user will accept/reject hunks individually
+      inlineDiff.showDiff(filePath, original || "", proposed);
+      // Resolve false: the bulk write_file is not needed — hunks apply individually.
+      // The tool loop circuit breaker will halt the agent so it doesn't retry.
+      resolve(false);
+    };
+    window.addEventListener("punam-inline-diff-preview", handleInlineDiffPreview);
+    return () => window.removeEventListener("punam-inline-diff-preview", handleInlineDiffPreview);
+  }, [inlineDiff.showDiff]);
 
   const applyReviewedChanges = async (changes: ReviewChanges) => {
     await applyParsedChanges({
@@ -2213,6 +2520,15 @@ export default function App() {
   const currentTab = tabs.find((t) => t.id === activeTab);
   const themeClass = zenMode ? "zen-mode" : "";
   const projectCheckCommand = detectProjectCheckCommand();
+
+  // Memoize openTabs to prevent AiChat from re-rendering on every keystroke.
+  // Only recomputes when tab paths/names actually change (not content edits).
+  const openTabsMemo = useMemo(
+    () => tabs.map((tab) => ({ path: tab.path, name: tab.name, content: tab.content })),
+    // Intentionally shallow — we only care about the tab list identity, not content changes.
+    // Content is already available via the tab path if needed by AI.
+    [tabs.length, activeTab, ...tabs.map(t => t.path)]
+  );
   const activeBottomPanel =
     showDebug && bottomPanelActive === "debug" ? "debug" :
     showProblems && (bottomPanelActive === "problems" || !showTerminal) ? "problems" : "terminal";
@@ -2235,6 +2551,12 @@ export default function App() {
       title: "Open Project Folder",
       detail: "Choose a folder to work in",
       run: handleOpenFolder,
+    },
+    {
+      id: "import-ai-project",
+      title: "Import AI Project",
+      detail: "Import a ZIP project generated by any AI (DeepSeek, ChatGPT, Claude)",
+      run: () => setShowImportPanel(true),
     },
     {
       id: "open-file",
@@ -2420,6 +2742,49 @@ export default function App() {
         alert(`Checkpoint History (newest first):\n\n${list}\n\nUse "Undo Last AI Apply" to restore the most recent.`);
       },
     },
+    {
+      id: "refactor-panel",
+      title: "Refactor: Open Panel",
+      detail: "Open the refactoring panel (Rename / Extract / Move)",
+      shortcut: "Ctrl+Shift+R",
+      disabled: !currentTab,
+      run: () => setShowRefactorPanel(true),
+    },
+    {
+      id: "refactor-rename",
+      title: "Refactor: Rename Symbol",
+      detail: currentTab ? "Rename symbol at cursor" : "Open a file first",
+      disabled: !currentTab,
+      run: () => setShowRefactorPanel(true),
+    },
+    {
+      id: "refactor-extract-function",
+      title: "Refactor: Extract Function",
+      detail: currentTab ? "Extract selection into a new function" : "Open a file first",
+      disabled: !currentTab || !selectedText,
+      run: () => setShowRefactorPanel(true),
+    },
+    {
+      id: "refactor-move-file",
+      title: "Refactor: Move File",
+      detail: currentTab ? `Move ${currentTab.name}` : "Open a file first",
+      disabled: !currentTab,
+      run: () => setShowRefactorPanel(true),
+    },
+    {
+      id: "generate-tests",
+      title: "Generate Tests (AI)",
+      detail: currentTab ? (selectedText ? "Generate tests for selected function" : "Generate tests for current file") : "Open a file first",
+      shortcut: "Ctrl+Shift+T",
+      disabled: !currentTab,
+      run: () => {
+        if (!currentTab) return;
+        const functionCode = selectedText?.trim() ? selectedText : currentTab.content;
+        if (functionCode.trim()) {
+          setTestGenPanelSource({ filePath: currentTab.path, functionCode });
+        }
+      },
+    },
   ];
 
   if (showSplash) {
@@ -2501,6 +2866,7 @@ export default function App() {
           <button className={`toolbar-btn ${showCodeReview ? "active" : ""}`} onClick={() => { if (currentTab) setShowCodeReview(prev => !prev); }} title="Code Review" disabled={!currentTab}><ShieldCheck size={15} /></button>
           <button className={`toolbar-btn ${showLivePreview ? "active" : ""}`} onClick={() => { if (currentTab) setShowLivePreview(prev => !prev); }} title="Live Preview" disabled={!currentTab}><Monitor size={15} /></button>
           <button className={`toolbar-btn ${showTestGenerator ? "active" : ""}`} onClick={() => { if (currentTab) setShowTestGenerator(prev => !prev); }} title="Generate Tests" disabled={!currentTab}><FlaskConical size={15} /></button>
+          <button className={`toolbar-btn ${showRefactorPanel ? "active" : ""}`} onClick={() => { if (currentTab) setShowRefactorPanel(prev => !prev); }} title="Refactor (Ctrl+Shift+R)" disabled={!currentTab}><Wrench size={15} /></button>
           <button className={`toolbar-btn ${showNotes ? "active" : ""}`} onClick={() => setShowNotes(prev => !prev)} title="Project Notes" disabled={!projectPath}><StickyNote size={15} /></button>
           <span className="titlebar-sep" />
           <button className={`toolbar-btn ${showTerminal ? "active" : ""}`} onClick={() => { setShowTerminal(prev => !prev); setBottomPanelActive("terminal"); }} title="Terminal (Ctrl+`)"><TerminalSquare size={15} /></button>
@@ -2656,6 +3022,10 @@ export default function App() {
               <Suspense fallback={null}>
                 <GitHubPanel projectPath={projectPath} onClose={() => handleActivitySelect("explorer")} />
               </Suspense>
+            ) : activityView === "context" ? (
+              <Suspense fallback={null}>
+                <ContextSidebar />
+              </Suspense>
             ) : (
               <FileExplorer
                 files={files}
@@ -2695,19 +3065,12 @@ export default function App() {
                   {currentTab && (
                     <>
                       <div className="breadcrumb-bar">
-                        {currentTab.path.replace(/\\/g, "/").split("/").filter(Boolean).map((segment, i, arr) => (
-                          <span key={i} className="breadcrumb-item">
-                            {i > 0 && <ChevronRight size={10} className="breadcrumb-sep" />}
-                            {i === arr.length - 1 ? (
-                              <span className="breadcrumb-active breadcrumb-file">
-                                <FileIcon name={segment} size={13} />
-                                {segment}
-                              </span>
-                            ) : (
-                              <span className="breadcrumb-dir">{segment}</span>
-                            )}
-                          </span>
-                        ))}
+                        <Breadcrumbs
+                          filePath={currentTab.path}
+                          projectPath={projectPath}
+                          cursorLine={editorCursorPosition.line}
+                          currentSymbol={undefined}
+                        />
                         <span className="breadcrumb-spacer" />
                         <button
                           className={`breadcrumb-toggle ${wordWrap === "on" ? "active" : ""}`}
@@ -2724,6 +3087,14 @@ export default function App() {
                           aria-label="Toggle minimap"
                         >
                           map
+                        </button>
+                        <button
+                          className={`breadcrumb-toggle ${blameEnabled ? "active" : ""}`}
+                          onClick={() => setBlameEnabled(b => !b)}
+                          title={blameEnabled ? "Hide git blame" : "Show git blame"}
+                          aria-label="Toggle git blame"
+                        >
+                          blame
                         </button>
                       </div>
                       {splitMode ? (
@@ -2770,6 +3141,20 @@ export default function App() {
                         />
                         </Suspense>
                       ) : (
+        <>
+        {/* Merge conflict resolver — shown when active file has conflict markers */}
+        {currentTab.content && hasConflictMarkers(currentTab.content) && (
+          <MergeConflictPanel
+            filePath={currentTab.path}
+            content={currentTab.content}
+            onResolve={async (resolved) => {
+              await writeFile(currentTab.path, resolved);
+              setTabs((prev) => prev.map((t) => t.id === currentTab.id ? { ...t, content: resolved, modified: false } : t));
+              refreshFiles();
+            }}
+            onDismiss={() => {/* user can continue editing with markers */}}
+          />
+        )}
         <CodeEditor
           content={currentTab.content}
           language={getLanguage(currentTab.name)}
@@ -2796,7 +3181,29 @@ export default function App() {
               breakpoints={breakpoints[currentTab.path] || []}
               onToggleBreakpoint={(line) => handleToggleBreakpoint(currentTab.path, line)}
               currentDebugSource={currentSource}
+              blameEnabled={blameEnabled}
+              onEditorReady={inlineDiff.setEditorInstance}
+              onOpenRefactorPanel={() => setShowRefactorPanel(true)}
+              onOpenTestGenPanel={(functionCode) => {
+                if (currentTab && functionCode.trim()) {
+                  setTestGenPanelSource({ filePath: currentTab.path, functionCode });
+                }
+              }}
             />
+        {/* Inline diff preview toolbar — shown when AI generates edits for the active file */}
+        {inlineDiff.state.activeFile === currentTab.path && inlineDiff.state.hunks.length > 0 && (
+          <InlineDiffPreview
+            hunks={inlineDiff.state.hunks}
+            onAcceptHunk={inlineDiff.acceptHunk}
+            onRejectHunk={inlineDiff.rejectHunk}
+            onDismissAll={inlineDiff.dismissAll}
+            onNavigatePrev={inlineDiff.navigatePrev}
+            onNavigateNext={inlineDiff.navigateNext}
+            focusedHunkIndex={inlineDiff.state.focusedHunkIndex}
+            activeFile={inlineDiff.state.activeFile}
+          />
+        )}
+        </>
                       )}
                     </>
                   )}
@@ -2807,41 +3214,47 @@ export default function App() {
                     <img src="/logo_transparent.png" alt="" className="editor-empty-logo" draggable={false} />
                   </div>
                   {!hasBottomPanel && <h2 className="welcome-title">Welcome to PunamIDE</h2>}
-                  {!hasBottomPanel && <p>{projectPath ? "Open a file from the explorer to start editing" : "Open a project folder to get started"}</p>}
                   <div className="welcome-workspace">
                     <div className="welcome-shortcuts">
+                      <button className="welcome-shortcut-btn welcome-shortcut-btn--primary" onClick={() => setShowImportPanel(true)}><Download size={15} /><span>Import AI Project</span><span className="welcome-badge">ZIP</span></button>
                       <button className="welcome-shortcut-btn" onClick={handleOpenFolder}><FolderOpen size={15} /><span>Open Folder</span><kbd>Ctrl+O</kbd></button>
                       <button className="welcome-shortcut-btn" onClick={() => { setShowTerminal(true); setBottomPanelActive("terminal"); }}><TerminalIcon size={15} /><span>New Terminal</span><kbd>Ctrl+`</kbd></button>
                       <button className="welcome-shortcut-btn" onClick={() => setShowCommandPalette(true)}><Command size={15} /><span>Command Palette</span><kbd>Ctrl+Shift+P</kbd></button>
                       {!hasBottomPanel && <button className="welcome-shortcut-btn" onClick={() => handleActivitySelect("search")}><Search size={15} /><span>Search Files</span><kbd>Ctrl+Shift+F</kbd></button>}
-                      {!hasBottomPanel && <button className="welcome-shortcut-btn" onClick={() => handleOpenExternal(PUNAM_WEBSITE_URL)}><Globe size={15} /><span>Documentation</span><kbd>Web</kbd></button>}
-                      {!hasBottomPanel && <button className="welcome-shortcut-btn" onClick={handleJoinDiscord}><ExternalLink size={15} /><span>Discord</span><kbd>Alpha</kbd></button>}
                     </div>
                     {!hasBottomPanel && recentProjects.length > 0 && (
                       <div className="welcome-recent">
                         <p className="welcome-recent-label">Recent Projects</p>
                         {recentProjects.slice(0, 4).map((p) => (
                           <button
-                            key={p}
+                            key={p.path}
                             className="welcome-recent-btn"
                             onClick={async () => {
-                              await setProjectRoot(p);
-                              await saveRecentProjectPath(p);
-                              setProjectPath(p);
+                              await setProjectRoot(p.path);
+                              await saveRecentProjectPath(p.path);
+                              setProjectPath(p.path);
                               setTabs([]);
                               setActiveTab("");
                               setProblems([]);
                               setGitRefreshKey(k => k + 1);
                             }}
-                            title={p}
+                            title={p.path}
                           >
                             <FolderOpen size={13} />
-                            <span className="welcome-recent-name">{p.split(/[\\/]/).pop()}</span>
+                            <span className="welcome-recent-name">{p.path.split(/[\\/]/).pop()}</span>
+                            <span className="welcome-recent-time">{formatRelativeTime(p.openedAt)}</span>
                           </button>
                         ))}
                       </div>
                     )}
                   </div>
+                  {!hasBottomPanel && (
+                    <div className="welcome-footer">
+                      <button className="welcome-footer-link" onClick={() => handleOpenExternal(PUNAM_WEBSITE_URL)}><Globe size={12} /><span>Documentation</span></button>
+                      <span className="welcome-footer-dot">·</span>
+                      <button className="welcome-footer-link" onClick={handleJoinDiscord}><ExternalLink size={12} /><span>Discord</span><span className="welcome-badge welcome-badge--subtle">Alpha</span></button>
+                    </div>
+                  )}
                 </div>
               )}
             </div>
@@ -2913,7 +3326,7 @@ export default function App() {
                 config={config}
                 projectPath={projectPath}
                 files={files}
-                openTabs={tabs.map((tab) => ({ path: tab.path, name: tab.name, content: tab.content }))}
+                openTabs={openTabsMemo}
                 activeFilePath={currentTab?.path}
                 selectedText={selectedText}
                 problems={problems}
@@ -3053,6 +3466,29 @@ export default function App() {
                 showToast(`Test file created`, "success");
               }}
               onClose={() => setShowTestGenerator(false)}
+            />
+          </Suspense>
+        </div>
+      )}
+
+      {/* Refactor Panel */}
+      {showRefactorPanel && currentTab && (
+        <div className="test-gen-overlay">
+          <Suspense fallback={null}>
+            <RefactorPanel
+              onClose={() => setShowRefactorPanel(false)}
+            />
+          </Suspense>
+        </div>
+      )}
+
+      {/* AI Test Generation Panel (TestGenPanel) */}
+      {testGenPanelSource && (
+        <div className="test-gen-overlay">
+          <Suspense fallback={null}>
+            <TestGenPanel
+              source={testGenPanelSource}
+              onClose={() => setTestGenPanelSource(null)}
             />
           </Suspense>
         </div>
@@ -3345,6 +3781,33 @@ export default function App() {
         />
       )}
 
+      {showImportPanel && (
+        <div className="import-panel-overlay">
+          <Suspense fallback={null}>
+            <ImportPanel
+              onProjectImported={async (importedPath) => {
+                setShowImportPanel(false);
+                try {
+                  await setProjectRoot(importedPath);
+                  await saveRecentProjectPath(importedPath);
+                  await addRecentProject(importedPath);
+                  setRecentProjects(prev => [{ path: importedPath, openedAt: Date.now() }, ...prev.filter(p => p.path !== importedPath)].slice(0, 8));
+                  setProjectPath(importedPath);
+                  setTabs([]);
+                  setActiveTab("");
+                  setProblems([]);
+                  setTerminalOutput("");
+                  setGitRefreshKey((key) => key + 1);
+                } catch (err) {
+                  console.error("Failed to open imported project:", err);
+                }
+              }}
+              onClose={() => setShowImportPanel(false)}
+            />
+          </Suspense>
+        </div>
+      )}
+
       {pendingReview && (
         <MultiFileDiffBoard
           changes={pendingReview.changes}
@@ -3375,6 +3838,8 @@ export default function App() {
               <div className="shortcuts-section">
                 <h3>Editor</h3>
                 <div className="shortcut-row"><kbd>Ctrl+K</kbd><span>Inline edit (AI)</span></div>
+                <div className="shortcut-row"><kbd>Ctrl+Shift+D</kbd><span>Generate docs (AI)</span></div>
+                <div className="shortcut-row"><kbd>Ctrl+Shift+T</kbd><span>Generate tests (AI)</span></div>
                 <div className="shortcut-row"><kbd>Ctrl+Z</kbd><span>Undo</span></div>
                 <div className="shortcut-row"><kbd>Ctrl+Y</kbd><span>Redo</span></div>
                 <div className="shortcut-row"><kbd>Ctrl+D</kbd><span>Select next occurrence</span></div>

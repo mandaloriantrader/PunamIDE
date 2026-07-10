@@ -14,6 +14,7 @@ use notify_debouncer_mini::{new_debouncer, DebouncedEventKind};
 use std::time::Duration;
 use sysinfo::System;
 
+pub mod autocomplete;
 pub mod pty_manager;
 pub mod lsp_manager;
 pub mod dap_manager;
@@ -35,6 +36,8 @@ pub mod index_commands;
 pub mod symbol_index;
 pub mod embedding_pipeline;
 pub mod call_graph;
+pub mod context_compressor;
+pub mod workspace_import;
 
 #[cfg(target_os = "windows")]
 use std::os::windows::process::CommandExt;
@@ -81,6 +84,21 @@ pub struct LlmResponse {
     pub text: String,
     pub success: bool,
     pub error: Option<String>,
+}
+
+#[derive(Serialize, Debug, Clone)]
+pub struct ToolCallItem {
+    pub id: String,
+    pub name: String,
+    pub arguments: String,
+}
+
+#[derive(Serialize, Debug)]
+pub struct OpenAIToolsResponse {
+    pub text: String,
+    pub success: bool,
+    pub error: Option<String>,
+    pub tool_calls: Option<Vec<ToolCallItem>>,
 }
 
 #[derive(Serialize, Debug)]
@@ -411,6 +429,12 @@ async fn call_gemini_stream(
     use futures_util::StreamExt;
     let mut buffer = String::new();
 
+    // Adaptive emit throttle state
+    let mut token_buffer = String::new();
+    let mut last_emit = std::time::Instant::now();
+    const MIN_EMIT_INTERVAL: Duration = Duration::from_millis(16);
+    const MAX_BUFFER_BYTES: usize = 512;
+
     loop {
         let chunk = tokio::select! {
             next = stream.next() => next,
@@ -436,16 +460,47 @@ async fn call_gemini_stream(
                 if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(data) {
                     // Gemini streaming format: candidates[0].content.parts[0].text
                     if let Some(text) = parsed["candidates"][0]["content"]["parts"][0]["text"].as_str() {
-                        full_text.push_str(text);
-                        let _ = app.emit("llm-stream", LlmStreamEvent {
-                            stream_id: streamId.clone(),
-                            token: text.to_string(),
-                            done: false,
-                        });
+                        if !text.is_empty() {
+                            full_text.push_str(text);
+                            token_buffer.push_str(text);
+
+                            // Adaptive emit throttle: emit if interval elapsed or buffer full
+                            if last_emit.elapsed() >= MIN_EMIT_INTERVAL || token_buffer.len() > MAX_BUFFER_BYTES {
+                                let _ = app.emit("llm-stream", LlmStreamEvent {
+                                    stream_id: streamId.clone(),
+                                    token: token_buffer.clone(),
+                                    done: false,
+                                });
+                                token_buffer.clear();
+                                last_emit = std::time::Instant::now();
+                            }
+                        }
+                    }
+
+                    // Extract usage data from usageMetadata in Gemini stream chunks
+                    if let Some(usage_meta) = parsed["usageMetadata"].as_object() {
+                        let input_tokens = usage_meta.get("promptTokenCount").and_then(|v| v.as_u64());
+                        let output_tokens = usage_meta.get("candidatesTokenCount").and_then(|v| v.as_u64());
+                        if input_tokens.is_some() || output_tokens.is_some() {
+                            let _ = app.emit("llm-stream-usage", LlmStreamUsageEvent {
+                                stream_id: streamId.clone(),
+                                input_tokens,
+                                output_tokens,
+                            });
+                        }
                     }
                 }
             }
         }
+    }
+
+    // Flush remaining token buffer before done signal
+    if !token_buffer.is_empty() {
+        let _ = app.emit("llm-stream", LlmStreamEvent {
+            stream_id: streamId.clone(),
+            token: token_buffer,
+            done: false,
+        });
     }
 
     // Final done signal
@@ -642,7 +697,8 @@ async fn call_openai_compatible_stream(
         ],
         "temperature": 0.3,
         "max_tokens": 16384,
-        "stream": true
+        "stream": true,
+        "stream_options": { "include_usage": true }
     });
 
     let client = reqwest::Client::builder()
@@ -712,6 +768,12 @@ async fn call_openai_compatible_stream(
     use futures_util::StreamExt;
     let mut buffer = String::new();
 
+    // Adaptive emit throttle state
+    let mut token_buffer = String::new();
+    let mut last_emit = std::time::Instant::now();
+    const MIN_EMIT_INTERVAL: Duration = Duration::from_millis(16);
+    const MAX_BUFFER_BYTES: usize = 512;
+
     loop {
         let chunk = tokio::select! {
             next = stream.next() => next,
@@ -732,25 +794,51 @@ async fn call_openai_compatible_stream(
             if line.starts_with("data: ") {
                 let data = &line[6..];
                 if data == "[DONE]" {
-                    let _ = app.emit("llm-stream", LlmStreamEvent {
-                        stream_id: streamId.clone(),
-                        token: String::new(),
-                        done: true,
-                    });
                     break;
                 }
                 if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(data) {
+                    // Extract usage data from the final chunk (when stream_options.include_usage is set)
+                    if let Some(usage) = parsed["usage"].as_object() {
+                        let input_tokens = usage.get("prompt_tokens").and_then(|v| v.as_u64());
+                        let output_tokens = usage.get("completion_tokens").and_then(|v| v.as_u64());
+                        if input_tokens.is_some() || output_tokens.is_some() {
+                            let _ = app.emit("llm-stream-usage", LlmStreamUsageEvent {
+                                stream_id: streamId.clone(),
+                                input_tokens,
+                                output_tokens,
+                            });
+                        }
+                    }
+
                     if let Some(token) = parsed["choices"][0]["delta"]["content"].as_str() {
-                        full_text.push_str(token);
-                        let _ = app.emit("llm-stream", LlmStreamEvent {
-                            stream_id: streamId.clone(),
-                            token: token.to_string(),
-                            done: false,
-                        });
+                        if !token.is_empty() {
+                            full_text.push_str(token);
+                            token_buffer.push_str(token);
+
+                            // Adaptive emit throttle: emit if interval elapsed or buffer full
+                            if last_emit.elapsed() >= MIN_EMIT_INTERVAL || token_buffer.len() > MAX_BUFFER_BYTES {
+                                let _ = app.emit("llm-stream", LlmStreamEvent {
+                                    stream_id: streamId.clone(),
+                                    token: token_buffer.clone(),
+                                    done: false,
+                                });
+                                token_buffer.clear();
+                                last_emit = std::time::Instant::now();
+                            }
+                        }
                     }
                 }
             }
         }
+    }
+
+    // Flush remaining token buffer before done signal
+    if !token_buffer.is_empty() {
+        let _ = app.emit("llm-stream", LlmStreamEvent {
+            stream_id: streamId.clone(),
+            token: token_buffer,
+            done: false,
+        });
     }
 
     // Final done signal
@@ -767,6 +855,379 @@ async fn call_openai_compatible_stream(
             text: String::new(),
             success: false,
             error: Some("Request cancelled".to_string()),
+        });
+    }
+
+    Ok(LlmResponse {
+        text: full_text,
+        success: true,
+        error: None,
+    })
+}
+
+// --- Anthropic Messages API Streaming ---
+
+#[derive(Serialize, Clone)]
+struct LlmStreamToolEvent {
+    stream_id: String,
+    partial_json: String,
+    tool_use_id: serde_json::Value,
+}
+
+// --- OpenAI-compatible tool-calling (non-streaming) ---
+// Used by DeepSeek, Groq, Mistral, OpenAI, Ollama, OpenRouter for agent tool loops.
+// Accepts a full messages array and returns structured tool_calls alongside text.
+
+#[tauri::command]
+#[allow(non_snake_case)]
+async fn call_openai_compatible_with_tools(
+    apiKey: String,
+    baseUrl: String,
+    model: String,
+    messages: serde_json::Value,
+    tools: serde_json::Value,
+    isOpenRouter: bool,
+) -> Result<OpenAIToolsResponse, String> {
+    let url = format!("{}/chat/completions", baseUrl.trim_end_matches('/'));
+
+    let body = serde_json::json!({
+        "model": model,
+        "messages": messages,
+        "tools": tools,
+        "tool_choice": "auto",
+        "temperature": 0.3,
+        "max_tokens": 16384,
+        "stream": false
+    });
+
+    let client = reqwest::Client::builder()
+        .connect_timeout(Duration::from_secs(10))
+        .timeout(Duration::from_secs(120))
+        .build()
+        .map_err(|e| format!("Failed to build HTTP client: {}", e))?;
+
+    let mut req_builder = client
+        .post(&url)
+        .header("Content-Type", "application/json");
+
+    if !apiKey.is_empty() {
+        req_builder = req_builder.header("Authorization", format!("Bearer {}", apiKey));
+    }
+    if isOpenRouter {
+        req_builder = req_builder
+            .header("HTTP-Referer", "https://punamide.app")
+            .header("X-Title", "PunamIDE");
+    }
+
+    let resp = req_builder
+        .json(&body)
+        .send()
+        .await
+        .map_err(|e| format!("Network error: {}", e))?;
+
+    let status = resp.status();
+    if !status.is_success() {
+        let err_body = resp.text().await.unwrap_or_default();
+        if status == reqwest::StatusCode::TOO_MANY_REQUESTS {
+            return Ok(OpenAIToolsResponse {
+                text: String::new(),
+                success: false,
+                error: Some("Rate limited. Wait a moment and try again.".to_string()),
+                tool_calls: None,
+            });
+        }
+        return Ok(OpenAIToolsResponse {
+            text: String::new(),
+            success: false,
+            error: Some(format!("API error {}: {}", status, err_body.chars().take(300).collect::<String>())),
+            tool_calls: None,
+        });
+    }
+
+    let resp_body: serde_json::Value = resp
+        .json()
+        .await
+        .map_err(|e| format!("Failed to parse response JSON: {}", e))?;
+
+    // Extract text content (may be null when tool_calls are present)
+    let text = resp_body["choices"][0]["message"]["content"]
+        .as_str()
+        .unwrap_or("")
+        .to_string();
+
+    // Extract tool_calls array if present
+    let tool_calls = resp_body["choices"][0]["message"]["tool_calls"]
+        .as_array()
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|tc| {
+                    let id = tc["id"].as_str()?.to_string();
+                    let name = tc["function"]["name"].as_str()?.to_string();
+                    let arguments = tc["function"]["arguments"].as_str()?.to_string();
+                    Some(ToolCallItem { id, name, arguments })
+                })
+                .collect::<Vec<_>>()
+        })
+        .filter(|v| !v.is_empty());
+
+    Ok(OpenAIToolsResponse {
+        text,
+        success: true,
+        error: None,
+        tool_calls,
+    })
+}
+
+#[derive(Serialize, Clone)]
+struct LlmStreamUsageEvent {
+    stream_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    input_tokens: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    output_tokens: Option<u64>,
+}
+
+#[tauri::command]
+#[allow(non_snake_case)]
+async fn call_anthropic_stream(
+    apiKey: String,
+    model: String,
+    system: String,
+    messages: Vec<serde_json::Value>,
+    maxTokens: Option<u32>,
+    streamId: String,
+    app: AppHandle,
+    stream_state: State<'_, LlmStreamState>,
+) -> Result<LlmResponse, String> {
+    let cancellation = stream_state.register(&streamId)?;
+
+    let max_tokens = maxTokens.unwrap_or(8192);
+
+    let body = serde_json::json!({
+        "model": model,
+        "system": system,
+        "messages": messages,
+        "max_tokens": max_tokens,
+        "stream": true
+    });
+
+    let client = reqwest::Client::builder()
+        .connect_timeout(Duration::from_secs(10))
+        .timeout(Duration::from_secs(120))
+        .build()
+        .map_err(|e| format!("Failed to build HTTP client: {}", e))?;
+
+    let resp = match tokio::select! {
+        result = client
+            .post("https://api.anthropic.com/v1/messages")
+            .header("x-api-key", &apiKey)
+            .header("anthropic-version", "2023-06-01")
+            .header("content-type", "application/json")
+            .json(&body)
+            .send() => Some(result),
+        _ = cancellation.notify.notified() => None,
+    } {
+        None => {
+            stream_state.remove(&streamId);
+            return Ok(LlmResponse {
+                text: String::new(),
+                success: false,
+                error: Some("Request cancelled".to_string()),
+            });
+        }
+        Some(result) => match result {
+            Ok(r) => r,
+            Err(e) => {
+                stream_state.remove(&streamId);
+                return Ok(LlmResponse {
+                    text: String::new(),
+                    success: false,
+                    error: Some(format!("Network error: {}", e)),
+                });
+            }
+        },
+    };
+
+    // Handle HTTP error responses
+    if !resp.status().is_success() {
+        let status = resp.status();
+        stream_state.remove(&streamId);
+        let error_msg = match status.as_u16() {
+            401 => "Invalid Anthropic API key".to_string(),
+            429 => "Rate limited by Anthropic. Please wait and retry.".to_string(),
+            _ => format!("Anthropic API error {}: {}", status.as_u16(), status.canonical_reason().unwrap_or("Unknown error")),
+        };
+        return Ok(LlmResponse {
+            text: String::new(),
+            success: false,
+            error: Some(error_msg),
+        });
+    }
+
+    // Stream SSE response from Anthropic Messages API
+    let mut full_text = String::new();
+    let mut stream = resp.bytes_stream();
+    use futures_util::StreamExt;
+    let mut buffer = String::new();
+    let mut current_event_type = String::new();
+
+    // Adaptive emit throttle state
+    let mut token_buffer = String::new();
+    let mut last_emit = std::time::Instant::now();
+    const MIN_EMIT_INTERVAL: Duration = Duration::from_millis(16);
+    const MAX_BUFFER_BYTES: usize = 512;
+
+    loop {
+        let chunk = tokio::select! {
+            next = stream.next() => next,
+            _ = cancellation.notify.notified() => None,
+        };
+        let Some(chunk) = chunk else { break };
+        let chunk = match chunk {
+            Ok(c) => c,
+            Err(_) => break,
+        };
+        buffer.push_str(&String::from_utf8_lossy(&chunk));
+
+        // Process complete SSE lines
+        while let Some(line_end) = buffer.find('\n') {
+            let line = buffer[..line_end].trim_end().to_string();
+            buffer = buffer[line_end + 1..].to_string();
+
+            // Parse SSE event type lines
+            if line.starts_with("event: ") {
+                current_event_type = line[7..].trim().to_string();
+                continue;
+            }
+
+            // Parse SSE data lines
+            if !line.starts_with("data: ") {
+                continue;
+            }
+            let data = &line[6..];
+
+            // Try to parse JSON data
+            let json: serde_json::Value = match serde_json::from_str(data) {
+                Ok(v) => v,
+                Err(_) => continue, // Skip malformed JSON
+            };
+
+            match current_event_type.as_str() {
+                "message_start" => {
+                    // Extract input token usage from message_start
+                    if let Some(usage) = json["message"]["usage"].as_object() {
+                        if let Some(input_tokens) = usage.get("input_tokens").and_then(|v| v.as_u64()) {
+                            let _ = app.emit("llm-stream-usage", LlmStreamUsageEvent {
+                                stream_id: streamId.clone(),
+                                input_tokens: Some(input_tokens),
+                                output_tokens: None,
+                            });
+                        }
+                    }
+                }
+                "content_block_start" => {
+                    // For tool_use blocks, emit the tool start info
+                    if json["content_block"]["type"].as_str() == Some("tool_use") {
+                        let _ = app.emit("llm-stream-tool", LlmStreamToolEvent {
+                            stream_id: streamId.clone(),
+                            partial_json: String::new(),
+                            tool_use_id: json["index"].clone(),
+                        });
+                    }
+                }
+                "content_block_delta" => {
+                    let delta = &json["delta"];
+                    match delta["type"].as_str() {
+                        Some("text_delta") => {
+                            // Text content delta
+                            if let Some(text) = delta["text"].as_str() {
+                                if !text.is_empty() {
+                                    full_text.push_str(text);
+                                    token_buffer.push_str(text);
+
+                                    // Adaptive emit throttle: emit if interval elapsed or buffer full
+                                    if last_emit.elapsed() >= MIN_EMIT_INTERVAL || token_buffer.len() > MAX_BUFFER_BYTES {
+                                        let _ = app.emit("llm-stream", LlmStreamEvent {
+                                            stream_id: streamId.clone(),
+                                            token: token_buffer.clone(),
+                                            done: false,
+                                        });
+                                        token_buffer.clear();
+                                        last_emit = std::time::Instant::now();
+                                    }
+                                }
+                            }
+                        }
+                        Some("input_json_delta") => {
+                            // Tool use partial JSON delta
+                            if let Some(partial_json) = delta["partial_json"].as_str() {
+                                let _ = app.emit("llm-stream-tool", LlmStreamToolEvent {
+                                    stream_id: streamId.clone(),
+                                    partial_json: partial_json.to_string(),
+                                    tool_use_id: json["index"].clone(),
+                                });
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+                "message_delta" => {
+                    // Extract output token usage from message_delta
+                    if let Some(usage) = json["usage"].as_object() {
+                        if let Some(output_tokens) = usage.get("output_tokens").and_then(|v| v.as_u64()) {
+                            let _ = app.emit("llm-stream-usage", LlmStreamUsageEvent {
+                                stream_id: streamId.clone(),
+                                input_tokens: None,
+                                output_tokens: Some(output_tokens),
+                            });
+                        }
+                    }
+                }
+                "message_stop" => {
+                    // Stream is done — handled by loop exit
+                }
+                _ => {
+                    // Skip unknown event types (ping, etc.)
+                }
+            }
+
+            // Reset event type after processing data
+            current_event_type.clear();
+        }
+    }
+
+    // Flush remaining token buffer before done signal
+    if !token_buffer.is_empty() {
+        let _ = app.emit("llm-stream", LlmStreamEvent {
+            stream_id: streamId.clone(),
+            token: token_buffer,
+            done: false,
+        });
+    }
+
+    // Final done signal
+    let cancelled = cancellation.cancelled.load(Ordering::SeqCst);
+    stream_state.remove(&streamId);
+    let _ = app.emit("llm-stream", LlmStreamEvent {
+        stream_id: streamId,
+        token: String::new(),
+        done: true,
+    });
+    tokio::task::yield_now().await;
+
+    if cancelled {
+        return Ok(LlmResponse {
+            text: String::new(),
+            success: false,
+            error: Some("Request cancelled".to_string()),
+        });
+    }
+
+    if full_text.is_empty() {
+        return Ok(LlmResponse {
+            text: String::new(),
+            success: false,
+            error: Some("Anthropic returned empty response".to_string()),
         });
     }
 
@@ -1080,6 +1541,13 @@ pub struct FileIndexEntry {
 
 pub struct ProjectIndexCache(pub RwLock<Vec<FileIndexEntry>>);
 
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct RepoSymbol {
+    pub file_path: String,      // relative path from project root
+    pub exports: Vec<String>,   // max 8 symbol names
+    pub file_type: String,      // extension without dot
+}
+
 // --- Git Engine (using libgit2 via git2 crate) ---
 // Moved to git_commands.rs module
 
@@ -1135,6 +1603,29 @@ pub const CHUNK_LINES: usize = 30;
 pub const CHUNK_OVERLAP: usize = 5;
 /// Max line lookback for docstring/comment detection above a function boundary
 pub const DOCSTRING_LOOKBACK: usize = 8;
+
+// --- AST-Aware Chunking Index ---
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct ASTChunk {
+    pub file_path: String,
+    pub chunk_type: String,        // "function" | "class" | "module_block" | "fallback"
+    pub symbol_name: String,       // e.g. "handleApplyPatch"
+    pub start_line: usize,         // 1-based
+    pub end_line: usize,           // 1-based
+    pub content: String,
+    pub language: String,          // "typescript" | "rust" | "python"
+    pub tokens_estimate: usize,    // word_count / 0.75
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+pub struct ASTSearchResult {
+    pub chunks: Vec<ASTChunk>,
+    pub total_matches: usize,
+    pub search_method: String,     // "bm25_ast" | "fallback_line"
+}
+
+pub struct ASTIndex(pub RwLock<Vec<ASTChunk>>);
 
 // --- App Entry ---
 
@@ -1841,6 +2332,13 @@ struct SystemDiagnostics {
 }
 
 #[tauri::command]
+fn get_home_dir() -> Result<String, String> {
+    dirs::home_dir()
+        .map(|p| p.to_string_lossy().to_string())
+        .ok_or_else(|| "Could not determine home directory".to_string())
+}
+
+#[tauri::command]
 fn get_system_diagnostics(app: AppHandle) -> Result<SystemDiagnostics, String> {
     let mut system = System::new_all();
     system.refresh_all();
@@ -2041,6 +2539,7 @@ pub fn run() {
         .manage(FileWatcherHandle(Mutex::new(None)))
         .manage(ProjectIndexCache(RwLock::new(Vec::new())))
         .manage(CodebaseIndex(RwLock::new(None)))
+        .manage(ASTIndex(RwLock::new(Vec::new())))
         .manage(symbol_index::SymbolIndexState(RwLock::new(symbol_index::SymbolIndex::new())))
         .manage(call_graph::CallGraphState(RwLock::new(call_graph::CallGraph::new())))
         .manage(github::auth::GitHubAuthState::new())
@@ -2072,6 +2571,7 @@ pub fn run() {
             agent_tools::read_lines,
             agent_tools::apply_patch,
             agent_tools::apply_multi_patch,
+            agent_tools::verify_patch_applied,
             fs_commands::path_exists,
             fs_commands::write_file,
             fs_commands::create_file,
@@ -2080,6 +2580,9 @@ pub fn run() {
             fs_commands::rename_path,
             fs_commands::reveal_path,
             search_commands::search_project,
+            search_commands::search_project_enhanced,
+            search_commands::search_and_replace_preview,
+            search_commands::search_and_replace_apply,
             terminal_commands::run_terminal_command,
             terminal_commands::check_tcp_port,
             terminal_commands::start_terminal_process,
@@ -2090,6 +2593,8 @@ pub fn run() {
             call_gemini_stream,
             call_openai_compatible_cmd,
             call_openai_compatible_stream,
+            call_openai_compatible_with_tools,
+            call_anthropic_stream,
             cancel_llm_stream,
             inspect_command,
             verify_path_safety,
@@ -2100,9 +2605,20 @@ pub fn run() {
             git_commands::git_diff_file,
             git_commands::git_log,
             git_commands::git_branch,
+            git_commands::git_blame_file,
+            git_commands::git_branch_list,
+            git_commands::git_branch_create,
+            git_commands::git_branch_switch,
+            git_commands::git_stash_list,
+            git_commands::git_stash_save,
+            git_commands::git_stash_pop,
+            git_commands::git_stash_drop,
             index_commands::fuzzy_find_block,
             index_commands::index_codebase,
             index_commands::search_codebase,
+            index_commands::get_repo_map,
+            index_commands::index_codebase_ast,
+            index_commands::search_codebase_ast,
             // Differ commands
             diff_strings,
             try_3way_merge,
@@ -2129,6 +2645,10 @@ pub fn run() {
             snapshot::export_snapshot_zip,
             snapshot::delete_snapshot,
             snapshot::auto_snapshot_if_enabled,
+            // Workspace Import commands
+            workspace_import::import_zip_preview,
+            workspace_import::import_zip_extract,
+            workspace_import::import_detect_conflicts,
             // PTY commands
             pty_manager::terminal_create,
             pty_manager::terminal_write,
@@ -2145,6 +2665,8 @@ pub fn run() {
             lsp_manager::lsp_format,
             lsp_manager::lsp_shutdown,
             lsp_manager::lsp_did_close,
+            lsp_manager::lsp_references,
+            lsp_manager::lsp_workspace_symbol,
             // GitHub Phase 0: Git Core Check
             github::github_check_repo,
             github::github_is_git_repo,
@@ -2211,6 +2733,7 @@ pub fn run() {
             architecture::dependency_analyzer::build_dependency_graph,
             architecture::rule_engine::validate_architecture,
             architecture::rule_engine::validate_patch_against_rules,
+            architecture::rule_engine::validate_proposed_content,
             architecture::rule_engine::get_default_rules,
             // Phase 6: Security-First Development Layer
             security_scanner::security_scan_file,
@@ -2241,6 +2764,11 @@ pub fn run() {
             memory::memory_engine::memory_get_by_file,
             memory::memory_engine::memory_get_timeline,
             memory::memory_engine::memory_quick_add,
+            // Session Memory (Agent Task History)
+            memory::memory_engine::session_task_create,
+            memory::memory_engine::session_task_search,
+            memory::memory_engine::session_task_evict,
+            memory::memory_engine::session_task_clear,
             // Phase 2E: Embedding Store + Retrieval Engine
             memory::embedding_store::embedding_store,
             memory::embedding_store::embedding_get,
@@ -2254,6 +2782,7 @@ pub fn run() {
             symbol_index::symbol_lookup,
             symbol_index::symbol_list_file,
             symbol_index::symbol_rebuild,
+            symbol_index::symbol_rebuild_file,
             symbol_index::symbol_stats,
             // Phase 3: Code Embedding Pipeline
             embedding_pipeline::embedding_pipeline_get_chunks,
@@ -2265,7 +2794,14 @@ pub fn run() {
             call_graph::callgraph_callees,
             call_graph::callgraph_build,
             call_graph::callgraph_stats,
+            call_graph::callgraph_rebuild_file,
+            // Context Compression for Large Files
+            context_compressor::compress_file_ast,
+            // Autocomplete commands (FIM + Chat, non-streaming, 2.5s timeout)
+            autocomplete::call_fim_completion,
+            autocomplete::call_chat_completion_simple,
             request_app_exit,
+            get_home_dir,
             get_system_diagnostics,
             open_logs_folder,
             open_data_folder,

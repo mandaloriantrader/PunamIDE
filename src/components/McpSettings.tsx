@@ -5,10 +5,11 @@
 
 import { useState } from "react";
 import {
-  Plus, Trash2, RefreshCw, Check, X, Plug, Globe, Terminal,
+  Plus, Trash2, RefreshCw, Check, X, Plug, Globe, Terminal, BookOpen, Download,
 } from "lucide-react";
 import type { MCPServerConfig, MCPTool } from "../utils/mcp";
 import { mcpConnect } from "../utils/mcp";
+import { getServersByCategory, curatedToConfig, type CuratedMCPServer } from "../utils/mcpCuratedServers";
 
 interface Props {
   servers: MCPServerConfig[];
@@ -50,6 +51,7 @@ const PRESET_SERVERS: Omit<MCPServerConfig, "id" | "enabled" | "status">[] = [
 export default function McpSettings({ servers, onChange, projectPath }: Props) {
   const [connecting, setConnecting] = useState<string | null>(null);
   const [showPresets, setShowPresets] = useState(false);
+  const [showDirectory, setShowDirectory] = useState(false);
 
   const addServer = (preset?: typeof PRESET_SERVERS[0]) => {
     const id = `mcp-${Date.now()}`;
@@ -242,6 +244,91 @@ export default function McpSettings({ servers, onChange, projectPath }: Props) {
             {server.status === "error" && server.lastError && (
               <div className="mcp-error-text">{server.lastError.slice(0, 200)}</div>
             )}
+          </div>
+        </div>
+      ))}
+
+      {/* ── Server Directory ─────────────────────────────────────────────────── */}
+      <div className="mcp-directory-toggle">
+        <button
+          className="btn-secondary compact"
+          onClick={() => setShowDirectory(!showDirectory)}
+        >
+          <BookOpen size={13} />
+          {showDirectory ? "Hide Directory" : "Browse Server Directory"}
+        </button>
+      </div>
+
+      {showDirectory && (
+        <McpDirectory
+          installedIds={servers.map((s) => s.id)}
+          onInstall={(server) => {
+            const config = curatedToConfig(server);
+            onChange([...servers, config]);
+          }}
+        />
+      )}
+    </div>
+  );
+}
+
+// ── Server Directory sub-component ───────────────────────────────────────────
+
+const CATEGORY_LABELS: Record<string, string> = {
+  filesystem: "📁 Filesystem",
+  database: "🗃️ Database",
+  api: "🔌 API",
+  search: "🔍 Search & Web",
+  devtools: "🛠️ Dev Tools",
+  ai: "🤖 AI & Memory",
+  cloud: "☁️ Cloud",
+  docs: "📖 Documentation",
+};
+
+function McpDirectory({
+  installedIds,
+  onInstall,
+}: {
+  installedIds: string[];
+  onInstall: (server: CuratedMCPServer) => void;
+}) {
+  const grouped = getServersByCategory();
+
+  return (
+    <div className="mcp-directory">
+      <div className="mcp-directory-header">
+        <span className="mcp-directory-title">Server Directory</span>
+        <span className="mcp-directory-subtitle">One-click install curated MCP servers</span>
+      </div>
+      {Object.entries(grouped).map(([category, list]) => (
+        <div key={category} className="mcp-directory-category">
+          <span className="mcp-directory-category-label">{CATEGORY_LABELS[category] || category}</span>
+          <div className="mcp-directory-items">
+            {list.map((server) => {
+              const installed = installedIds.includes(server.id);
+              return (
+                <div key={server.id} className={`mcp-directory-item ${installed ? "installed" : ""}`}>
+                  <div className="mcp-directory-item-info">
+                    <span className="mcp-directory-item-name">{server.name}</span>
+                    <span className="mcp-directory-item-desc">{server.description}</span>
+                    {server.requiresConfig && (
+                      <span className="mcp-directory-item-hint">
+                        Requires: {server.requiresConfig.join(", ")}
+                      </span>
+                    )}
+                  </div>
+                  <button
+                    className={`mcp-directory-install-btn ${installed ? "installed" : ""}`}
+                    onClick={() => onInstall(server)}
+                    disabled={installed}
+                    title={installed ? "Already installed" : "Add to your servers"}
+                  >
+                    {installed ? <Check size={12} /> : <Download size={12} />}
+                    {installed ? "Added" : "Add"}
+                  </button>
+                </div>
+              );
+            })}
           </div>
         </div>
       ))}

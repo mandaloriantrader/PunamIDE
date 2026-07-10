@@ -1,9 +1,30 @@
 /**
- * AI Store — Chat messages, streaming, notepads, usage tracking.
+ * AI Store — Chat messages, streaming, notepads, usage tracking, approval queue.
  * Ported from Zenith IDE for Punam IDE.
  */
 
 import { create } from "zustand";
+import type { RepoMap } from "../utils/systemPrompt";
+import type { BudgetStatus } from "../services/agent/TokenBudgetManager";
+
+export interface DiffHunk {
+  id: number;
+  filePath: string;
+  startLine: number;
+  endLine: number;
+  oldContent: string;
+  newContent: string;
+}
+
+export interface ApprovalQueueItem {
+  patchId: string;
+  diff: string;
+  filesAffected: string[];
+  agentReasoning: string;
+  status: "pending" | "approved" | "rejected" | "timed_out";
+  createdAt: number;
+  hunks: DiffHunk[];
+}
 
 export interface TokenUsage {
   prompt_tokens: number;
@@ -87,6 +108,20 @@ interface AIState {
   promptHistory: string[];
   customInstructions: string;
 
+  repoMapCache: RepoMap | null;
+  repoMapLastUpdated: number;
+  repoMapIsStale: boolean;
+
+  approvalQueue: ApprovalQueueItem[];
+  pendingApprovalCount: number;
+
+  tokenBudgetStatus: BudgetStatus | null;
+
+  astIndexStatus: "idle" | "indexing" | "ready" | "error";
+  astIndexedAt: number | null;
+
+  setTokenBudgetStatus: (status: BudgetStatus | null) => void;
+
   addMessage: (message: ChatMessage) => void;
   updateMessage: (id: string, update: Partial<ChatMessage>) => void;
   clearMessages: () => void;
@@ -107,6 +142,15 @@ interface AIState {
 
   addToPromptHistory: (prompt: string) => void;
   setCustomInstructions: (instructions: string) => void;
+
+  setRepoMapCache: (map: RepoMap) => void;
+  invalidateRepoMap: () => void;
+
+  addApprovalRequest: (item: ApprovalQueueItem) => void;
+  updateApprovalStatus: (patchId: string, status: ApprovalQueueItem["status"]) => void;
+  clearApprovalQueue: () => void;
+
+  setASTIndexStatus: (status: "idle" | "indexing" | "ready" | "error") => void;
 }
 
 export const useAIStore = create<AIState>((set) => ({
@@ -123,6 +167,18 @@ export const useAIStore = create<AIState>((set) => ({
 
   promptHistory: [],
   customInstructions: "",
+
+  repoMapCache: null,
+  repoMapLastUpdated: 0,
+  repoMapIsStale: true,
+
+  approvalQueue: [],
+  pendingApprovalCount: 0,
+
+  tokenBudgetStatus: null,
+
+  astIndexStatus: "idle",
+  astIndexedAt: null,
 
   addMessage: (message) => set((state) => ({ messages: [...state.messages, message] })),
   updateMessage: (id, update) => set((state) => ({
@@ -155,4 +211,26 @@ export const useAIStore = create<AIState>((set) => ({
     promptHistory: [prompt, ...state.promptHistory.filter((p) => p !== prompt)].slice(0, 100),
   })),
   setCustomInstructions: (instructions) => set({ customInstructions: instructions }),
+
+  setRepoMapCache: (map) => set({ repoMapCache: map, repoMapLastUpdated: Date.now(), repoMapIsStale: false }),
+  invalidateRepoMap: () => set({ repoMapIsStale: true }),
+
+  addApprovalRequest: (item) => set((state) => ({
+    approvalQueue: [...state.approvalQueue, item],
+    pendingApprovalCount: state.pendingApprovalCount + 1,
+  })),
+  updateApprovalStatus: (patchId, status) => set((state) => ({
+    approvalQueue: state.approvalQueue.map((q) =>
+      q.patchId === patchId ? { ...q, status } : q
+    ),
+    pendingApprovalCount: Math.max(0, state.pendingApprovalCount - 1),
+  })),
+  clearApprovalQueue: () => set({ approvalQueue: [], pendingApprovalCount: 0 }),
+
+  setTokenBudgetStatus: (status) => set({ tokenBudgetStatus: status }),
+
+  setASTIndexStatus: (status) => set({
+    astIndexStatus: status,
+    ...(status === "ready" ? { astIndexedAt: Date.now() } : {}),
+  }),
 }));

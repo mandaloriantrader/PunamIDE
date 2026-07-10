@@ -4,8 +4,19 @@
  */
 
 import { create } from "zustand";
+import type { ContextInjectorConfig } from "../services/intelligence/ContextInjector";
+import { DEFAULT_CONTEXT_INJECTOR_CONFIG } from "../services/intelligence/ContextInjector";
+import type { CompressionConfig } from "../services/intelligence/ContextCompressor";
+import { DEFAULT_COMPRESSION_CONFIG } from "../services/intelligence/ContextCompressor";
 
 export type AIProvider = "openai" | "anthropic" | "gemini" | "openrouter" | "ollama" | "groq" | "mistral";
+
+export interface ReasoningDisplayConfig {
+  /** Whether to show the reasoning panel (default: true) */
+  enabled: boolean;
+  /** Default display mode (default: "compact") */
+  defaultMode: "compact" | "expanded";
+}
 
 export interface Keybinding {
   id: string;
@@ -36,6 +47,22 @@ export interface AppConfig {
   projectRules: string;
   ollamaUrl: string;
   openrouterKey: string;
+  contextInjectorConfig: ContextInjectorConfig;
+  compressionConfig: CompressionConfig;
+  agentAssistedDebugging: boolean;
+  reasoningDisplay: ReasoningDisplayConfig;
+  /** Agent autopilot mode: when ON, auto-approves reads, writes, and safe commands.
+   *  Only dangerous commands still require approval. When OFF (supervised), every
+   *  write and command requires per-action approval. */
+  agentAutopilot: boolean;
+  /** Master switch for inline autocomplete (supersedes ghostText) */
+  autocompleteEnabled: boolean;
+  /** Completion mode: auto detects FIM capability, or force a specific mode */
+  autocompleteMode: "auto" | "fim" | "chat" | "disabled";
+  /** Debounce delay in ms before triggering completion (min 150) */
+  autocompleteDebounceMs: number;
+  /** Max tokens for completion response (range 16–512) */
+  autocompleteMaxTokens: number;
 }
 
 export const DEFAULT_KEYBINDINGS: Keybinding[] = [
@@ -58,6 +85,7 @@ export const DEFAULT_KEYBINDINGS: Keybinding[] = [
   { id: "gitPanel", label: "Toggle Git Panel", keys: "Ctrl+Shift+G", command: "git.toggle", category: "Git" },
   { id: "problems", label: "Toggle Problems", keys: "Ctrl+Shift+M", command: "problems.toggle", category: "View" },
   { id: "settings", label: "Open Settings", keys: "Ctrl+,", command: "settings.open", category: "General" },
+  { id: "generateDocs", label: "Generate Documentation", keys: "Ctrl+Shift+D", command: "docs.generate", category: "AI" },
 ];
 
 const DEFAULT_CONFIG: AppConfig = {
@@ -80,6 +108,15 @@ const DEFAULT_CONFIG: AppConfig = {
   projectRules: "",
   ollamaUrl: "http://localhost:11434",
   openrouterKey: "",
+  contextInjectorConfig: DEFAULT_CONTEXT_INJECTOR_CONFIG,
+  compressionConfig: DEFAULT_COMPRESSION_CONFIG,
+  agentAssistedDebugging: true,
+  reasoningDisplay: { enabled: true, defaultMode: "compact" },
+  agentAutopilot: true,
+  autocompleteEnabled: true,
+  autocompleteMode: "auto",
+  autocompleteDebounceMs: 150,
+  autocompleteMaxTokens: 128,
 };
 
 interface SettingsState {

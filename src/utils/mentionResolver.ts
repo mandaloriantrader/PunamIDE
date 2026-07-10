@@ -1,6 +1,6 @@
 /**
  * Mention Resolver — Resolves @mention tags to actual context content.
- * Supports: @file:, @folder:, @codebase, @git, @terminal, @selection, @problems, @docs
+ * Supports: @file:, @folder:, @codebase, @codebase:<query>, @git, @terminal, @selection, @problems, @errors, @web:<query>, @docs
  *
  * Usage:
  *   const context = await resolveMentions("@file:src/App.tsx fix the bug", {
@@ -16,6 +16,7 @@ import { readFile, runTerminalCommand } from "./tauri";
 import type { FileEntry } from "./tauri";
 import type { ChatMessage } from "../store/aiStore";
 import { getProjectFilePath } from "./chatHelpers";
+import { searchCodebase, isIndexed } from "./codebaseIndex";
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -27,6 +28,8 @@ export type MentionType =
   | "@terminal"
   | "@selection"
   | "@problems"
+  | "@errors"
+  | "@web"
   | "@docs";
 
 export interface ResolvedMention {
@@ -59,6 +62,10 @@ export interface MentionSources {
   problemsRaw: string;
   gitBranch: string;
   lastMessages?: ChatMessage[];
+  /** LSP diagnostics (errors/warnings) — structured for @errors */
+  lspDiagnostics?: string;
+  /** User's query context for @codebase smart search */
+  userQuery?: string;
 }
 
 // ── Pattern matching ─────────────────────────────────────────────────────────
@@ -66,11 +73,13 @@ export interface MentionSources {
 const MENTION_PATTERNS = [
   { type: "@file" as const, regex: /@file:([\w./\\-]+(?:\.[\w]+)?)/gi },
   { type: "@folder" as const, regex: /@folder:([\w./\\-]+)/gi },
-  { type: "@codebase" as const, regex: /@codebase\b/gi },
+  { type: "@codebase" as const, regex: /@codebase(?::([\w\s./\\-]+?))?(?=\s|$)/gi },
   { type: "@git" as const, regex: /@git\b/gi },
   { type: "@terminal" as const, regex: /@terminal\b/gi },
   { type: "@selection" as const, regex: /@selection\b/gi },
   { type: "@problems" as const, regex: /@problems\b/gi },
+  { type: "@errors" as const, regex: /@errors\b/gi },
+  { type: "@web" as const, regex: /@web:([\w\s./\\?&=-]+?)(?=\s{2}|$|\n)/gi },
   { type: "@docs" as const, regex: /@docs:([\w./\\-]+)/gi },
 ];
 
@@ -174,10 +183,35 @@ export async function resolveMentions(
       }
 
       case "@codebase": {
-        // Provide file tree summary
-        content = `Project has ${sources.allProjectFiles.length} files across ${countFolders(sources.files)} folders.`;
-        label = "[🏗️ @codebase]";
-        contextBlocks.push(`--- BEGIN @codebase ---\n${content}\n--- END @codebase ---`);
+        // Smart codebase search — use TF-IDF index if available
+        const searchQuery = mention.value || sources.userQuery || "";
+        if (isIndexed() && searchQuery) {
+          const hits = searchCodebase(searchQuery, 8);
+          if (hits.length > 0) {
+            const snippets = hits.map((h) =>
+              `=== ${h.path} (L${h.startLine}-${h.endLine}, relevance: ${(h.score * 100).toFixed(0)}%) ===\n${h.snippet}`
+            ).join("\n\n");
+            content = `Codebase search for "${searchQuery}" — ${hits.length} relevant snippets:\n\n${snippets}`;
+            label = `[🏗️ @codebase:${searchQuery} (${hits.length} hits)]`;
+            contextBlocks.push(`--- BEGIN @codebase search: "${searchQuery}" ---\n${content}\n--- END @codebase ---`);
+          } else {
+            content = `No results found for "${searchQuery}" in the codebase index.`;
+            label = `[🏗️ @codebase (no matches)]`;
+            contextBlocks.push(`--- BEGIN @codebase ---\n${content}\nProject has ${sources.allProjectFiles.length} files.\n--- END @codebase ---`);
+          }
+        } else if (isIndexed()) {
+          // No query provided but index exists — give file tree + summary
+          const topFiles = sources.allProjectFiles.slice(0, 30).join("\n  ");
+          content = `Project has ${sources.allProjectFiles.length} files across ${countFolders(sources.files)} folders.\nTop files:\n  ${topFiles}`;
+          label = "[🏗️ @codebase (overview)]";
+          contextBlocks.push(`--- BEGIN @codebase ---\n${content}\n--- END @codebase ---`);
+        } else {
+          // Index not built — provide basic overview
+          const topFiles = sources.allProjectFiles.slice(0, 20).join("\n  ");
+          content = `Project has ${sources.allProjectFiles.length} files across ${countFolders(sources.files)} folders.\nFile index not built yet.\nFiles:\n  ${topFiles}`;
+          label = "[🏗️ @codebase]";
+          contextBlocks.push(`--- BEGIN @codebase ---\n${content}\n--- END @codebase ---`);
+        }
         break;
       }
 
@@ -239,6 +273,63 @@ export async function resolveMentions(
           }
         } else {
           label = `[⚠ doc not found: ${mention.value}]`;
+        }
+        break;
+      }
+
+      case "@errors": {
+        // LSP diagnostics — focused on errors (not just all problems)
+        const diagnostics = sources.lspDiagnostics || sources.problemsRaw || "(no errors detected)";
+        content = diagnostics;
+        label = "[🔴 @errors]";
+        if (diagnostics.length > 3 && diagnostics !== "(no errors detected)") {
+          contextBlocks.push(`--- BEGIN @errors (LSP diagnostics) ---\n${diagnostics}\n--- END @errors ---`);
+        }
+        break;
+      }
+
+      case "@web": {
+        // Web search — execute via DuckDuckGo instant answer API through terminal
+        const webQuery = mention.value || "";
+        if (webQuery) {
+          try {
+            const encoded = encodeURIComponent(webQuery);
+            const result = await runTerminalCommand(
+              `curl -sL "https://api.duckduckgo.com/?q=${encoded}&format=json&no_html=1"`,
+              sources.projectPath,
+            );
+            if (result.exit_code === 0 && result.stdout.trim()) {
+              try {
+                const data = JSON.parse(result.stdout);
+                const abstract_ = data.AbstractText || data.Abstract || "";
+                const answer = data.Answer || "";
+                const relatedTopics = (data.RelatedTopics || [])
+                  .slice(0, 5)
+                  .map((t: { Text?: string }) => t.Text || "")
+                  .filter(Boolean)
+                  .join("\n  - ");
+                content = [
+                  answer && `Answer: ${answer}`,
+                  abstract_ && `Summary: ${abstract_}`,
+                  relatedTopics && `Related:\n  - ${relatedTopics}`,
+                ].filter(Boolean).join("\n\n");
+
+                if (!content.trim()) {
+                  content = `Web search for "${webQuery}" returned no immediate answers. The user may need to search manually.`;
+                }
+              } catch {
+                content = `Web search for "${webQuery}" — response could not be parsed.`;
+              }
+            } else {
+              content = `Web search for "${webQuery}" — could not reach search API.`;
+            }
+            label = `[🌐 @web:${webQuery}]`;
+            contextBlocks.push(`--- BEGIN @web: "${webQuery}" ---\n${content}\n--- END @web ---`);
+          } catch {
+            label = `[⚠ web search failed: ${webQuery}]`;
+          }
+        } else {
+          label = "[⚠ @web requires a search query, e.g., @web:react hooks]";
         }
         break;
       }
@@ -332,11 +423,13 @@ export function buildSuggestions(
   const allCommands: { prefix: string; type: MentionType; desc: string }[] = [
     { prefix: "@file:", type: "@file", desc: "File contents" },
     { prefix: "@folder:", type: "@folder", desc: "All files in folder" },
-    { prefix: "@codebase", type: "@codebase", desc: "Project overview" },
+    { prefix: "@codebase", type: "@codebase", desc: "Smart codebase search (TF-IDF)" },
     { prefix: "@git", type: "@git", desc: "Git status & history" },
     { prefix: "@terminal", type: "@terminal", desc: "Recent terminal output" },
     { prefix: "@selection", type: "@selection", desc: "Current selection" },
-    { prefix: "@problems", type: "@problems", desc: "Problems/diagnostics" },
+    { prefix: "@problems", type: "@problems", desc: "All problems/diagnostics" },
+    { prefix: "@errors", type: "@errors", desc: "LSP errors only" },
+    { prefix: "@web:", type: "@web", desc: "Web search (DuckDuckGo)" },
     { prefix: "@docs:", type: "@docs", desc: "Documentation files" },
   ];
 

@@ -635,6 +635,8 @@ export default function ArchitectureRulesEditor() {
   const [selectedEdge, setSelectedEdge] = useState<RuleEdgeType | null>(null);
   const [showLayerEditor, setShowLayerEditor] = useState(false);
   const [editingLayer, setEditingLayer] = useState<LayerNodeType | null>(null);
+  // Live violation count from debounced auto-validate
+  const [liveViolationCount, setLiveViolationCount] = useState<{ errors: number; warnings: number } | null>(null);
 
   const typedNodes = nodes as unknown as LayerNodeType[];
   const typedEdges = edges as unknown as RuleEdgeType[];
@@ -675,6 +677,31 @@ export default function ArchitectureRulesEditor() {
 
     return () => {
       if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current);
+    };
+  }, [currentRules, loaded]);
+
+  // ── Debounced auto-validate: re-runs architecture validation 2s after
+  // the last rule change, showing a live violation count on the toolbar.
+  const validateTimeoutRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  useEffect(() => {
+    if (!loaded) return;
+
+    if (validateTimeoutRef.current) clearTimeout(validateTimeoutRef.current);
+    validateTimeoutRef.current = setTimeout(async () => {
+      try {
+        const result = await validateArchitecture(currentRules);
+        setLiveViolationCount({
+          errors: result.error_count,
+          warnings: result.warning_count,
+        });
+      } catch {
+        // Validation unavailable — clear the count
+        setLiveViolationCount(null);
+      }
+    }, 2000);
+
+    return () => {
+      if (validateTimeoutRef.current) clearTimeout(validateTimeoutRef.current);
     };
   }, [currentRules, loaded]);
 
@@ -976,7 +1003,16 @@ export default function ArchitectureRulesEditor() {
             color: "var(--text-primary, #e0e0e0)",
           }}
         >
-          <Play size={12} /> {validating ? "Validating..." : "Test Rules"}
+          <Play size={12} />{" "}
+          {validating
+            ? "Validating..."
+            : liveViolationCount
+              ? liveViolationCount.errors > 0
+                ? `🔴 ${liveViolationCount.errors} errors, ${liveViolationCount.warnings} warnings`
+                : liveViolationCount.warnings > 0
+                  ? `🟡 ${liveViolationCount.warnings} warnings`
+                  : "🟢 All rules pass"
+              : "Test Rules"}
         </button>
         <button
           className="btn-secondary compact"

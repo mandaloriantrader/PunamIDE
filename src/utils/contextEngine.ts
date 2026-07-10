@@ -22,6 +22,9 @@ import type { ChatMessage } from "../types";
 import { invoke } from "@tauri-apps/api/core";
 import { memoryList, memoryQuickAdd, memoryDelete, memorySearch } from "../services/memory/MemoryManager";
 import type { MemoryEntry } from "../services/memory/MemoryManager";
+import { buildSystemPrompt } from "./systemPrompt";
+import type { SystemPromptContext } from "./systemPrompt";
+import { useAIStore } from "../store/aiStore";
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -29,6 +32,158 @@ const SLIDING_WINDOW_TURNS = 4;
 const MAX_SNIPPET_CHARS = 100000;
 const MAX_MEMORY_ENTRIES = 20;
 const MEMORY_STORAGE_KEY = "punam-agent-memory";
+const AST_CONTEXT_DEFAULT_MAX_TOKENS = 6000;
+const AST_CONTEXT_TOP_K = 8;
+
+// ── AST-Aware Chunking Types (mirrors Rust ASTChunk struct) ───────────────────
+
+/**
+ * A semantically complete code chunk extracted via tree-sitter AST analysis.
+ * Represents a function, class, module block, or fallback line-range from the
+ * Rust `search_codebase_ast` command.
+ */
+export interface ASTChunk {
+  file_path: string;
+  chunk_type: "function" | "class" | "module_block" | "fallback";
+  symbol_name: string;
+  start_line: number;
+  end_line: number;
+  content: string;
+  language: string;
+  tokens_estimate: number;
+}
+
+interface ASTSearchResult {
+  chunks: ASTChunk[];
+  total_matches: number;
+  search_method: string;
+}
+
+// ── AST Context Builder (Requirements 10.1, 10.2, 10.6) ──────────────────────
+
+/**
+ * Deduplicate chunks from the same file that have overlapping or adjacent line ranges.
+ * Merges chunks whose line ranges overlap (startB <= endA + 1) into a single chunk
+ * with combined content spanning the full range.
+ */
+export function deduplicateChunks(chunks: ASTChunk[]): ASTChunk[] {
+  if (chunks.length <= 1) return chunks;
+
+  // Group chunks by file path
+  const byFile = new Map<string, ASTChunk[]>();
+  for (const chunk of chunks) {
+    const existing = byFile.get(chunk.file_path) || [];
+    existing.push(chunk);
+    byFile.set(chunk.file_path, existing);
+  }
+
+  const result: ASTChunk[] = [];
+
+  for (const [, fileChunks] of byFile) {
+    if (fileChunks.length === 1) {
+      result.push(fileChunks[0]);
+      continue;
+    }
+
+    // Sort by start_line ascending
+    const sorted = [...fileChunks].sort((a, b) => a.start_line - b.start_line);
+    const merged: ASTChunk[] = [sorted[0]];
+
+    for (let i = 1; i < sorted.length; i++) {
+      const current = sorted[i];
+      const last = merged[merged.length - 1];
+
+      // Overlapping or adjacent: current starts within or immediately after last
+      if (current.start_line <= last.end_line + 1) {
+        // Merge into last chunk
+        const mergedEndLine = Math.max(last.end_line, current.end_line);
+        const mergedContent = last.content + "\n" + current.content;
+        const mergedTokens = Math.ceil(mergedContent.split(/\s+/).length / 0.75);
+
+        merged[merged.length - 1] = {
+          file_path: last.file_path,
+          chunk_type: last.chunk_type === "class" || current.chunk_type === "class" ? "class" : last.chunk_type,
+          symbol_name: last.symbol_name + "+" + current.symbol_name,
+          start_line: last.start_line,
+          end_line: mergedEndLine,
+          content: mergedContent,
+          language: last.language,
+          tokens_estimate: mergedTokens,
+        };
+      } else {
+        merged.push(current);
+      }
+    }
+
+    result.push(...merged);
+  }
+
+  return result;
+}
+
+/**
+ * Format a single AST chunk for LLM consumption.
+ * Format: `// file_path:startLine-endLine [chunk_type: symbol_name]\n{content}`
+ */
+function formatASTChunk(chunk: ASTChunk): string {
+  const header = `// ${chunk.file_path}:${chunk.start_line}-${chunk.end_line} [${chunk.chunk_type}: ${chunk.symbol_name}]`;
+  return `${header}\n${chunk.content}`;
+}
+
+/**
+ * Build AST-aware context for an agent query.
+ *
+ * Calls the Rust `search_codebase_ast` backend to retrieve semantically complete
+ * code chunks ranked by BM25, deduplicates overlapping results, formats them for
+ * the LLM, and enforces a token budget.
+ *
+ * @param query - The search query (user question or subtask description)
+ * @param projectPath - Absolute path to the project root
+ * @param maxTokens - Maximum token budget for the output (default 6000)
+ * @returns Formatted string of AST chunks ready for LLM context injection
+ */
+export async function buildASTContext(
+  query: string,
+  projectPath: string,
+  maxTokens: number = AST_CONTEXT_DEFAULT_MAX_TOKENS
+): Promise<string> {
+  try {
+    const searchResult = await invoke<ASTSearchResult>("search_codebase_ast", {
+      query,
+      projectPath,
+      topK: AST_CONTEXT_TOP_K,
+    });
+
+    if (!searchResult || searchResult.chunks.length === 0) {
+      return "";
+    }
+
+    // Deduplicate overlapping/adjacent chunks from same file
+    const dedupedChunks = deduplicateChunks(searchResult.chunks);
+
+    // Format chunks with token budget enforcement
+    const formattedParts: string[] = [];
+    let cumulativeTokens = 0;
+
+    for (const chunk of dedupedChunks) {
+      const formatted = formatASTChunk(chunk);
+      // Estimate tokens for this formatted chunk (word count / 0.75)
+      const chunkTokens = Math.ceil(formatted.split(/\s+/).length / 0.75);
+
+      if (cumulativeTokens + chunkTokens > maxTokens) {
+        break;
+      }
+
+      formattedParts.push(formatted);
+      cumulativeTokens += chunkTokens;
+    }
+
+    return formattedParts.join("\n\n");
+  } catch (err) {
+    console.warn("[ContextEngine] AST context build failed (non-fatal):", err);
+    return "";
+  }
+}
 
 // ── Rust Context Engine Types ─────────────────────────────────────────────────
 
@@ -139,6 +294,163 @@ export interface ContextInputs {
   skipRustContext?: boolean;
 }
 
+// ── Git Diff Stat (refreshed before each agent turn — Requirement 1.5) ────────
+
+/**
+ * Fetch fresh `git diff --stat` summary from the project.
+ * Returns empty string if not a git repository or on any failure.
+ */
+export async function fetchGitDiffStat(projectPath: string): Promise<string> {
+  try {
+    const result = await invoke<{ stdout: string; stderr: string; exit_code: number }>(
+      "run_terminal_command",
+      { command: "git diff --stat --no-color HEAD", cwd: projectPath, timeoutMs: 5000 }
+    );
+    if (result.exit_code === 0 && result.stdout.trim()) {
+      return result.stdout.trim().slice(0, 1500);
+    }
+    return "";
+  } catch {
+    return "";
+  }
+}
+
+/**
+ * Build a dynamic system instruction using the structured `buildSystemPrompt`
+ * from systemPrompt.ts. Uses the repo map cache from aiStore and refreshes
+ * git diff stat on every call (Requirement 1.5).
+ *
+ * Falls back to the legacy static prompt if repo map is unavailable.
+ */
+export async function buildDynamicSystemInstruction(
+  projectPath: string,
+  openTabs: Array<{ path: string; language?: string }>,
+  activeFilePath?: string,
+  projectFiles?: Array<{ name: string; path: string; is_dir: boolean; children?: any[] }>
+): Promise<string> {
+  const store = useAIStore.getState();
+  const repoMap = store.repoMapCache;
+
+  // Refresh git diff stat before each turn (Requirement 1.5)
+  const gitStatus = await fetchGitDiffStat(projectPath);
+
+  // If repo map is not available, return empty to signal fallback to legacy
+  if (!repoMap) {
+    return "";
+  }
+
+  // Detect project languages from repo map symbols
+  const langSet = new Set<string>();
+  for (const sym of repoMap.symbols) {
+    if (sym.fileType) langSet.add(sym.fileType);
+  }
+  const projectLanguages = Array.from(langSet).slice(0, 5);
+
+  const ctx: SystemPromptContext = {
+    repoMap,
+    openTabs: openTabs.slice(0, 10).map(t => ({
+      path: t.path,
+      language: t.language || t.path.split(".").pop() || "unknown",
+    })),
+    gitStatus,
+    activeFile: activeFilePath,
+    projectLanguages,
+    agentMode: "edit",
+  };
+
+  return buildSystemPrompt(ctx);
+}
+
+// ── AST Index Timeout & Fallback Constants ────────────────────────────────────
+
+const AST_INDEX_TIMEOUT_MS = 30_000; // 30 seconds max wait for indexing
+
+// ── AST Context with Indexing & Fallback (Requirements 10.1, 10.3, 10.4, 10.5) ──
+
+/**
+ * Fetch AST-aware context for the agent query with full fallback chain:
+ *
+ * 1. If AST index is not ready → trigger indexing, wait up to 30 seconds
+ * 2. If indexing fails or times out → fall back to line-based search, emit warning
+ * 3. If AST search returns zero results → fall back to text-based grep with same output format
+ *
+ * Returns { astContext, warning } where `warning` is non-empty if AST was unavailable.
+ */
+async function fetchASTContextWithFallback(
+  query: string,
+  projectPath: string,
+): Promise<{ astContext: string; warning: string }> {
+  const store = useAIStore.getState();
+  let warning = "";
+
+  // Check if AST index is ready; if not, trigger indexing and wait
+  if (store.astIndexStatus !== "ready") {
+    store.setASTIndexStatus("indexing");
+    try {
+      // Trigger indexing and wait up to 30 seconds
+      const indexPromise = invoke<number>("index_codebase_ast", { projectPath });
+      const timeoutPromise = new Promise<never>((_, reject) =>
+        setTimeout(() => reject(new Error("AST indexing timeout")), AST_INDEX_TIMEOUT_MS)
+      );
+      await Promise.race([indexPromise, timeoutPromise]);
+      store.setASTIndexStatus("ready");
+    } catch (err) {
+      store.setASTIndexStatus("error");
+      console.warn("[ContextEngine] AST indexing failed/timed out, falling back to line-based search:", err);
+      warning = "⚠️ AST-aware code indexing was unavailable. Using line-based context search as fallback.";
+
+      // Fall back to line-based grep search with same output structure
+      const grepFallback = await fetchGrepFallbackContext(query, projectPath);
+      return { astContext: grepFallback, warning };
+    }
+  }
+
+  // AST index is ready — perform BM25 search
+  const astResult = await buildASTContext(query, projectPath);
+
+  if (astResult.length === 0) {
+    // AST search returned zero results — fall back to text-based grep (Requirement 10.5)
+    const grepFallback = await fetchGrepFallbackContext(query, projectPath);
+    return { astContext: grepFallback, warning: "" };
+  }
+
+  return { astContext: astResult, warning: "" };
+}
+
+/**
+ * Fall back to text-based grep search when AST context is unavailable or empty.
+ * Formats results using the same structure as AST context output for consistency.
+ *
+ * Format: `// file_path:startLine-endLine [fallback: grep_match]\n{content}`
+ */
+async function fetchGrepFallbackContext(
+  query: string,
+  projectPath: string,
+): Promise<string> {
+  try {
+    const grepResults = await invoke<Array<{
+      file_path: string;
+      content: string;
+      start_line: number;
+      end_line: number;
+    }>>("search_codebase", {
+      query,
+      projectPath,
+      topK: AST_CONTEXT_TOP_K,
+    });
+
+    if (!grepResults || grepResults.length === 0) return "";
+
+    return grepResults
+      .slice(0, AST_CONTEXT_TOP_K)
+      .map(hit => `// ${hit.file_path}:${hit.start_line}-${hit.end_line} [fallback: grep_match]\n${hit.content}`)
+      .join("\n\n");
+  } catch (err) {
+    console.warn("[ContextEngine] Grep fallback also failed (non-fatal):", err);
+    return "";
+  }
+}
+
 // ── Core: Assemble Persistent Payload ─────────────────────────────────────────
 
 /**
@@ -147,10 +459,28 @@ export interface ContextInputs {
  *
  * The Rust context is merged with any manually-provided activeFileSnippets.
  * If Rust context fails or is skipped, falls back to the provided snippets only.
+ *
+ * Additionally, AST-aware context is fetched and included as a separate section
+ * to complement (not replace) the TF-IDF context (Requirements 10.1, 10.3-10.5).
  */
 export async function assemblePersistentPayload(inputs: ContextInputs): Promise<ContextPayload> {
   const { globalGoal, currentSubtask, fullHistory, activeFileSnippets, latestErrors, projectMemory } = inputs;
-  const systemInstruction = buildSystemInstruction(globalGoal, currentSubtask, projectMemory, inputs.activeFilePath, inputs.projectFiles);
+
+  // Try dynamic system prompt with repo map (Requirement 1.1)
+  let systemInstruction = "";
+  if (inputs.projectPath) {
+    systemInstruction = await buildDynamicSystemInstruction(
+      inputs.projectPath,
+      inputs.openTabPaths?.map(p => ({ path: p })) || [],
+      inputs.activeFilePath,
+      inputs.projectFiles
+    );
+  }
+
+  // Fallback to legacy static system instruction if dynamic prompt unavailable
+  if (!systemInstruction) {
+    systemInstruction = buildSystemInstruction(globalGoal, currentSubtask, projectMemory, inputs.activeFilePath, inputs.projectFiles);
+  }
 
   // ── Fetch Rust intelligent context (TF-IDF + dep graph + git + tabs) ───
   let allSnippets = [...activeFileSnippets];
@@ -182,12 +512,42 @@ export async function assemblePersistentPayload(inputs: ContextInputs): Promise<
     }
   }
 
+  // ── Fetch AST-aware context (Requirements 10.1, 10.3, 10.4, 10.5) ──────
+  // AST context complements (does not replace) the TF-IDF context above.
+  // It provides semantically complete code chunks (functions, classes) via BM25.
+  let astContextSection = "";
+  let astWarning = "";
+
+  if (inputs.projectPath && !inputs.skipRustContext) {
+    const searchQuery = currentSubtask || globalGoal || "";
+    if (searchQuery.length > 3) {
+      const { astContext, warning } = await fetchASTContextWithFallback(searchQuery, inputs.projectPath);
+      astContextSection = astContext;
+      astWarning = warning;
+    }
+  }
+
   const contextBlock = buildContextBlock(allSnippets, latestErrors);
   const recentMessages: typeof fullHistory = [];
   const contents: ContextPayload["contents"] = [];
+
+  // If AST indexing was unavailable, include a warning in the conversation
+  if (astWarning) {
+    contents.push({ role: "model", parts: [{ text: astWarning }] });
+  }
+
   if (contextBlock.trim()) {
     contents.push({ role: "user", parts: [{ text: contextBlock }] });
   }
+
+  // Inject AST-relevant code as a separate context section after TF-IDF context
+  if (astContextSection.trim()) {
+    contents.push({
+      role: "user",
+      parts: [{ text: `AST-RELEVANT CODE (semantically complete functions/classes):\n${astContextSection}` }],
+    });
+  }
+
   for (const msg of recentMessages) {
     contents.push({ role: msg.role === "user" ? "user" : "model", parts: [{ text: msg.content.slice(0, 3000) }] });
   }

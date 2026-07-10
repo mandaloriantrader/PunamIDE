@@ -4,10 +4,12 @@
  */
 
 import { useRef, useEffect, useState } from "react";
-import { Send, FileText, Layers, SearchCode, Wrench, MessageCircle, Paperclip, Plus, X, ChevronDown } from "lucide-react";
+import { Send, FileText, Layers, SearchCode, Wrench, MessageCircle, Paperclip, Plus, X, ChevronDown, Zap, Shield } from "lucide-react";
 import type { ChatAttachment } from "../../utils/tauri";
 import type { AIProviderConfig } from "../../utils/providers";
 import { ModelSelector } from "./ChatComponents";
+import { ContextWindowBar } from "./ContextWindowBar";
+import { useSettingsStore } from "../../store/settingsStore";
 
 interface ChatInputAreaProps {
   input: string;
@@ -32,6 +34,7 @@ interface ChatInputAreaProps {
   removeAttachment: (id: string) => void;
   handleFileAttach: () => void;
   handleFileInputChange: (e: React.ChangeEvent<HTMLInputElement>) => void;
+  handlePaste: (e: React.ClipboardEvent) => boolean;
   fileInputRef: React.RefObject<HTMLInputElement | null>;
   // Model selector
   aiProviders: AIProviderConfig[];
@@ -76,6 +79,7 @@ export function ChatInputArea({
   removeAttachment,
   handleFileAttach,
   handleFileInputChange,
+  handlePaste,
   fileInputRef,
   aiProviders,
   configModel,
@@ -331,6 +335,7 @@ export function ChatInputArea({
           value={input}
           onChange={(e) => setInput(e.target.value)}
           onKeyDown={handleTextareaKeyDown}
+          onPaste={handlePaste}
           placeholder={agentModePlaceholder}
           rows={3}
           disabled={loading || cooldown}
@@ -401,6 +406,7 @@ export function ChatInputArea({
               ₹{sessionTokens.totalCostInr < 0.01 ? "<0.01" : sessionTokens.totalCostInr.toFixed(sessionTokens.totalCostInr < 1 ? 2 : 1)}
             </span>
           )}
+          <AutopilotToggle />
           <button
             className="ai-send-btn"
             onClick={handleSendClick}
@@ -432,6 +438,41 @@ export function ChatInputArea({
           )}
         </div>
       </div>
+
+      {/* Context window usage bar */}
+      <ContextWindowBar
+        tokensUsed={sessionTokens.totalIn + sessionTokens.totalOut}
+        modelId={activeModelOverride?.model ?? configModel}
+        contextWindowOverride={
+          aiProviders
+            .flatMap(p => p.models)
+            .find(m => m.id === (activeModelOverride?.model ?? configModel))
+            ?.contextWindow ?? null
+        }
+      />
     </div>
+  );
+}
+
+
+// ── Autopilot Toggle ─────────────────────────────────────────────────────────
+
+function AutopilotToggle() {
+  const autopilot = useSettingsStore((s) => s.config.agentAutopilot);
+  const updateConfig = useSettingsStore((s) => s.updateConfig);
+
+  const toggle = () => updateConfig({ agentAutopilot: !autopilot });
+
+  return (
+    <button
+      className={`ai-autopilot-toggle ${autopilot ? "on" : "off"}`}
+      onClick={toggle}
+      title={autopilot ? "Autopilot ON — agent auto-approves safe actions" : "Supervised — agent asks approval for writes and commands"}
+      aria-label={`Autopilot ${autopilot ? "on" : "off"}`}
+      type="button"
+    >
+      {autopilot ? <Zap size={12} /> : <Shield size={12} />}
+      <span className="autopilot-label">{autopilot ? "Auto" : "Ask"}</span>
+    </button>
   );
 }

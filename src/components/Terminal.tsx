@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect, useCallback, memo } from "react";
+import { useState, useRef, useEffect, useCallback, useMemo, memo } from "react";
 import { startTerminalProcess, stopTerminalProcess, loadTerminalHistory, saveTerminalHistory } from "../utils/tauri";
 import { listen } from "@tauri-apps/api/event";
 import { parseAnsi, stripAnsi } from "../utils/ansi";
@@ -31,6 +31,7 @@ interface TerminalSession {
 interface Props {
   cwd: string;
   embedded?: boolean;
+  tabBarPrefix?: React.ReactNode;
   onOutputChange?: (output: string) => void;
   commandToRun?: string | null;
   onCommandStarted?: () => void;
@@ -172,7 +173,7 @@ function createProcessId(tabId: string): string {
 
 // --- Main Component ---
 
-export default function Terminal({ cwd, onOutputChange, commandToRun, onCommandStarted, onCommandFailed, onRunObservation, onOpenUrl, aiProviders = [], onFixWithAi }: Props) {
+export default function Terminal({ cwd, onOutputChange, commandToRun, onCommandStarted, onCommandFailed, onRunObservation, onOpenUrl, aiProviders = [], onFixWithAi, tabBarPrefix }: Props) {
   const [sessions, setSessions] = useState<TerminalSession[]>(() => [createSession(1, cwd)]);
   const [activeTabId, setActiveTabId] = useState<string>(() => sessions[0]?.id || "");
   const [input, setInput] = useState("");
@@ -191,6 +192,56 @@ export default function Terminal({ cwd, onOutputChange, commandToRun, onCommandS
   const persistedHistoryLoaded = useRef(false);
 
   const activeSession = sessions.find((s) => s.id === activeTabId);
+
+  // ── Terminal output virtualization ──────────────────────────────────────────
+  const TERMINAL_LINE_HEIGHT = 20; // px — monospace line height at 13px font
+  const TERMINAL_OVERSCAN = 20;
+  const terminalOutputRef = useRef<HTMLDivElement>(null);
+  const [terminalScrollTop, setTerminalScrollTop] = useState(0);
+  const [terminalViewHeight, setTerminalViewHeight] = useState(400);
+  const autoScrollRef = useRef(true); // tracks if user is at bottom
+
+  // ResizeObserver for terminal output container height
+  useEffect(() => {
+    const el = terminalOutputRef.current;
+    if (!el) return;
+    const ro = new ResizeObserver((entries) => {
+      for (const entry of entries) {
+        setTerminalViewHeight(entry.contentRect.height);
+      }
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+
+  const handleTerminalScroll = useCallback((e: React.UIEvent<HTMLDivElement>) => {
+    const el = e.currentTarget;
+    setTerminalScrollTop(el.scrollTop);
+    // Detect if user is near the bottom (within 50px) — enable auto-scroll
+    const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 50;
+    autoScrollRef.current = atBottom;
+  }, []);
+
+  // Auto-scroll to bottom when new lines arrive (only if user was already at bottom)
+  useEffect(() => {
+    if (autoScrollRef.current && terminalOutputRef.current) {
+      terminalOutputRef.current.scrollTop = terminalOutputRef.current.scrollHeight;
+    }
+  }, [activeSession?.lines.length]);
+
+  // Compute visible line window
+  const visibleLines = useMemo(() => {
+    if (!activeSession) return [];
+    const lines = activeSession.lines;
+    const startIdx = Math.max(0, Math.floor(terminalScrollTop / TERMINAL_LINE_HEIGHT) - TERMINAL_OVERSCAN);
+    const endIdx = Math.min(lines.length, Math.ceil((terminalScrollTop + terminalViewHeight) / TERMINAL_LINE_HEIGHT) + TERMINAL_OVERSCAN);
+    const result: Array<{ line: TerminalLine; index: number }> = [];
+    for (let i = startIdx; i < endIdx; i++) {
+      result.push({ line: lines[i], index: i });
+    }
+    return result;
+  }, [activeSession?.lines, terminalScrollTop, terminalViewHeight]);
+  // ── End virtualization ─────────────────────────────────────────────────────
 
   const reportRunObservation = useCallback((command: string, output: string, status?: RunObservation["status"]) => {
     if (!onRunObservation || !command) return;
@@ -358,15 +409,18 @@ export default function Terminal({ cwd, onOutputChange, commandToRun, onCommandS
     runInjectedCommand();
   }, [commandToRun]);
 
-  // Scroll to bottom when active session lines change
-  useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [activeSession?.lines]);
+  // Scroll to bottom is now handled by the virtualization auto-scroll mechanism above
 
   // Report recent terminal output to parent for AI context.
-  // Include recent tabs so Punam can inspect a failed command even if focus moved.
+  // Debounced to avoid expensive string ops on every terminal line.
+  const outputReportTimerRef = useRef<number | null>(null);
   useEffect(() => {
-    if (onOutputChange) {
+    if (!onOutputChange) return;
+    if (outputReportTimerRef.current !== null) {
+      window.clearTimeout(outputReportTimerRef.current);
+    }
+    outputReportTimerRef.current = window.setTimeout(() => {
+      outputReportTimerRef.current = null;
       const recentSessions = sessions
         .filter((session) => session.lines.length > 0)
         .slice(-3);
@@ -383,7 +437,13 @@ export default function Terminal({ cwd, onOutputChange, commandToRun, onCommandS
         const output = session.lines.slice(-120).map((line) => stripAnsi(line.text)).join("\n");
         reportRunObservation(session.activeCommand, output, session.status === "failed" ? "failed" : undefined);
       }
-    }
+    }, 500);
+
+    return () => {
+      if (outputReportTimerRef.current !== null) {
+        window.clearTimeout(outputReportTimerRef.current);
+      }
+    };
   }, [sessions, onOutputChange, reportRunObservation]);
 
   useEffect(() => {
@@ -435,6 +495,10 @@ export default function Terminal({ cwd, onOutputChange, commandToRun, onCommandS
   };
 
   // --- Listen for terminal-output events ---
+  // Routes all output through bufferRef and flushes once per animation frame.
+  // This prevents 10,000+ state updates/sec from verbose processes (npm install, cargo build).
+  const rafFlushRef = useRef<number | null>(null);
+
   useEffect(() => {
     let cancelled = false;
     let unlisten: (() => void) | null = null;
@@ -452,16 +516,21 @@ export default function Terminal({ cwd, onOutputChange, commandToRun, onCommandS
         appendCapturedOutput(streamedOutputRef.current.get(session_id) || "", `${line}\n`)
       );
 
-      // Direct flush: push output line directly to session state for immediate display
-      setSessions((prev) => {
-        const mappedTabId = processTabRef.current.get(session_id);
-        return prev.map((s) => {
-          if (s.activeSessionId === session_id || s.id === mappedTabId) {
-            return { ...s, lines: appendTerminalLines(s.lines, [termLine]) };
-          }
-          return s;
+      // Buffer the line — don't flush to state yet
+      const existing = bufferRef.current.get(session_id);
+      if (existing) {
+        existing.push(termLine);
+      } else {
+        bufferRef.current.set(session_id, [termLine]);
+      }
+
+      // Schedule a single RAF flush if not already scheduled
+      if (rafFlushRef.current === null) {
+        rafFlushRef.current = requestAnimationFrame(() => {
+          rafFlushRef.current = null;
+          flushBuffer();
         });
-      });
+      }
     }).then((registeredUnlisten) => {
       if (cancelled) registeredUnlisten();
       else unlisten = registeredUnlisten;
@@ -470,8 +539,12 @@ export default function Terminal({ cwd, onOutputChange, commandToRun, onCommandS
     return () => {
       cancelled = true;
       unlisten?.();
+      if (rafFlushRef.current !== null) {
+        cancelAnimationFrame(rafFlushRef.current);
+        rafFlushRef.current = null;
+      }
     };
-  }, []);
+  }, [flushBuffer]);
 
   // --- Listen for terminal-status events ---
   useEffect(() => {
@@ -784,6 +857,7 @@ export default function Terminal({ cwd, onOutputChange, commandToRun, onCommandS
     <div className="terminal" role="region" aria-label="Terminal" onClick={() => inputRef.current?.focus()}>
       {/* Tab bar */}
       <div className="terminal-tabs">
+        {tabBarPrefix}
         {sessions.map((session) => (
           <div
             key={session.id}
@@ -806,8 +880,8 @@ export default function Terminal({ cwd, onOutputChange, commandToRun, onCommandS
         </button>
       </div>
 
-      {/* Terminal output */}
-      <div className="terminal-output">
+      {/* Terminal output — virtualized */}
+      <div className="terminal-output" ref={terminalOutputRef} onScroll={handleTerminalScroll}>
         {activeSession && (
           <>
             {activeSession.running && (
@@ -824,32 +898,41 @@ export default function Terminal({ cwd, onOutputChange, commandToRun, onCommandS
                 </button>
               </div>
             )}
-            {activeSession.lines.map((line, i) => (
-              <div key={i} className={`terminal-line ${line.type}`}>
-                <pre><AnsiLine spans={line.spans} onOpenUrl={onOpenUrl} /></pre>
-                {line.type === "error" && onFixWithAi && activeSession.status === "failed" && (
-                  <button
-                    className="terminal-fix-ai-btn"
-                    onClick={() => {
-                      const errorContext = [
-                        `Command: ${activeSession.activeCommand}`,
-                        `Error: ${stripAnsi(line.text)}`,
-                        "",
-                        activeSession.lines
-                          .slice(Math.max(0, i - 20), i + 1)
-                          .map(l => stripAnsi(l.text))
-                          .join("\n"),
-                      ].join("\n");
-                      onFixWithAi(errorContext);
-                    }}
-                    title="Fix this error with AI"
-                    aria-label="Fix this error with AI"
-                  >
-                    ⚡ Fix
-                  </button>
-                )}
-              </div>
-            ))}
+            <div
+              className="terminal-lines-virtual"
+              style={{ height: activeSession.lines.length * TERMINAL_LINE_HEIGHT, position: "relative" }}
+            >
+              {visibleLines.map(({ line, index }) => (
+                <div
+                  key={index}
+                  className={`terminal-line ${line.type}`}
+                  style={{ position: "absolute", top: index * TERMINAL_LINE_HEIGHT, left: 0, right: 0, height: TERMINAL_LINE_HEIGHT }}
+                >
+                  <pre><AnsiLine spans={line.spans} onOpenUrl={onOpenUrl} /></pre>
+                  {line.type === "error" && onFixWithAi && activeSession.status === "failed" && (
+                    <button
+                      className="terminal-fix-ai-btn"
+                      onClick={() => {
+                        const errorContext = [
+                          `Command: ${activeSession.activeCommand}`,
+                          `Error: ${stripAnsi(line.text)}`,
+                          "",
+                          activeSession.lines
+                            .slice(Math.max(0, index - 20), index + 1)
+                            .map(l => stripAnsi(l.text))
+                            .join("\n"),
+                        ].join("\n");
+                        onFixWithAi(errorContext);
+                      }}
+                      title="Fix this error with AI"
+                      aria-label="Fix this error with AI"
+                    >
+                      ⚡ Fix
+                    </button>
+                  )}
+                </div>
+              ))}
+            </div>
           </>
         )}
         <div className="terminal-input-line">

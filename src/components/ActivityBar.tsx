@@ -8,6 +8,7 @@ import {
   Files, Search, GitBranch, Bot,
   Settings, Keyboard, Play,
   Box, StickyNote, GitPullRequest,
+  Brain,
 } from "lucide-react";
 
 export type ActivityView =
@@ -19,6 +20,7 @@ export type ActivityView =
   | "docker"
   | "notepads"
   | "github"
+  | "context"
   | null;
 
 interface ActivityItem {
@@ -49,6 +51,7 @@ export default function ActivityBar({
     { id: "docker",   icon: <Box size={22} />,     label: "Docker" },
     { id: "notepads", icon: <StickyNote size={22} />, label: "Notepads" },
     { id: "github",   icon: <GitPullRequest size={22} />,  label: "GitHub (Ctrl+Shift+H)" },
+    { id: "context",  icon: <Brain size={22} />,  label: "AI Context" },
   ];
 
   return (

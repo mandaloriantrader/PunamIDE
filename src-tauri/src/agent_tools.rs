@@ -147,6 +147,183 @@ pub fn apply_multi_patch(
     Ok(MultiPatchResult { success: true, files_modified, patches_applied, total_patches, errors, file_results })
 }
 
+// ── Patch Verification ────────────────────────────────────────────────────────
+
+#[derive(Serialize, Debug)]
+pub struct PatchVerificationResult {
+    pub matched: bool,
+    pub match_line: Option<usize>,       // 1-based line where match starts
+    pub similarity_score: f32,           // 0.0–1.0
+}
+
+/// Verifies that expected_snippet exists contiguously in the target file.
+/// If fuzzy=true: normalizes whitespace (collapse spaces/tabs to single space,
+/// trim trailing whitespace per line, normalize line endings to LF) before comparison.
+/// Returns highest similarity_score and best match_line even when matched=false.
+/// Errors if file not found or unreadable.
+#[tauri::command]
+pub fn verify_patch_applied(
+    file_path: String,
+    expected_snippet: String,
+    fuzzy: bool,
+    state: State<ProjectRoot>,
+) -> Result<PatchVerificationResult, String> {
+    let root = get_project_root(&state)?;
+    let safe_path = validate_path_within_project(&file_path, &root)?;
+    let p = Path::new(&safe_path);
+
+    // Check file exists
+    if !p.exists() {
+        return Err(format!("File not found: {}", file_path));
+    }
+
+    if !p.is_file() {
+        return Err(format!("Not a file: {}", file_path));
+    }
+
+    // Check if file is readable (permissions + binary detection)
+    let metadata = fs::metadata(p).map_err(|e| format!("File unreadable: {}", e))?;
+    if metadata.len() > 10_000_000 {
+        return Err("File unreadable: file too large (>10MB)".to_string());
+    }
+
+    let raw_bytes = fs::read(p).map_err(|e| format!("File unreadable: {}", e))?;
+
+    // Binary detection: check for null bytes in first 8KB
+    let check_len = raw_bytes.len().min(8192);
+    if raw_bytes[..check_len].contains(&0u8) {
+        return Err("File unreadable: binary content detected".to_string());
+    }
+
+    let file_content = String::from_utf8(raw_bytes)
+        .map_err(|_| "File unreadable: not valid UTF-8 text".to_string())?;
+
+    // Enforce 500-line limit on expected snippet
+    let snippet_line_count = expected_snippet.lines().count();
+    if snippet_line_count > 500 {
+        return Err(format!(
+            "Expected snippet too large: {} lines (max 500)",
+            snippet_line_count
+        ));
+    }
+
+    // Normalize content if fuzzy mode
+    let (file_lines, snippet_lines) = if fuzzy {
+        let f_lines = normalize_lines(&file_content);
+        let s_lines = normalize_lines(&expected_snippet);
+        (f_lines, s_lines)
+    } else {
+        let f_lines: Vec<String> = file_content.lines().map(|l| l.to_string()).collect();
+        let s_lines: Vec<String> = expected_snippet.lines().map(|l| l.to_string()).collect();
+        (f_lines, s_lines)
+    };
+
+    if snippet_lines.is_empty() {
+        return Ok(PatchVerificationResult {
+            matched: true,
+            match_line: Some(1),
+            similarity_score: 1.0,
+        });
+    }
+
+    let file_len = file_lines.len();
+    let snippet_len = snippet_lines.len();
+
+    // Exact contiguous substring match (sliding window)
+    if file_len >= snippet_len {
+        for i in 0..=(file_len - snippet_len) {
+            let window = &file_lines[i..i + snippet_len];
+            if window == snippet_lines.as_slice() {
+                return Ok(PatchVerificationResult {
+                    matched: true,
+                    match_line: Some(i + 1), // 1-based
+                    similarity_score: 1.0,
+                });
+            }
+        }
+    }
+
+    // No exact match found
+    if !fuzzy {
+        return Ok(PatchVerificationResult {
+            matched: false,
+            match_line: None,
+            similarity_score: 0.0,
+        });
+    }
+
+    // Fuzzy mode: sliding window similarity scoring
+    // Slide the expected snippet over the file content line by line
+    // At each position, count matching lines vs total lines
+    let mut best_score: f32 = 0.0;
+    let mut best_line: usize = 1;
+
+    if file_len >= snippet_len {
+        for i in 0..=(file_len - snippet_len) {
+            let mut matching_lines = 0usize;
+            for j in 0..snippet_len {
+                if file_lines[i + j] == snippet_lines[j] {
+                    matching_lines += 1;
+                }
+            }
+            let score = matching_lines as f32 / snippet_len as f32;
+            if score > best_score {
+                best_score = score;
+                best_line = i + 1; // 1-based
+            }
+        }
+    } else {
+        // File is shorter than snippet — compare what we can
+        let overlap = file_len;
+        if overlap > 0 {
+            let mut matching_lines = 0usize;
+            for j in 0..overlap {
+                if file_lines[j] == snippet_lines[j] {
+                    matching_lines += 1;
+                }
+            }
+            best_score = matching_lines as f32 / snippet_len as f32;
+            best_line = 1;
+        }
+    }
+
+    Ok(PatchVerificationResult {
+        matched: false,
+        match_line: if best_score > 0.0 { Some(best_line) } else { None },
+        similarity_score: best_score,
+    })
+}
+
+/// Normalize lines for fuzzy comparison:
+/// - Normalize line endings to LF
+/// - Collapse consecutive spaces/tabs to a single space
+/// - Trim trailing whitespace per line
+fn normalize_lines(content: &str) -> Vec<String> {
+    // Normalize line endings to LF first
+    let normalized = content.replace("\r\n", "\n").replace('\r', "\n");
+    normalized
+        .lines()
+        .map(|line| {
+            // Collapse consecutive whitespace (spaces and tabs) to single space
+            let mut result = String::with_capacity(line.len());
+            let mut prev_was_ws = false;
+            for ch in line.chars() {
+                if ch == ' ' || ch == '\t' {
+                    if !prev_was_ws {
+                        result.push(' ');
+                        prev_was_ws = true;
+                    }
+                } else {
+                    result.push(ch);
+                    prev_was_ws = false;
+                }
+            }
+            // Trim trailing whitespace
+            result.trim_end().to_string()
+        })
+        .collect()
+}
+
 // ── Shared implementation ─────────────────────────────────────────────────────
 
 fn apply_patch_impl(path: &str, hunk: &PatchHunk, root: &str) -> Result<ApplyPatchResult, String> {

@@ -1,6 +1,6 @@
 [package]
 name = "punamide"
-version = "2.0.0"
+version = "2.1.2"
 description = "PunamIDE v2.0 - AI-powered code editor built with Tauri"
 authors = ["you"]
 license = "MIT"

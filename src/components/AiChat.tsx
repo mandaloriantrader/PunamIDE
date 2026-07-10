@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect, useLayoutEffect } from "react";
+﻿import { useState, useRef, useEffect, useCallback } from "react";
 import type { ElementType } from "react";
 import {
   User,
@@ -12,6 +12,7 @@ import {
   Route,
   ListChecks,
   AlertCircle,
+  GitFork,
 } from "lucide-react";
 import { callLlm, readFile, searchProject } from "../utils/tauri";
 import type { AppConfig, FileEntry } from "../utils/tauri";
@@ -22,7 +23,7 @@ import { SYSTEM_PROMPT, parseResponse } from "../utils/prompts";
 import type { ParsedResponse } from "../utils/prompts";
 import { sendToMultipleModels, sendToProviderStreaming, estimateTokens } from "../utils/providers";
 import type { AIProviderConfig, ResponseMetrics } from "../utils/providers";
-import { recordUsage } from "./UsageDashboard";
+// recordUsage accessed via recordResponseUsage from ./chat/types
 import { buildMemoryContext } from "../services/memory/MemoryManager";
 import { detectFrameworks } from "../utils/contextGathering";
 import { indexProject, searchCodebase, isIndexed } from "../utils/codebaseIndex";
@@ -47,7 +48,7 @@ import {
   MAX_CONTEXT_FILE_CHARS,
   MAX_TOTAL_CONTEXT_CHARS,
 } from "../utils/chatHelpers";
-import { MarkdownMessage, PunamAvatar, ResponseMetricsDisplay, getActionLabel, formatAgentStep } from "./chat/ChatComponents";
+import { MarkdownMessage, PunamAvatar, ResponseMetricsDisplay, getActionLabel, formatAgentStep, APPLY_CODE_EVENT } from "./chat/ChatComponents";
 import { getAgentOrchestrator } from "../services/agent/AgentOrchestrator";
 import { getConflictResolver } from "../services/agent/ConflictResolver";
 import { validateApply } from "../services/agent/AgentApplyGuard";
@@ -72,222 +73,62 @@ import { useEditPreview } from "../hooks/useEditPreview";
 import EditPreviewPanel from "./EditPreviewPanel";
 import { detectTaskType } from "../lib/ai/taskDetection";
 import { selectAdaptiveProvider } from "../lib/ai/adaptiveRouter";
+import { useAIStore } from "../store/aiStore";
 import type { AdaptiveStrategy } from "../lib/ai/providerCapabilities";
 import { classifyProviderError, describeHealthStatus, markProviderHealthy, setProviderHealth } from "../lib/ai/providerHealth";
 import type { RunObservation } from "../services/run/verifiedRun";
-import { parseStreamBlocks, resetParseState, appendStreamText } from "../utils/streamBlocks";
+import { parseStreamBlocks, resetParseState, createBlockParser } from "../utils/streamBlocks";
+import type { BlockParser } from "../utils/streamBlocks";
+import type { BlockParseResult } from "../utils/protocol";
 import ThinkingBlock from "./chat/ThinkingBlock";
 import MessageBubble from "./chat/MessageBubble";
 
 // Background agent store
 import { useBackgroundAgentStore } from "../store/backgroundAgentStore";
+import type { CodeReference } from "../store/backgroundAgentStore";
 import { startBackgroundExecution } from "../services/backgroundAgentExecutor";
 
-// --- Agent Task Types ---
+// Reasoning Panel
+import ReasoningPanel from "./ReasoningPanel";
+import { useEditorStore } from "../store/editorStore";
 
-type AgentStep = "planning" | "proposing_fix" | "awaiting_approval" | "awaiting_run" | "running_command" | "analyzing_output" | "verifying" | "completed" | "stopped";
+// Approval Gate overlay
+import AgentApprovalGate from "./AgentApprovalGate";
+import type { PatchProposalForUI } from "./AgentApprovalGate";
+import type { ApprovalDecision } from "../utils/toolLoops/approvalGate";
 
-interface AgentTaskState {
-  active: boolean;
-  task: string;
-  step: AgentStep;
-  attempt: number;
-  maxAttempts: number;
-  history: string[];
-  suggestedCommand: string | null;
-  autoApply: boolean;       // Skip diff preview, apply directly
-  subtasks: string[];       // Task queue — list of subtasks to execute
-  currentSubtask: number;   // Index of current subtask being executed
-}
+// Clarification Protocol
+import ClarificationDialog from "./ClarificationDialog";
+import type { AmbiguityReport } from "../services/agent/AmbiguityDetector";
 
-const DEPENDENCY_DRIFT_PATTERNS = [
-  /node_modules[\\/]/i,
-  /package-lock\.json|npm-shrinkwrap\.json|pnpm-lock\.yaml|yarn\.lock/i,
-  /\bnpm install\b|\bnpm update\b|\bnpm audit\b/i,
-  /\brd \/s \/q node_modules\b|\brm -rf node_modules\b/i,
-  /\btsc'? is not recognized\b/i,
-  /tsBuildInfoFile|TS5069|TS6046|lib\.es\d+\.d\.ts/i,
-  /@vitejs\/plugin-react|vite-plugin-checker|Cannot find module .+vite/i,
-  /typescript|vite|tsconfig/i,
-];
+// Budget Enforcement UI
+import { BudgetSelector } from "./BudgetSelector";
+import BudgetWarningDialog from "./BudgetWarningDialog";
+import TaskCostSummary from "./TaskCostSummary";
+import type { TokenBudget, BudgetStatus, BudgetConsumed, BudgetRemaining } from "../services/agent/BudgetController";
 
-function looksLikeDependencyDrift(command: string, output: string, history: string[]): boolean {
-  const text = [command, output, ...history].join("\n");
-  return DEPENDENCY_DRIFT_PATTERNS.some((pattern) => pattern.test(text));
-}
+// Context Budget Indicator
+import ContextBudgetIndicator from "./ContextBudgetIndicator";
+import type { ContextBudgetInfo } from "./ContextBudgetIndicator";
 
-function hasParsedActions(parsed: ParsedResponse): boolean {
-  return (
-    parsed.fileChanges.length > 0 ||
-    parsed.deletions.length > 0 ||
-    parsed.commands.length > 0 ||
-    parsed.editOperations.length > 0
-  );
-}
+// --- Agent Task Types (extracted to ./chat/types.ts) ---
+import type { AgentStep, AgentTaskState, AgentTrace, AiChatProps } from "./chat/types";
+import { hasParsedActions, parseAgentTraceMessage, summarizeCommandOutput, hasUsableProvider as hasUsableProviderFn, recordResponseUsage, createAgentTask } from "./chat/types";
+import { AGENT_MODES, MODE_LABELS, looksLikeDependencyDrift } from "./chat/constants";
+import { AgentTraceCard } from "./chat/AgentTraceCard";
+import ToolCallCard from "./chat/ToolCallCard";
+import ToolResultCard from "./chat/ToolResultCard";
+import { ParsedActionsView } from "./chat/ParsedActionsView";
+import { finalizeResponseBlocks, applyFinalizationToMessages, generateStreamId, formatToolTrace, type ToolTraceEntry } from "./chat/services/responseFinalization";
+import { buildLlmPrompt } from "./chat/services/promptBuilder";
+import { buildAgentContext } from "./chat/services/agentContextBuilder";
+import { buildProjectContext as buildProjectContextExtracted, collectExistingFiles as collectExistingFilesExtracted, countFileEntries, getWorkspaceName, getIdentityResponse } from "./chat/context";
 
-const getWorkspaceName = (path: string) => {
-  const normalized = path.replace(/[\\/]+$/, "");
-  return normalized.split(/[\\/]/).pop() || "No workspace";
-};
+// AgentTrace + parseAgentTraceMessage imported from ./chat/types
 
-const countFileEntries = (entries: FileEntry[]): number =>
-  entries.reduce((total, entry) => total + 1 + (entry.children ? countFileEntries(entry.children) : 0), 0);
+// AgentTraceCard extracted to ./chat/AgentTraceCard.tsx
 
-interface AgentTrace {
-  routeType: string;
-  reason: string;
-  tools: string[];
-  status: string;
-  finalText: string;
-}
-
-function parseAgentTraceMessage(content: string): AgentTrace | null {
-  if (!content.startsWith("Agent route")) return null;
-
-  const traceEnd = content.indexOf("\n\n");
-  const traceText = traceEnd >= 0 ? content.slice(0, traceEnd) : content;
-  const finalText = traceEnd >= 0 ? content.slice(traceEnd + 2).replace(/â–$/, "").trim() : "";
-  const lines = traceText.split("\n").map((line) => line.trim());
-  const toolsIndex = lines.findIndex((line) => line === "Tools used");
-  const statusLine = lines.find((line) => line.startsWith("Status:"));
-  const tools = toolsIndex >= 0
-    ? lines.slice(toolsIndex + 1)
-        .filter((line) => line.startsWith("- "))
-        .map((line) => line.slice(2))
-    : [];
-
-  return {
-    routeType: lines.find((line) => line.startsWith("Type:"))?.replace("Type:", "").trim() || "agent",
-    reason: lines.find((line) => line.startsWith("Reason:"))?.replace("Reason:", "").trim() || "Using internal tools.",
-    tools,
-    status: statusLine?.replace("Status:", "").trim() || "Running...",
-    finalText,
-  };
-}
-
-function AgentTraceCard({ trace, isStreaming, showFinal }: { trace: AgentTrace; isStreaming?: boolean; showFinal?: boolean }) {
-  const status = trace.status.toLowerCase();
-  const isComplete = status.includes("completed");
-  const isStopped = status.includes("stopped");
-  const isWaiting = status.includes("needs") || status.includes("waiting");
-  const isError = status.includes("error") || status.includes("unavailable");
-
-  return (
-    <div className={`agent-trace-card ${isComplete ? "complete" : ""} ${isError ? "error" : ""} ${isStopped ? "stopped" : ""}`}>
-      <div className="agent-trace-header">
-        <div className="agent-trace-title">
-          <Route size={14} />
-          <span>Agent route</span>
-        </div>
-        <span className={`agent-trace-status ${isComplete ? "complete" : isError ? "error" : isStopped ? "stopped" : isWaiting ? "waiting" : "running"}`}>
-          {isStreaming && !isComplete && !isStopped && !isError ? <Loader2 size={11} className="spin-inline" /> : null}
-          {trace.status.replace(/\.$/, "")}
-        </span>
-      </div>
-      <div className="agent-trace-grid">
-        <div className="agent-trace-row">
-          <span className="agent-trace-label">Type</span>
-          <span className="agent-trace-value">{trace.routeType}</span>
-        </div>
-        <div className="agent-trace-row">
-          <span className="agent-trace-label">Reason</span>
-          <span className="agent-trace-value">{trace.reason}</span>
-        </div>
-      </div>
-      <details className="agent-trace-tools" open={trace.tools.length > 0 && !isComplete}>
-        <summary>
-          <ListChecks size={13} />
-          <span>Tools used</span>
-          <span className="agent-trace-count">{trace.tools.length}</span>
-        </summary>
-        <div className="agent-trace-tool-list">
-          {trace.tools.length > 0 ? trace.tools.map((tool, index) => (
-            <div className="agent-trace-tool" key={`${tool}-${index}`}>
-              <Check size={11} />
-              <span>{tool}</span>
-            </div>
-          )) : (
-            <div className="agent-trace-tool muted">
-              <AlertCircle size={11} />
-              <span>Waiting for first tool...</span>
-            </div>
-          )}
-        </div>
-      </details>
-      {showFinal && trace.finalText && (
-        <div className="agent-trace-final">
-          <MarkdownMessage text={trace.finalText} />
-        </div>
-      )}
-    </div>
-  );
-}
-
-
-function ParsedActionsView({
-  parsed,
-  applied,
-  autoApplying,
-  onApply,
-  onReject,
-}: {
-  parsed: ParsedResponse;
-  applied?: boolean;
-  autoApplying?: boolean;
-  onApply: () => void;
-  onReject?: () => void;
-}) {
-  if (!hasParsedActions(parsed)) return null;
-
-  return (
-    <div className="chat-changes">
-      {parsed.fileChanges.map((fc, j) => (
-        <details key={`file-${j}`} className="chat-file-preview">
-          <summary>
-            <span className={`change-item file-change ${fc.isNew ? "new" : "edit"}`}>
-              {fc.isNew ? "+ NEW" : "~ EDIT"}
-            </span>
-            <span className="chat-file-preview-path">{fc.path}</span>
-            <span className="chat-file-preview-label">View code</span>
-          </summary>
-          <pre className="chat-file-code-scroll"><code>{fc.content}</code></pre>
-        </details>
-      ))}
-      {parsed.editOperations.map((edit, j) => (
-        <details key={`edit-${j}`} className="chat-file-preview">
-          <summary>
-            <span className="change-item file-change edit">~ PATCH</span>
-            <span className="chat-file-preview-path">{edit.path}</span>
-            <span className="chat-file-preview-label">View patch</span>
-          </summary>
-          <pre className="chat-file-code-scroll"><code>{edit.searchReplace.map((pair, idx) => (
-            `# Change ${idx + 1}\n<<<SEARCH\n${pair.search}\n>>>REPLACE\n${pair.replace}`
-          )).join("\n\n")}</code></pre>
-        </details>
-      ))}
-      {parsed.deletions.map((d, j) => (
-        <div key={`delete-${j}`} className="change-item deletion">x DEL: {d}</div>
-      ))}
-      {parsed.commands.map((c, j) => (
-        <div key={`cmd-${j}`} className="change-item command">$ {c}</div>
-      ))}
-      {!applied ? (
-        autoApplying ? (
-          <div className="applied-badge auto-applying"><Loader2 size={14} className="spin-inline" /> Auto-applying...</div>
-        ) : (
-          <div className="apply-actions">
-            <button className="apply-btn" onClick={onApply}>
-              <Check size={14} /> {getActionLabel(parsed)}
-            </button>
-            {onReject && <button className="apply-btn reject" onClick={onReject}>Reject</button>}
-          </div>
-        )
-      ) : (
-        <div className="applied-badge"><Check size={14} /> Applied</div>
-      )}
-    </div>
-  );
-}
+// ParsedActionsView extracted to ./chat/ParsedActionsView.tsx
 
 interface Props {
   config: AppConfig;
@@ -318,55 +159,19 @@ interface Props {
   onForcePromptConsumed?: () => void;
 }
 
-const AGENT_MODES: Array<{
-  id: AgentMode;
-  label: string;
-  icon: ElementType;
-  placeholder: string;
-  instruction: string;
-}> = [
-  {
-    id: "chat",
-    label: "Chat",
-    icon: MessageCircle,
-    placeholder: "Describe the change you want...",
-    instruction:
-      "Mode: Chat. You are Punam, an AI coding assistant. Respond to the user's request appropriately:\n" +
-      "- If they ask a question, explain clearly and concisely.\n" +
-      "- If they ask for a code change, fix, or refactor, produce FILE blocks using the required format so the IDE can show a diff preview.\n" +
-      "- If they ask to run, start, execute, or open something, produce CMD blocks. On Windows, CMD blocks execute in PowerShell, so use PowerShell syntax.\n" +
-      "- If they ask to open a standalone HTML file in the browser on Windows, produce a CMD block like ===CMD: start index.html===.\n" +
-      "- Keep responses focused and practical. Show code changes when asked, explain when asked, run commands when asked.",
-  },
-  {
-    id: "agent",
-    label: "Agent",
-    icon: Zap,
-    placeholder: "Describe any task — I'll plan and execute it autonomously...",
-    instruction:
-      "Mode: Agent. You are an autonomous coding agent. Plan step-by-step, then execute: create/edit/delete files, run commands, and iterate until the task is complete. Be thorough and precise.\n" +
-      "Command execution environment: CMD blocks run in PowerShell on Windows. Commands execute independently from the project root; working directory changes do not persist between CMD blocks. If a command must run in a subfolder, use Set-Location in the same command, such as `Set-Location src; npm run build`. Use PowerShell-native commands such as Get-ChildItem, Get-Content, Select-String, Test-Path, and npm/cargo directly. Do not use Unix-only helpers like head, grep, sed, awk, cat, or ls -la unless the user explicitly asks for a Unix shell.",
-  },
-];
-
-const MODE_LABELS = Object.fromEntries(
-  AGENT_MODES.map((mode) => [mode.id, mode.label])
-) as Record<AgentMode, string>;
-
-const hasUsableProvider = (provider: AIProviderConfig) =>
-  provider.models.some((model) => model.enabled && model.id) &&
-  (Boolean(provider.apiKey) || /ollama/i.test(provider.name) || /localhost:11434/i.test(provider.baseUrl || ""));
-
-function recordResponseUsage(metrics?: ResponseMetrics) {
-  if (!metrics || metrics.status !== "success") return;
-  recordUsage(
-    metrics.provider,
-    metrics.model,
-    metrics.promptTokens || 0,
-    metrics.responseTokens || 0,
-    metrics.estimatedCostInr
-  );
+// ── Unified Stream Callbacks Interface ────────────────────────────────────────
+// Single internal interface for all streaming paths. Provider-agnostic — both
+// Rust IPC and browser-fetch fallback funnel through these three callbacks.
+export interface UnifiedStreamCallbacks {
+  onStreamToken: (token: string, streamId: string) => void;
+  onStreamComplete: (streamId: string, fullText: string, usage?: ResponseMetrics) => void;
+  onStreamError: (streamId: string, error: string) => void;
 }
+
+// AGENT_MODES + MODE_LABELS imported from ./chat/constants
+
+// hasUsableProvider + recordResponseUsage imported from ./chat/types
+const hasUsableProvider = hasUsableProviderFn;
 
 export default function AiChat({
   config,
@@ -407,6 +212,42 @@ export default function AiChat({
   const [agentActivityText, setAgentActivityText] = useState("");
   const [sessionTokens, setSessionTokens] = useState<{ totalIn: number; totalOut: number; totalCostInr: number; requestCount: number }>({ totalIn: 0, totalOut: 0, totalCostInr: 0, requestCount: 0 });
 
+  // --- Reasoning Panel Store Selectors ---
+  const reasoningChunks = useBackgroundAgentStore((s) => s.reasoningChunks);
+  const reasoningMode = useBackgroundAgentStore((s) => s.reasoningMode);
+  const reasoningVisible = useBackgroundAgentStore((s) => s.reasoningVisible);
+  const phaseTimings = useBackgroundAgentStore((s) => s.phaseTimings);
+  const setReasoningMode = useBackgroundAgentStore((s) => s.setReasoningMode);
+  const setReasoningVisible = useBackgroundAgentStore((s) => s.setReasoningVisible);
+
+  // --- Reasoning Panel: code reference click handler ---
+  const handleReasoningRefClick = useCallback((ref: CodeReference) => {
+    // editorStore doesn't have openFileAtLine — use openTab as a fallback to navigate
+    const store = useEditorStore.getState();
+    const tab = store.tabs.find((t) => t.path === ref.filePath);
+    if (tab) {
+      store.setActiveTab(tab.id);
+      store.setCursorPosition(ref.startLine, 1);
+    } else {
+      // No matching tab open — log for debugging
+      console.log("[ReasoningPanel] Reference clicked:", ref.filePath, ref.startLine);
+    }
+  }, []);
+
+  // --- Clarification Protocol State ---
+  const [clarificationReport, setClarificationReport] = useState<AmbiguityReport | null>(null);
+  const clarificationResolverRef = useRef<((answer: string) => void) | null>(null);
+
+  // --- Budget Enforcement State ---
+  const [taskBudget, setTaskBudget] = useState<TokenBudget | undefined>(undefined);
+  const [budgetWarning, setBudgetWarning] = useState<{ status: BudgetStatus; consumed: BudgetConsumed; remaining: BudgetRemaining } | null>(null);
+  const [taskCostSummary, setTaskCostSummary] = useState<BudgetConsumed | null>(null);
+  const budgetWarningResolverRef = useRef<((decision: "continue" | "stop") => void) | null>(null);
+
+  // --- Context Optimization State ---
+  const [enableContextOptimization, setEnableContextOptimization] = useState(true);
+  const [contextBudgetInfo, setContextBudgetInfo] = useState<ContextBudgetInfo | null>(null);
+
   // --- Extracted Hooks ---
   const {
     sessions,
@@ -416,6 +257,7 @@ export default function AiChat({
     handleNewSession,
     handleSwitchSession,
     handleDeleteSession,
+    handleForkSession,
   } = useChatSessions({ projectPath, messages, setMessages });
 
   // --- Edit Preview (per-hunk accept/reject in chat mode) ---
@@ -436,6 +278,7 @@ export default function AiChat({
     fileInputRef,
     handleFileAttach,
     handleFileInputChange,
+    handlePaste,
     removeAttachment,
     handleDragOver,
     handleDragLeave,
@@ -453,7 +296,157 @@ export default function AiChat({
   const activeStreamRef = useRef<{ cancel: () => void; streamId: string; kind?: "chat" | "agent_stream" | "tool_loop" } | null>(null);
   const agentRunIdRef = useRef(0);
   const agentCancelledRef = useRef(false);
+
+  // ── RAF Token Buffer (streaming architecture fix) ──────────────────────────
+  // Accumulates incoming tokens without triggering re-renders. Flushed to React
+  // state at most once per animation frame (~60 fps cap).
+  const tokenBufferRef = useRef<string>('');
+  const rafHandleRef = useRef<number | null>(null);
+  const activeStreamIdRef = useRef<string | null>(null);
+  // Block parser ref — uses factory pattern for per-stream instance isolation.
+  // Each new stream gets a fresh BlockParser instance via createBlockParser().
+  const blockParserRef = useRef<BlockParser>(createBlockParser());
+
+  // State target for RAF-flushed streaming blocks (max ~60 updates/sec)
+  const [streamingBlocks, setStreamingBlocks] = useState<BlockParseResult | null>(null);
+
+  /**
+   * Schedule a flush to React state at most once per animation frame.
+   * Reads from tokenBufferRef, clears it, passes accumulated text to the
+   * block parser, and updates streamingBlocks state.
+   */
+  const scheduleFlush = useCallback(() => {
+    if (rafHandleRef.current !== null) return; // already scheduled
+    rafHandleRef.current = requestAnimationFrame(() => {
+      rafHandleRef.current = null;
+      const buffered = tokenBufferRef.current;
+      if (!buffered) return;
+      tokenBufferRef.current = '';
+      const parseResult = blockParserRef.current.appendStreamText(buffered);
+      setStreamingBlocks(parseResult);
+    });
+  }, []);
+
+  /**
+   * Cancel any pending RAF flush. Used on unmount, stream error, and new stream start.
+   */
+  const cancelPendingFlush = useCallback(() => {
+    if (rafHandleRef.current !== null) {
+      cancelAnimationFrame(rafHandleRef.current);
+      rafHandleRef.current = null;
+    }
+  }, []);
+
+  /**
+   * Final synchronous flush on stream completion.
+   * Cancels any pending RAF, then immediately flushes remaining buffer.
+   */
+  const flushBufferSync = useCallback(() => {
+    cancelPendingFlush();
+    const buffered = tokenBufferRef.current;
+    if (!buffered) return;
+    tokenBufferRef.current = '';
+    const parseResult = blockParserRef.current.appendStreamText(buffered);
+    setStreamingBlocks(parseResult);
+  }, [cancelPendingFlush]);
+
+  /**
+   * Reset buffer state for a new stream. Cancels pending RAF, clears the token
+   * buffer, and resets streamingBlocks to null.
+   */
+  const resetTokenBuffer = useCallback(() => {
+    cancelPendingFlush();
+    tokenBufferRef.current = '';
+    setStreamingBlocks(null);
+  }, [cancelPendingFlush]);
+
+  // Cleanup: cancel pending RAF on component unmount
+  useEffect(() => {
+    return () => {
+      cancelPendingFlush();
+    };
+  }, [cancelPendingFlush]);
+
+  // ── Unified Token Handler (streaming architecture fix) ──────────────────────
+  // Single internal interface through which ALL streaming paths funnel tokens.
+  // Both the Rust IPC listener and browser-fetch fallback wire into these same
+  // three callbacks. The UI layer is provider-blind.
+
+  /**
+   * Handles an incoming token from any streaming source.
+   * Guards against stale streamId, accumulates in buffer, schedules RAF flush.
+   */
+  const onStreamToken = useCallback((token: string, streamId: string) => {
+    if (streamId !== activeStreamIdRef.current) return;
+    tokenBufferRef.current += token;
+    scheduleFlush();
+  }, [scheduleFlush]);
+
+  /**
+   * Handles stream completion from any streaming source.
+   * Cancels pending RAF, performs synchronous flush, then finalizes the message.
+   */
+  const onStreamComplete = useCallback((streamId: string, fullText: string, usage?: ResponseMetrics) => {
+    if (streamId !== activeStreamIdRef.current) return;
+    flushBufferSync();
+    // Finalize: parse full text into blocks and mark message complete
+    resetParseState();
+    const finalBlocks = parseStreamBlocks(fullText).completed;
+    setMessages((prev) => prev.map((m) => {
+      if ((m as any).streamId !== streamId) return m;
+      const { streamId: _sid, streamProgress: _sp, ...rest } = m as any;
+      const blocks = finalBlocks.length > 0 ? finalBlocks : ((m as any).blocks || []);
+      return {
+        ...rest,
+        content: fullText,
+        blocks,
+        isComplete: true,
+        applied: false,
+        metrics: usage,
+      };
+    }));
+    activeStreamIdRef.current = null;
+  }, [flushBufferSync]);
+
+  /**
+   * Handles stream error from any streaming source.
+   * Cancels pending RAF, discards buffer, surfaces error in chat UI, clears active stream.
+   * Creates a fresh parser instance so no corrupted state carries into the next stream.
+   */
+  const onStreamError = useCallback((streamId: string, error: string) => {
+    if (streamId !== activeStreamIdRef.current) return;
+    cancelPendingFlush();
+    tokenBufferRef.current = '';
+    activeStreamIdRef.current = null;
+    // Release current parser instance and create fresh one for next stream
+    blockParserRef.current = createBlockParser();
+    // Surface error as a message in the chat UI
+    setMessages((prev) => prev.map((m) => {
+      if ((m as any).streamId !== streamId) return m;
+      const { streamId: _sid, streamProgress: _sp, ...rest } = m as any;
+      return {
+        ...rest,
+        content: `⚠️ ${error}`,
+        isComplete: true,
+      };
+    }));
+  }, [cancelPendingFlush]);
+
+  // --- Approval Gate State ---
+  const [pendingApprovalPatch, setPendingApprovalPatch] = useState<PatchProposalForUI | null>(null);
   const [_streamProgress, _setStreamProgress] = useState<{ tokens: number; startedAt: number } | null>(null);
+
+  // ── Memory safety: cap messages at 200 to prevent unbounded growth in long sessions ──
+  const MAX_MESSAGES = 200;
+  const msgCapRef = useRef(false);
+  useEffect(() => {
+    if (msgCapRef.current) { msgCapRef.current = false; return; }
+    if (messages.length > MAX_MESSAGES) {
+      msgCapRef.current = true;
+      // Keep first system message + last MAX_MESSAGES entries
+      setMessages(prev => prev.slice(-MAX_MESSAGES));
+    }
+  }, [messages.length]);
 
   // --- Auto-send forcePrompt from right-click context menu ---
   useEffect(() => {
@@ -470,33 +463,196 @@ export default function AiChat({
   }, [forcePrompt?.text, forcePrompt?.mode]);
 
   // --- Auto-index project for TF-IDF search ---
+  // Deferred by 2s to avoid racing with readDirectory and the Rust indexing pipeline.
+  // The UI needs those first seconds to render the file tree and become interactive.
   useEffect(() => {
     if (!projectPath || !files.length) return;
-    if (!isIndexed()) {
-      indexProject(projectPath, files).catch(() => {});
-    }
+    if (isIndexed()) return;
+
+    const timer = setTimeout(() => {
+      if (!isIndexed()) {
+        indexProject(projectPath, files).catch(() => {});
+      }
+    }, 2000);
+
+    return () => clearTimeout(timer);
   }, [projectPath, files]);
 
-  // Compute session totals from messages with metrics
+  // --- File-save event listener: invalidate repo map cache within 2 seconds (Requirement 1.6) ---
   useEffect(() => {
-    let totalIn = 0, totalOut = 0, totalCostInr = 0, requestCount = 0;
-    for (const msg of messages) {
-      if (msg.metrics) {
-        totalIn += msg.metrics.promptTokens || 0;
-        totalOut += msg.metrics.responseTokens || 0;
-        totalCostInr += msg.metrics.estimatedCostInr || 0;
-        requestCount++;
+    if (!projectPath) return;
+
+    let debounceTimer: ReturnType<typeof setTimeout> | null = null;
+    let unlistenFn: (() => void) | null = null;
+
+    const setupListener = async () => {
+      try {
+        const { listen } = await import("@tauri-apps/api/event");
+        const unlisten = await listen<{ path: string }>("file-changed", () => {
+          // Debounce: invalidate repo map cache within 2 seconds of file save
+          if (debounceTimer) clearTimeout(debounceTimer);
+          debounceTimer = setTimeout(() => {
+            useAIStore.getState().invalidateRepoMap();
+          }, 2000);
+        });
+        unlistenFn = unlisten;
+      } catch {
+        // Tauri event not available — no-op
       }
-      if (msg.multiResponses) {
-        for (const resp of msg.multiResponses) {
-          totalIn += resp.metrics.promptTokens || 0;
-          totalOut += resp.metrics.responseTokens || 0;
-          totalCostInr += resp.metrics.estimatedCostInr || 0;
+    };
+
+    setupListener();
+
+    return () => {
+      if (debounceTimer) clearTimeout(debounceTimer);
+      if (unlistenFn) unlistenFn();
+    };
+  }, [projectPath]);
+
+  // --- Approval Gate event listener: show overlay when agent requires approval ---
+  useEffect(() => {
+    let unlistenFn: (() => void) | null = null;
+
+    const setupApprovalListener = async () => {
+      try {
+        const { listen } = await import("@tauri-apps/api/event");
+        const unlisten = await listen<PatchProposalForUI>("agent:approval_required", (event) => {
+          const payload = event.payload as any;
+          // Build a PatchProposalForUI from the event payload
+          const proposal: PatchProposalForUI = {
+            id: payload.patchId,
+            unifiedDiff: payload.diff,
+            filesAffected: payload.filesAffected || [],
+            linesChanged: payload.linesChanged || 0,
+            agentReasoning: payload.agentReasoning || "Agent proposed this edit.",
+            hunks: payload.hunks || [],
+            createdAt: Date.now(),
+          };
+          setPendingApprovalPatch(proposal);
+        });
+        unlistenFn = unlisten;
+      } catch {
+        // Tauri event not available — no-op
+      }
+    };
+
+    setupApprovalListener();
+
+    return () => {
+      if (unlistenFn) unlistenFn();
+    };
+  }, []);
+
+  // --- Apply from Chat code blocks (APPLY_CODE_EVENT listener) ---
+  // When user clicks "Apply to File" on a code block in the chat, this writes
+  // the code to the currently active file via the diff preview system.
+  useEffect(() => {
+    const handleApplyCode = (e: Event) => {
+      const { code } = (e as CustomEvent<{ code: string; language: string }>).detail;
+      if (!code || !activeFilePath || !onApplyChanges) return;
+
+      // Build a minimal ParsedResponse to go through the existing diff preview flow
+      const relativePath = activeFilePath.replace(projectPath, "").replace(/^[\\/]/, "").replace(/\\/g, "/");
+      const parsed = {
+        explanation: "Apply code from chat",
+        fileChanges: [{ path: relativePath, content: code, isNew: false }],
+        editOperations: [],
+        deletions: [],
+        commands: [],
+      };
+      onApplyChanges(parsed);
+    };
+
+    window.addEventListener(APPLY_CODE_EVENT, handleApplyCode);
+    return () => window.removeEventListener(APPLY_CODE_EVENT, handleApplyCode);
+  }, [activeFilePath, projectPath, onApplyChanges]);
+
+  // --- LLM Stream Usage event listener: consume token usage from Rust backend ---
+  // Listens for "llm-stream-usage" IPC events, guards against stale stream_id,
+  // and updates the corresponding message's metrics with input/output token counts.
+  // The existing session totals useEffect (below) auto-recalculates within 300ms.
+  useEffect(() => {
+    let unlistenFn: (() => void) | null = null;
+
+    const setupUsageListener = async () => {
+      try {
+        const { listen } = await import("@tauri-apps/api/event");
+        const unlisten = await listen<{ stream_id: string; input_tokens?: number; output_tokens?: number }>("llm-stream-usage", (event) => {
+          const { stream_id, input_tokens, output_tokens } = event.payload;
+
+          // Guard: only process if matches active stream (discard stale events)
+          if (stream_id !== activeStreamIdRef.current) return;
+
+          // Update the last assistant message's metrics with reported token counts.
+          // If stream completes without usage data, this simply never fires and
+          // previously estimated counts are retained (Requirement 9.5).
+          setMessages(prev => {
+            const updated = [...prev];
+            // Find the last assistant message (the one being streamed)
+            for (let i = updated.length - 1; i >= 0; i--) {
+              if (updated[i].role === "assistant") {
+                const existing = updated[i].metrics;
+                updated[i] = {
+                  ...updated[i],
+                  metrics: {
+                    ...(existing || { provider: "", model: "", durationMs: 0, status: "success" as const }),
+                    promptTokens: input_tokens ?? existing?.promptTokens,
+                    responseTokens: output_tokens ?? existing?.responseTokens,
+                    totalTokens: (input_tokens ?? existing?.promptTokens ?? 0) + (output_tokens ?? existing?.responseTokens ?? 0),
+                  },
+                };
+                break;
+              }
+            }
+            return updated;
+          });
+        });
+        unlistenFn = unlisten;
+      } catch {
+        // Tauri event not available — no-op
+      }
+    };
+
+    setupUsageListener();
+
+    return () => {
+      if (unlistenFn) unlistenFn();
+    };
+  }, []);
+
+  // Compute session totals from messages with metrics (debounced)
+  const tokenComputeTimerRef = useRef<number | null>(null);
+  useEffect(() => {
+    if (tokenComputeTimerRef.current !== null) {
+      window.clearTimeout(tokenComputeTimerRef.current);
+    }
+    tokenComputeTimerRef.current = window.setTimeout(() => {
+      tokenComputeTimerRef.current = null;
+      let totalIn = 0, totalOut = 0, totalCostInr = 0, requestCount = 0;
+      for (const msg of messages) {
+        if (msg.metrics) {
+          totalIn += msg.metrics.promptTokens || 0;
+          totalOut += msg.metrics.responseTokens || 0;
+          totalCostInr += msg.metrics.estimatedCostInr || 0;
           requestCount++;
         }
+        if (msg.multiResponses) {
+          for (const resp of msg.multiResponses) {
+            totalIn += resp.metrics.promptTokens || 0;
+            totalOut += resp.metrics.responseTokens || 0;
+            totalCostInr += resp.metrics.estimatedCostInr || 0;
+            requestCount++;
+          }
+        }
       }
-    }
-    setSessionTokens({ totalIn, totalOut, totalCostInr, requestCount });
+      setSessionTokens({ totalIn, totalOut, totalCostInr, requestCount });
+    }, 300);
+
+    return () => {
+      if (tokenComputeTimerRef.current !== null) {
+        window.clearTimeout(tokenComputeTimerRef.current);
+      }
+    };
   }, [messages]);
   const chatMessagesRef = useRef<HTMLDivElement>(null);
   const isInitialLoad = useRef(true);
@@ -504,69 +660,105 @@ export default function AiChat({
   // --- Agent Task State ---
   const [agentTask, setAgentTask] = useState<AgentTaskState | null>(null);
 
-  // --- Chat Export ---
+  // --- Image Lightbox State ---
+  const [lightboxSrc, setLightboxSrc] = useState<string | null>(null);
+
+  // --- Clarification Protocol Handlers ---
+  const handleClarificationNeeded = useCallback((report: AmbiguityReport): Promise<string> => {
+    setClarificationReport(report);
+    return new Promise<string>((resolve) => {
+      clarificationResolverRef.current = resolve;
+    });
+  }, []);
+
+  const handleClarificationAnswer = useCallback((answer: string) => {
+    setClarificationReport(null);
+    clarificationResolverRef.current?.(answer);
+    clarificationResolverRef.current = null;
+  }, []);
+
+  const handleClarificationSkip = useCallback(() => {
+    setClarificationReport(null);
+    clarificationResolverRef.current?.("");
+    clarificationResolverRef.current = null;
+  }, []);
+
+  // --- Budget Warning Handlers ---
+  const handleBudgetWarning = useCallback(async (
+    status: BudgetStatus,
+    consumed: BudgetConsumed,
+    remaining: BudgetRemaining,
+  ): Promise<"continue" | "stop"> => {
+    setBudgetWarning({ status, consumed, remaining });
+    return new Promise<"continue" | "stop">((resolve) => {
+      budgetWarningResolverRef.current = resolve;
+    });
+  }, []);
+
+  const handleBudgetDecision = useCallback((decision: "continue" | "stop") => {
+    setBudgetWarning(null);
+    budgetWarningResolverRef.current?.(decision);
+    budgetWarningResolverRef.current = null;
+  }, []);
+
+  // handleExportChat â€” delegates to extracted service
   const handleExportChat = async () => {
-    if (messages.length === 0) return;
+    const { exportChatToMarkdown } = await import("./chat/services/exportChat");
     const activeSession = sessions.find((s) => s.id === activeSessionId);
     const title = activeSession?.title || "Punam Chat";
-    const date = new Date().toISOString().split("T")[0];
-
-    let markdown = `# ${title}\n\n`;
-    markdown += `*Exported from PunamIDE on ${date}*\n\n---\n\n`;
-
-    for (const msg of messages) {
-      const role = msg.role === "user" ? "**You**" : "**Punam**";
-      const modeTag = msg.mode ? ` _(${msg.mode} mode)_` : "";
-      markdown += `### ${role}${modeTag}\n\n`;
-
-      if (msg.parsed?.explanation) {
-        markdown += `${msg.parsed.explanation}\n\n`;
-        if (msg.parsed.fileChanges.length > 0) {
-          markdown += `**Files changed:**\n`;
-          for (const fc of msg.parsed.fileChanges) {
-            markdown += `- ${fc.isNew ? "Created" : "Modified"}: \`${fc.path}\`\n`;
-          }
-          markdown += "\n";
-        }
-      } else {
-        markdown += `${msg.content}\n\n`;
-      }
-
-      if (msg.attachments && msg.attachments.length > 0) {
-        markdown += `*Attachments: ${msg.attachments.map((a) => a.name).join(", ")}*\n\n`;
-      }
-
-      markdown += "---\n\n";
-    }
-
-    try {
-      const { save } = await import("@tauri-apps/plugin-dialog");
-      const { writeTextFile } = await import("@tauri-apps/plugin-fs");
-      const filePath = await save({
-        defaultPath: `${title.replace(/[^a-zA-Z0-9]/g, "_")}_${date}.md`,
-        filters: [{ name: "Markdown", extensions: ["md"] }],
-      });
-      if (filePath) {
-        await writeTextFile(filePath, markdown);
-        setMessages((prev) => [...prev, { role: "assistant", content: `✅ Chat exported to \`${filePath}\`` }]);
-      }
-    } catch {
-      try {
-        await navigator.clipboard.writeText(markdown);
-        setMessages((prev) => [...prev, { role: "assistant", content: "✅ Chat copied to clipboard (save dialog unavailable)." }]);
-      } catch {
-        setMessages((prev) => [...prev, { role: "assistant", content: "⚠️ Could not export chat. Try again." }]);
-      }
+    const result = await exportChatToMarkdown(messages, title);
+    if (result.message) {
+      setMessages((prev) => [...prev, { role: "assistant", content: result.message }]);
     }
   };
+  // ── Scroll Controller (decoupled from content changes) ──────────────────────
+  // Auto-scroll triggers ONLY on messages.length change, not on token content.
+  // User scroll-up is detected via onScroll handler (threshold: >100px disables,
+  // ≤50px re-enables). Uses scrollIntoView({ behavior: 'auto' }) for instant scroll.
+  const scrollRafRef = useRef<number | null>(null);
+  const isUserScrolledUpRef = useRef<boolean>(false);
+  const messagesEndRef = useRef<HTMLDivElement>(null);
 
-  useLayoutEffect(() => {
+  // Schedule a scroll-to-bottom within a single RAF callback, coalescing multiple triggers
+  const scrollToBottom = useCallback(() => {
+    if (isUserScrolledUpRef.current) return; // respect user reading position
+    if (scrollRafRef.current !== null) return; // already scheduled
+    scrollRafRef.current = requestAnimationFrame(() => {
+      scrollRafRef.current = null;
+      if (!isUserScrolledUpRef.current) {
+        messagesEndRef.current?.scrollIntoView({ behavior: 'auto' });
+      }
+    });
+  }, []);
+
+  // Cancel any pending scroll RAF (used on unmount or stream change)
+  const cancelPendingScroll = useCallback(() => {
+    if (scrollRafRef.current !== null) {
+      cancelAnimationFrame(scrollRafRef.current);
+      scrollRafRef.current = null;
+    }
+  }, []);
+
+  // Detect user scroll position to enable/disable auto-scroll
+  const handleChatScroll = useCallback(() => {
+    const container = chatMessagesRef.current;
+    if (!container) return;
+    const distanceFromBottom = container.scrollHeight - container.scrollTop - container.clientHeight;
+    if (distanceFromBottom > 100) {
+      // User scrolled up — disable auto-scroll
+      isUserScrolledUpRef.current = true;
+    } else if (distanceFromBottom <= 50) {
+      // User scrolled back near bottom — re-enable auto-scroll
+      isUserScrolledUpRef.current = false;
+    }
+  }, []);
+
+  // Auto-scroll on messages.length change only (not on token content)
+  useEffect(() => {
     const container = chatMessagesRef.current;
     if (!container) return;
 
     if (isInitialLoad.current) {
-      // Skip scroll entirely during initial session hydration.
-      // Only flip the flag once we actually have messages loaded.
       if (messages.length > 0) {
         container.scrollTop = container.scrollHeight;
         isInitialLoad.current = false;
@@ -574,10 +766,21 @@ export default function AiChat({
       return;
     }
 
-    // Production streams can update at display-frame speed. Directly pinning
-    // this scroller avoids overlapping animations and ancestor layout jumps.
-    container.scrollTop = container.scrollHeight;
-  }, [messages, loading]);
+    if (!isUserScrolledUpRef.current) {
+      messagesEndRef.current?.scrollIntoView({ behavior: 'auto' });
+    }
+
+    return () => {
+      cancelPendingScroll();
+    };
+  }, [messages.length, cancelPendingScroll]);
+
+  // Cleanup: cancel pending scroll RAF on unmount or active stream change
+  useEffect(() => {
+    return () => {
+      cancelPendingScroll();
+    };
+  }, [activeStreamIdRef.current, cancelPendingScroll]);
 
   useEffect(() => {
     if (!checkResult) return;
@@ -604,60 +807,9 @@ export default function AiChat({
     });
   }, [checkResult]);
 
-  const summarizeCommandOutput = (output: string, maxLines = 12) => {
-    return output
-      .split(/\r?\n/)
-      .map((line) => line.trimEnd())
-      .filter((line) =>
-        line.trim() &&
-        !/^Punam AI -> Running command$/i.test(line.trim()) &&
-        !/^PS>\s*/.test(line.trim()) &&
-        !/^Process finished successfully/i.test(line.trim()) &&
-        !/^Process exited with code/i.test(line.trim())
-      )
-      .slice(-maxLines)
-      .join("\n");
-  };
+  // getIdentityResponse imported from ./chat/context/identityResponses
 
-  const getIdentityResponse = (text: string): string | null => {
-    const lower = text.toLowerCase().replace(/[?!.,]/g, "").trim();
-
-    // Exact-match greetings (only fire if the ENTIRE message is just a greeting)
-    const exactGreetings = ["hello", "hi", "hey", "hey punam", "hi punam", "hello punam"];
-    const isExactGreeting = exactGreetings.includes(lower);
-
-    // Phrase-match identity questions (can appear within longer text)
-    const identityPhrases = [
-      "who are you", "what are you", "whats your name", "what is your name",
-      "your name", "introduce yourself", "tell me about yourself",
-      "who made you", "who created you", "who built you", "who developed you",
-      "who is your creator", "who is your developer", "who designed you",
-      "are you ai", "are you a bot", "are you human",
-    ];
-
-    // "what can you do" only if it's the main intent (short message)
-    const isCapabilityQuestion = (lower.includes("what can you do") || lower.includes("what do you do") || lower.includes("how do you work")) && lower.length < 40;
-
-    const isIdentityQuestion = identityPhrases.some((trigger) => lower.includes(trigger));
-
-    if (!isExactGreeting && !isIdentityQuestion && !isCapabilityQuestion) return null;
-
-    if (lower.includes("who made") || lower.includes("who created") || lower.includes("who built") || lower.includes("who developed") || lower.includes("creator") || lower.includes("developer") || lower.includes("designed")) {
-      return "I was created and developed by **Amritanshu Amar**. He designed me to be an intelligent, AI-powered coding assistant that helps developers write, edit, and manage code through natural language — all from within a sleek desktop IDE.";
-    }
-
-    if (lower.includes("what can you do") || lower.includes("what do you do") || lower.includes("how do you work")) {
-      return "I'm **Punam**, your AI-powered coding assistant! I was created by **Amritanshu Amar**.\n\nHere's what I can do:\n\n• **Edit & create files** — describe what you want in plain English and I'll generate the code changes\n• **Understand your project** — I can see your file tree and understand the structure\n• **Multi-language support** — Python, JavaScript, TypeScript, Rust, Go, Java, and many more\n• **Run commands** — I can suggest terminal commands to run\n• **Debug & fix** — describe a bug and I'll find and fix it\n\nJust type what you need!";
-    }
-
-    if (isExactGreeting) {
-      return "Hey there! I'm **Punam**, your AI coding assistant created by **Amritanshu Amar**. I'm here to help you write, edit, and manage your code. Just tell me what you need — describe it in plain English and I'll take care of the rest!";
-    }
-
-    return "Hi! I'm **Punam** — an AI-powered coding assistant built right into this IDE. I was created and developed by **Amritanshu Amar**.\n\nI help you write, modify, and debug code using natural language. Just describe what you want — like \"add a login page\" or \"fix the error in main.py\" — and I'll generate the exact code changes, show you a preview, and apply them when you're ready.\n\nI support multiple AI providers (Google Gemini, OpenAI, OpenRouter, Groq, Mistral AI, Ollama) and work with any programming language. Think of me as your personal coding partner!";
-  };
-
-  const collectExistingFiles = () => {
+    const collectExistingFiles = () => {
     const existingFiles = new Set<string>();
     const collectPaths = (entries: FileEntry[], prefix = "") => {
       for (const e of entries) {
@@ -722,209 +874,27 @@ export default function AiChat({
    * Priority order (highest to lowest): open tabs, @mentions, key files, @codebase/search hits, errors.
    * Files already loaded by mentionResolver are tracked to avoid re-reads.
    */
+  // buildProjectContext â€” delegates to extracted module
   const buildProjectContext = async (userPrompt = "", alreadyLoadedResolved?: Set<string>) => {
-    const existingFiles = collectExistingFiles();
-    const contextFiles = new Map<string, string>();
-    const queued = new Set<string>(); // paths queued for loading (avoids duplicate reads)
-    const resolvedSet = alreadyLoadedResolved || new Set<string>();
-
-    // Queue a file for loading without checking disk yet (batched later)
-    const queueFile = (relativePath: string) => {
-      if (!relativePath || relativePath === "none") return;
-      if (contextFiles.has(relativePath)) return;
-      if (resolvedSet.has(relativePath)) return;
-      if (queued.has(relativePath)) return;
-      queued.add(relativePath);
-    };
-
-    // 1. Open tabs (in-memory, highest priority, don't override disk content)
-    for (const tab of openTabs) {
-      const rel = getRelativePath(projectPath, tab.path);
-      if (!contextFiles.has(rel)) {
-        contextFiles.set(rel, tab.content);
-      }
-    }
-
-    // 2. @file mentions from the NEW resolver (already resolved before this call)
-    // The mention context blocks were appended to the prompt; we don't need to re-read.
-    // But any remaining mentions in userPrompt not caught by @ notation should still load.
-    for (const mentionedPath of getMentionedFilePaths(userPrompt, existingFiles)) {
-      if (contextFiles.has(mentionedPath)) continue;
-      if (resolvedSet.has(mentionedPath)) {
-        resolvedSet.delete(mentionedPath);
-        continue;
-      }
-      queueFile(mentionedPath);
-    }
-
-    // 3. @folder mentions
-    for (const folderFile of getMentionedFolderFiles(userPrompt, existingFiles)) {
-      if (contextFiles.has(folderFile)) continue;
-      queueFile(folderFile);
-    }
-
-    // 4. Key context files (package.json, tsconfig.json, etc.) — only if available
-    for (const keyFile of KEY_CONTEXT_FILES) {
-      if (!existingFiles.has(keyFile)) continue;
-      if (contextFiles.has(keyFile)) continue;
-      queueFile(keyFile);
-    }
-
-    // 5. Selected project files (multi-file refactoring)
-    for (const fp of selectedProjectFiles) {
-      if (contextFiles.has(fp)) continue;
-      queueFile(fp);
-    }
-
-    // 6. @codebase mention: TF-IDF hits or limited fallback
-    const hasCodebaseMention = /@codebase\b/i.test(userPrompt);
-    if (hasCodebaseMention) {
-      if (isIndexed()) {
-        const codebaseQuery = userPrompt.replace(/@codebase\b/i, "").trim();
-        const hits = searchCodebase(codebaseQuery || userPrompt, 5);
-        for (const hit of hits) {
-          if (contextFiles.has(hit.path)) continue;
-          queueFile(hit.path);
-        }
-      }
-      // Small fallback: load up to 10 more files if context is still sparse
-      if (contextFiles.size < 5) {
-        for (const fp of [...existingFiles].slice(0, 10)) {
-          if (contextFiles.has(fp)) continue;
-          if (queued.has(fp)) continue;
-          queueFile(fp);
-        }
-      }
-    }
-
-    // 7. Semantic search hits
-    const searchMatch = userPrompt.match(/(?:where|find|search|which file|who uses|grep|look for)\s+["`']?([^"`'\n]{3,40})["`']?/i);
-    if (searchMatch && projectPath) {
-      const searchQuery = searchMatch[1].trim();
-      try {
-        const results = await searchProject(searchQuery);
-        for (const result of results.slice(0, 3)) {
-          if (contextFiles.has(result.path)) continue;
-          queueFile(result.path);
-        }
-      } catch { /* ignore */ }
-    }
-
-    // 8. Error-referenced files
-    const errorContextText = [terminalOutput || "", proactiveError?.output || ""].filter(Boolean).join("\n");
-    for (const errorFile of getFilePathsFromText(errorContextText, existingFiles)) {
-      if (contextFiles.has(errorFile)) continue;
-      queueFile(errorFile);
-    }
-
-    // 9. Active file (always include)
-    if (activeFilePath) {
-      const relPath = getRelativePath(projectPath, activeFilePath);
-      if (!contextFiles.has(relPath)) {
-        queueFile(relPath);
-      }
-    }
-
-    // 10. Rust TF-IDF context enrichment — query the Rust backend for intelligent
-    //     file scoring (TF-IDF + dependency graph + git boost + open tab boost).
-    //     This adds highly-relevant files the heuristics above may have missed.
-    if (userPrompt.length > 3) {
-      const tabPaths = openTabs.map((t) => getRelativePath(projectPath, t.path));
-      const rustCtx = await fetchRustContext(userPrompt, tabPaths, 5).catch(() => null);
-      if (rustCtx && rustCtx.relevant_files.length > 0) {
-        for (const rf of rustCtx.relevant_files) {
-          if (!contextFiles.has(rf.path) && !queued.has(rf.path)) {
-            queueFile(rf.path);
-          }
-        }
-      }
-    }
-
-    // ═══ BATCH LOAD: read all queued files ═══
-    const queuedArr = [...queued];
-    const readPromises = queuedArr.map(async (relPath) => {
-      const fp = getProjectFilePath(projectPath, relPath);
-      // For active file, use the original path directly
-      const readPath = (relPath === getRelativePath(projectPath, activeFilePath || "")) && activeFilePath
-        ? activeFilePath
-        : fp;
-      const content = await readFile(readPath).catch(() => "");
-      return { path: relPath, content };
+    const result = await buildProjectContextExtracted({
+      userPrompt,
+      projectPath,
+      files,
+      openTabs,
+      activeFilePath,
+      selectedProjectFiles,
+      terminalOutput,
+      proactiveError,
+      agentMode,
+      projectNotes,
+      webSearchResults,
+      alreadyLoadedResolved,
     });
-
-    const results = await Promise.all(readPromises);
-    for (const { path: relPath, content } of results) {
-      if (content && !contextFiles.has(relPath)) {
-        contextFiles.set(relPath, content);
-      }
-    }
-
-    // ═══ BUILD OUTPUT ═══
-    let totalChars = 0;
-    const sections: string[] = [];
-    const attachedNames: string[] = [];
-
-    for (const [path, content] of contextFiles) {
-      if (totalChars >= MAX_TOTAL_CONTEXT_CHARS) break;
-      const remaining = MAX_TOTAL_CONTEXT_CHARS - totalChars;
-      const clipped = truncateContext(content, Math.min(MAX_CONTEXT_FILE_CHARS, remaining));
-      sections.push(`## ${path}\n\`\`\`\n${clipped}\n\`\`\``);
-      attachedNames.push(path);
-      totalChars += clipped.length;
-    }
-
-    setContextFiles(attachedNames);
-    setContextSummary(
-      attachedNames.length > 0
-        ? `Context attached: ${attachedNames.slice(0, 4).join(", ")}${attachedNames.length > 4 ? ` +${attachedNames.length - 4} more` : ""}`
-        : "Context attached: file tree only"
-    );
-
-    // Frameworks
-    const packageJson = contextFiles.get("package.json") || null;
-    const cargoToml = contextFiles.get("Cargo.toml") || contextFiles.get("src-tauri/Cargo.toml") || null;
-    const frameworks = detectFrameworks(packageJson, cargoToml);
-    const frameworkSection = frameworks.length > 0
-      ? `\n\n# Detected Frameworks\n${frameworks.join(", ")}`
-      : "";
-
-    // Project rules
-    let projectRulesSection = "";
-    for (const rulesFile of PROJECT_RULES_FILES) {
-      const rulesContent = await readFile(getProjectFilePath(projectPath, rulesFile)).catch(() => "");
-      if (rulesContent) {
-        projectRulesSection = `\n\n# Project Rules (from ${rulesFile})\nFollow these project-specific instructions:\n${rulesContent.slice(0, 3000)}`;
-        break;
-      }
-    }
-
-    // --- @git mention or fix/explain mode: inject git history ---
-    const needsGit = /@git\b/i.test(userPrompt) || agentMode === "agent";
-    let gitSection = "";
-    if (needsGit && projectPath) {
-      const activePaths = [...contextFiles.keys()].slice(0, 3);
-      gitSection = await buildGitContext(projectPath, activePaths, runTerminalCommand).catch(() => "");
-      if (gitSection) gitSection = `\n\n${gitSection}`;
-    }
-
-    // --- @web mention: inject cached web search results ---
-    let webSection = "";
-    if (webSearchResults) {
-      webSection = `\n\n# Web Search Results\n${webSearchResults}`;
-      setWebSearchResults(""); // consume once
-    }
-
-    // --- Project Notes (@notes) ---
-    let notesSection = "";
-    const hasNotesMention = /@notes\b/i.test(userPrompt);
-    const notesContent = hasNotesMention ? projectNotes : projectNotes;
-    if (notesContent && notesContent.trim()) {
-      notesSection = `\n\n# Project Notes (always read these)\n${notesContent.slice(0, 3000)}`;
-    }
-
-    return sections.join("\n\n") + frameworkSection + projectRulesSection + gitSection + webSection + notesSection;
+    setContextFiles(result.attachedFileNames);
+    setContextSummary(result.contextSummary);
+    if (webSearchResults) setWebSearchResults(""); // consume once
+    return result.contextText;
   };
-
   const requestPunam = async (userPrompt: string, mode: AgentMode = agentMode) => {
     // Check if any API key is available (new provider system OR legacy config)
     const providerReady = Boolean(config.api_key) || aiProviders.some(hasUsableProvider);
@@ -960,89 +930,25 @@ export default function AiChat({
         ? `${effectivePrompt}\n\n# Resolved @Mention Context\n${mentionContext}`
         : effectivePrompt;
 
-      const fileTree = buildFileContext(files);
       const attachedContext = await buildProjectContext(enrichedUserPrompt);
 
-      // If user is searching for something, include search results
-      let searchSection = "";
-      const searchKeywords = /\b(find|search|where|locate|which file|grep|usage|used|called|imported)\b/i;
-      if (searchKeywords.test(userPrompt) && projectPath) {
-        // Extract likely search terms from the prompt
-        const searchTerms = userPrompt
-          .replace(/\b(find|search|where|locate|which file|grep|usage|used|called|imported|in|the|is|are|all|of|for|this|that|how|many|times)\b/gi, "")
-          .trim()
-          .split(/\s+/)
-          .filter((w) => w.length > 2)
-          .slice(0, 2);
-        if (searchTerms.length > 0) {
-          const query = searchTerms.join(" ");
-          const results = await searchProject(query).catch(() => []);
-          if (results.length > 0) {
-            const resultLines = results.slice(0, 15).map(
-              (r) => `${r.path}:${r.line} — ${r.preview.slice(0, 100)}`
-            );
-            searchSection = `\n\n# Search Results for "${query}" (${results.length} matches)\n\`\`\`\n${resultLines.join("\n")}\n\`\`\``;
-          }
-        }
-      }
-      const modeInstruction = AGENT_MODES.find((item) => item.id === mode)?.instruction ?? AGENT_MODES[1].instruction;
-
-      // --- MCP Tools section ---
-      const mcpToolsSection = buildMcpToolsPrompt(mcpServers);
-      const mcpSection = mcpToolsSection ? `\n\n${mcpToolsSection}` : "";
-
-      // Build prompt with priority order
-      const hasSelection = selectedText && selectedText.trim().length > 0;
-      const activeRelPath = activeFilePath ? getRelativePath(projectPath, activeFilePath) : "";
-      const openTabNames = openTabs.map((tab) => getRelativePath(projectPath, tab.path));
-      const workspaceSection = `\n\n# Current Workspace (authoritative)\nProject root: ${projectPath || "none"}\nProject name: ${projectPath ? projectPath.split(/[\\/]/).pop() : "none"}\nIMPORTANT: Treat this as the only current project. If conversation history, terminal output, or prior messages mention another path, they are stale unless they match this project root.`;
-      const editorStateSection = `\n\n# Editor State\nActive file: ${activeRelPath || "none"}\nOpen tabs: ${openTabNames.length > 0 ? openTabNames.join(", ") : "none"}`;
-      const commandEnvironmentSection = `\n\n# Command Execution Environment\n- The project is running on Windows.\n- CMD blocks execute through PowerShell, not cmd.exe and not a Linux shell.\n- Commands execute independently. Each CMD block starts from the project root.\n- Working directory changes do not persist between CMD blocks.\n- If a command requires a different directory, use Set-Location within the same command, for example: Set-Location src; npm run build.\n- Use PowerShell-native commands: Get-ChildItem, Get-Content, Select-String, Test-Path, New-Item, Remove-Item.\n- Do not use Unix-only helpers like head, grep, sed, awk, cat, or ls -la unless the user explicitly asks for a Unix shell.\n- Prefer project-relative paths and quote paths with spaces using straight ASCII double quotes.`;
-
-      let selectionSection = "";
-      if (hasSelection) {
-        selectionSection = `\n\n# Selected Code${activeRelPath ? ` (in ${activeRelPath})` : ""}\nThis is the PRIMARY TARGET of the user's request. Analyze, explain, or modify THIS code.\n\`\`\`\n${selectedText!.slice(0, 3000)}\n\`\`\``;
-      }
-
-      let problemsSection = "";
-      if (problems && problems.length > 0) {
-        const problemLines = problems.slice(0, 20).map(
-          (p) => `[${p.severity}] ${p.path}:${p.line} — ${p.message}`
-        );
-        problemsSection = `\n\n# Current Problems/Errors (${problems.length} total)\n\`\`\`\n${problemLines.join("\n")}\n\`\`\``;
-      }
-
-      let terminalSection = "";
-      const terminalContextText = [terminalOutput || "", proactiveError?.output || ""]
-        .filter(Boolean)
-        .join("\n");
-      if (terminalContextText.trim().length > 0) {
-        terminalSection = `\n\n# Recent Terminal Output\n\`\`\`\n${terminalContextText.slice(-6000)}\n\`\`\``;
-      }
-
-      const contextInstruction = hasSelection
-        ? "\n\nIMPORTANT: Selected code exists. Treat it as the primary target of the request. Do NOT give a generic introduction. Directly analyze, explain, or modify the selected code based on the user's request."
-        : "";
-
-      // Build conversation history (last 10 messages for context continuity)
-      const recentHistory = messages.slice(-10).map((m) => {
-        const role = m.role === "user" ? "User" : "Punam";
-        const content = m.role === "assistant" && m.parsed
-          ? m.parsed.explanation || "(applied code changes)"
-          : m.content.slice(0, 500);
-        return `${role}: ${content}`;
-      }).join("\n");
-      const historySection = recentHistory ? `\n\n# Conversation History (recent)\n${recentHistory}` : "";
-
-      // Detect @file mentions that don't resolve to existing files (B010)
-      const unresolvedFiles = getUnresolvedMentions(userPrompt, collectExistingFiles());
-      const unresolvedSection = unresolvedFiles.length > 0
-        ? `\n\n# ⚠️ Non-Existent File References\nThe user mentioned the following file(s) that do NOT exist in the project:\n${unresolvedFiles.map((f) => `- ${f}`).join("\n")}\nIMPORTANT: Before proposing to create these files, explicitly tell the user that the file does not exist and ask if they want you to create it. Do NOT silently create files that the user may have assumed already existed.`
-        : "";
-
-      const memoryContext = await buildMemoryContext(activeRelPath).catch(() => "");
-      const prompt = `# Agent Mode\n${modeInstruction}${contextInstruction}${mcpSection}${workspaceSection}${commandEnvironmentSection}${memoryContext}\n\n# User Request\n${userPrompt}${editorStateSection}${selectionSection}${searchSection}${problemsSection}${terminalSection}${unresolvedSection}${historySection}\n\n# Project Structure\n\`\`\`\n${fileTree}\`\`\`\n\n# Attached File Context\n${attachedContext || "No file contents attached."}`;
-
+      // Build prompt using extracted builder
+      const { prompt } = await buildLlmPrompt({
+        userPrompt,
+        mode,
+        projectPath,
+        files,
+        openTabs,
+        activeFilePath,
+        selectedText,
+        problems,
+        terminalOutput,
+        proactiveError,
+        messages,
+        mcpServers,
+        attachedContext,
+        existingFiles: collectExistingFiles(),
+      });
       // Collect current image attachments from the last user message
       const lastUserMsg = messages[messages.length - 1];
       const currentImages = (lastUserMsg?.role === "user" && lastUserMsg.attachments)
@@ -1061,7 +967,7 @@ export default function AiChat({
           const taskType = detectTaskType(userPrompt, {
             selectedText,
             fileContext: attachedContext,
-            terminalOutput: terminalContextText,
+            terminalOutput: [terminalOutput || "", proactiveError?.output || ""].filter(Boolean).join("\n"),
             problemsCount: problems?.length || 0,
             attachedImageCount: currentImages.length,
             selectedFileCount: selectedProjectFiles.length,
@@ -1108,43 +1014,26 @@ export default function AiChat({
 
             const { listen } = await import("@tauri-apps/api/event");
             let streamedText = "";
-            let lastFlushedIndex = 0;
-            let tokenCount = 0;
-            const streamStart = performance.now();
-            let rafId = 0;
 
-            const flushStreamedText = () => {
-              rafId = 0;
-              const delta = streamedText.slice(lastFlushedIndex);
-              lastFlushedIndex = streamedText.length;
-              const result = appendStreamText(delta);
-              const blocks = [...result.completed, ...(result.inProgress ? [result.inProgress] : [])];
-              const elapsed = (performance.now() - streamStart) / 1000;
-              const tps = elapsed > 0 ? Math.round(tokenCount / elapsed) : 0;
-              setMessages((prev) => prev.map((m) =>
-                (m as any).streamId === streamId
-                  ? blocks.length > 0
-                    ? { ...m, content: "", blocks, isComplete: false, streamProgress: `${tps} t/s` }
-                    : { ...m, content: `${[firstNotice, ...fallbackNotices].join("\n")}\n${streamedText}\n▍`, isComplete: false, streamProgress: `${tps} t/s` }
-                  : m
-              ));
-            };
+            // Wire Rust IPC listener to unified token handler
+            activeStreamIdRef.current = streamId;
+            resetTokenBuffer();
+            resetParseState();
+            blockParserRef.current = createBlockParser();
 
             const unlisten = await listen<{ stream_id: string; token: string; done: boolean }>("llm-stream", (event) => {
               const { stream_id, token, done } = event.payload;
               if (stream_id !== streamId) return;
               if (!done && token) {
                 streamedText += token;
-                tokenCount++;
-                if (!rafId) rafId = requestAnimationFrame(() => { rafId = 0; flushStreamedText(); });
+                onStreamToken(token, streamId);
               }
             });
 
-            resetParseState();
             activeStreamRef.current = {
               cancel: () => {
                 streamController.abort();
-                cancelAnimationFrame(rafId);
+                cancelPendingFlush();
                 unlisten();
               },
               streamId,
@@ -1159,8 +1048,15 @@ export default function AiChat({
               signal: streamController.signal,
             });
             unlisten();
-            cancelAnimationFrame(rafId);
-            flushStreamedText();
+
+            // Use unified handler for completion/error
+            if (resp.success) {
+              flushBufferSync();
+            } else {
+              cancelPendingFlush();
+              tokenBufferRef.current = '';
+            }
+            activeStreamIdRef.current = null;
 
             if (resp.success) {
               markProviderHealthy(candidate.provider.id);
@@ -1233,30 +1129,15 @@ export default function AiChat({
             const streamId = `stream-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
             setMessages((prev) => [...prev, { role: "assistant", content: "▍", mode, streamId } as ChatMessage & { streamId: string }]);
 
-            // Listen for streaming tokens with incremental parsing
+            // Listen for streaming tokens via unified handler
             const { listen } = await import("@tauri-apps/api/event");
             let streamedText = "";
-            let lastFlushedIndex = 0;
-            let tokenCount = 0;
-            const streamStart = performance.now();
-            let rafId = 0;
 
-            const flushStreamedText = () => {
-              rafId = 0;
-              const delta = streamedText.slice(lastFlushedIndex);
-              lastFlushedIndex = streamedText.length;
-              const result = appendStreamText(delta);
-              const blocks = [...result.completed, ...(result.inProgress ? [result.inProgress] : [])];
-              const elapsed = (performance.now() - streamStart) / 1000;
-              const tps = elapsed > 0 ? Math.round(tokenCount / elapsed) : 0;
-              setMessages((prev) => prev.map((m) =>
-                (m as any).streamId === streamId
-                  ? blocks.length > 0
-                    ? { ...m, content: "", blocks, isComplete: false, streamProgress: `${tps} t/s` }
-                    : { ...m, content: streamedText, isComplete: false, streamProgress: `${tps} t/s` }
-                  : m
-              ));
-            };
+            // Wire Rust IPC listener to unified token handler
+            activeStreamIdRef.current = streamId;
+            resetTokenBuffer();
+            resetParseState();
+            blockParserRef.current = createBlockParser();
 
             const streamController = new AbortController();
             const unlisten = await listen<{ stream_id: string; token: string; done: boolean }>("llm-stream", (event) => {
@@ -1264,14 +1145,11 @@ export default function AiChat({
               if (stream_id !== streamId) return;
               if (!done && token) {
                 streamedText += token;
-                tokenCount++;
-                if (!rafId) rafId = requestAnimationFrame(() => { rafId = 0; flushStreamedText(); });
+                onStreamToken(token, streamId);
               }
             });
 
-            resetParseState();
-
-            activeStreamRef.current = { cancel: () => { streamController.abort(); cancelAnimationFrame(rafId); unlisten(); }, streamId, kind: "chat" };
+            activeStreamRef.current = { cancel: () => { streamController.abort(); cancelPendingFlush(); unlisten(); }, streamId, kind: "chat" };
 
             // Send the streaming request
             const imagePayload = currentImages.length > 0
@@ -1285,70 +1163,76 @@ export default function AiChat({
               signal: streamController.signal,
             });
             unlisten();
-            cancelAnimationFrame(rafId);
-            flushStreamedText(); // final flush
 
-            // Finalize: parse the full response and render properly
+            // Finalize via unified handler
             const finalText = resp.success ? resp.text : (resp.error || "Unknown error");
-            let parsed = resp.success ? await parseResponseAsync(finalText, collectExistingFiles()) : null;
-            // Resolve EDIT blocks into fileChanges
-            if (parsed && parsed.editOperations.length > 0) {
-              parsed = await resolveEditsWithPreview(parsed, agentMode);
-            }
-            const hasActions = parsed ? hasParsedActions(parsed) : false;
+            if (!resp.success) {
+              onStreamError(streamId, finalText);
+            } else {
+              // Synchronous flush before finalization
+              flushBufferSync();
+              activeStreamIdRef.current = null;
 
-            // --- MCP tool auto-execution ---
-            let effectiveFinalText = finalText;
-            if (resp.success && mcpServers.length > 0) {
-              const mcpCalls = parseMcpCalls(finalText);
-              if (mcpCalls.length > 0) {
-                const mcpResultParts: string[] = [];
-                for (const call of mcpCalls) {
-                  const server = mcpServers.find(s => s.id === call.serverId && s.enabled);
-                  if (!server) {
-                    mcpResultParts.push(`⚠️ MCP server "${call.serverId}" not found or disabled.`);
-                    continue;
+              let parsed = await parseResponseAsync(finalText, collectExistingFiles());
+              // Resolve EDIT blocks into fileChanges
+              if (parsed && parsed.editOperations.length > 0) {
+                parsed = await resolveEditsWithPreview(parsed, agentMode);
+              }
+              const hasActions = parsed ? hasParsedActions(parsed) : false;
+
+              // --- MCP tool auto-execution ---
+              let effectiveFinalText = finalText;
+              if (mcpServers.length > 0) {
+                const mcpCalls = parseMcpCalls(finalText);
+                if (mcpCalls.length > 0) {
+                  const mcpResultParts: string[] = [];
+                  for (const call of mcpCalls) {
+                    const server = mcpServers.find(s => s.id === call.serverId && s.enabled);
+                    if (!server) {
+                      mcpResultParts.push(`⚠️ MCP server "${call.serverId}" not found or disabled.`);
+                      continue;
+                    }
+                    setMessages(prev => [...prev, {
+                      role: "assistant",
+                      content: `🔧 Calling MCP tool **${call.serverId}.${call.toolName}**…`,
+                    }]);
+                    const result = await mcpCallTool(server, call.toolName, call.args, projectPath);
+                    const formatted = formatMcpResult(call.toolName, result);
+                    mcpResultParts.push(formatted);
                   }
-                  setMessages(prev => [...prev, {
-                    role: "assistant",
-                    content: `🔧 Calling MCP tool **${call.serverId}.${call.toolName}**…`,
-                  }]);
-                  const result = await mcpCallTool(server, call.toolName, call.args, projectPath);
-                  const formatted = formatMcpResult(call.toolName, result);
-                  mcpResultParts.push(formatted);
-                }
-                // Feed results back into the AI for a follow-up response
-                if (mcpResultParts.length > 0) {
-                  const toolResultsContext = mcpResultParts.join("\n\n");
-                  effectiveFinalText = `${finalText}\n\n${toolResultsContext}`;
-                  // Re-request with tool results in context
-                  await requestPunam(
-                    `Here are the MCP tool results:\n\n${toolResultsContext}\n\nNow provide your final answer using this data.`,
-                    mode
-                  );
-                  return; // requestPunam will handle the final setMessages
+                  // Feed results back into the AI for a follow-up response
+                  if (mcpResultParts.length > 0) {
+                    const toolResultsContext = mcpResultParts.join("\n\n");
+                    effectiveFinalText = `${finalText}\n\n${toolResultsContext}`;
+                    // Re-request with tool results in context
+                    await requestPunam(
+                      `Here are the MCP tool results:\n\n${toolResultsContext}\n\nNow provide your final answer using this data.`,
+                      mode
+                    );
+                    return; // requestPunam will handle the final setMessages
+                  }
                 }
               }
-            }
 
-            // Finalize message in-place — preserves streaming blocks, just marks complete
-            resetParseState();
-            const finalBlocks = parseStreamBlocks(effectiveFinalText).completed;
-            setMessages((prev) => prev.map((m) => {
-              if ((m as any).streamId !== streamId) return m;
-              const { streamId: _sid, streamProgress: _sp, ...rest } = m as any;
-              const blocks = finalBlocks.length > 0 ? finalBlocks : ((m as any).blocks || []);
-              return {
-                ...rest,
-                content: effectiveFinalText,
-                blocks,
-                isComplete: true,
-                parsed: hasActions ? parsed : undefined,
-                applied: false,
-                metrics: resp.metrics,
-              };
-            }));
-            recordResponseUsage(resp.metrics);
+              // Finalize message in-place — preserves streaming blocks, just marks complete
+              resetParseState();
+              const finalBlocks = parseStreamBlocks(effectiveFinalText).completed;
+              setMessages((prev) => prev.map((m) => {
+                if ((m as any).streamId !== streamId) return m;
+                const { streamId: _sid, streamProgress: _sp, ...rest } = m as any;
+                const blocks = finalBlocks.length > 0 ? finalBlocks : ((m as any).blocks || []);
+                return {
+                  ...rest,
+                  content: effectiveFinalText,
+                  blocks,
+                  isComplete: true,
+                  parsed: hasActions ? parsed : undefined,
+                  applied: false,
+                  metrics: resp.metrics,
+                };
+              }));
+              recordResponseUsage(resp.metrics);
+            }
           }
         } else {
           // Multiple models — send in parallel (no streaming for multi)
@@ -1701,27 +1585,7 @@ export default function AiChat({
 
   // --- Agent Mode Functions ---
 
-  const createAgentTask = (task: string): AgentTaskState => {
-    // Parse subtasks if the user provided a numbered list
-    const subtaskPattern = /^\s*(?:\d+[\.\)]\s*|[-*]\s+)(.+)$/gm;
-    const matches = [...task.matchAll(subtaskPattern)];
-    const subtasks = matches.length > 1
-      ? matches.map(m => m[1].trim())
-      : [task];
-
-    return {
-      active: true,
-      task,
-      step: "planning",
-      attempt: 1,
-      maxAttempts: 15,
-      history: [],
-      suggestedCommand: null,
-      autoApply: false,  // Require user approval before applying changes
-      subtasks,
-      currentSubtask: 0,
-    };
-  };
+  // createAgentTask imported from ./chat/types
 
   const startAgentTask = (task: string) => {
     agentCancelledRef.current = false;
@@ -1855,75 +1719,17 @@ export default function AiChat({
     setAgentActivityText("Collecting project context...");
     setAgentTask((prev) => prev ? { ...prev, step: "proposing_fix" } : null);
 
-    // ── Build context using the Context Engine ──────────────────────────────
-    const existingFiles = collectExistingFiles();
-    const errorContextText = [terminalOutput || "", proactiveError?.output || ""]
-      .filter(Boolean)
-      .join("\n");
-    const errorFiles = getFilePathsFromText(errorContextText, existingFiles);
-
-    // Load relevant file snippets (error-referenced files + active file)
-    const snippets: string[] = [];
-    for (const filePath of errorFiles.slice(0, 3)) {
-      try {
-        const content = await readFile(getProjectFilePath(projectPath, filePath));
-        if (content) {
-          snippets.push(`## ${filePath}\n\`\`\`\n${content.slice(0, 6000)}\n\`\`\``);
-        }
-      } catch { /* skip */ }
-    }
-    if (activeFilePath) {
-      const relPath = getRelativePath(projectPath, activeFilePath);
-      if (!errorFiles.includes(relPath)) {
-        const content = await readFile(activeFilePath).catch(() => "");
-        if (content) snippets.push(`## ${relPath}\n\`\`\`\n${content.slice(0, 100000)}\n\`\`\``);
-      }
-    }
-
-    const visibleProjectFiles = Array.from(collectExistingFiles()).sort();
-    const topLevelEntries = files
-      .slice(0, 60)
-      .map((entry) => `${entry.is_dir ? "DIR " : "FILE"} ${entry.path || entry.name}`)
-      .join("\n");
-    snippets.unshift(
-      `## Current workspace from file explorer\nProject root: ${projectPath || "unknown"}\nVisible files: ${visibleProjectFiles.length}\n\nTop-level entries:\n${topLevelEntries || "none"}\n\nVisible file sample:\n${visibleProjectFiles.slice(0, 120).map((path) => `FILE ${path}`).join("\n") || "none"}`
-    );
-
-    // Load persistent memories
-    const memories = await loadAgentMemories(projectPath);
-    const compressedMemory = compressMemories(memories);
-
-    // Summarize old messages
-    const chatSummary = summarizeOldMessages(messages);
-    const fullMemory = [compressedMemory, chatSummary].filter(Boolean).join("\n\n");
-
-    // Previous attempt history
-    const historyContext = activeTask.history.length > 0
-      ? `Previous attempts (DO NOT repeat):\n${activeTask.history.map((h, i) => `${i + 1}. ${h}`).join("\n")}`
-      : "";
-
-    // Build the payload using the Context Engine formula
-    const currentTask = activeTask.subtasks.length > 1
-      ? activeTask.subtasks[activeTask.currentSubtask]
-      : activeTask.task;
-
-    const commandMemory = [
-      fullMemory,
-      "COMMAND EXECUTION ENVIRONMENT:\n- This app runs on Windows.\n- CMD blocks execute through PowerShell.\n- Commands execute independently. Each CMD block starts from the project root.\n- Working directory changes do not persist between CMD blocks.\n- If a command requires a different directory, use Set-Location within the same command, for example: Set-Location src; npm run build.\n- Use PowerShell-native commands such as Get-ChildItem, Get-Content, Select-String, Test-Path, New-Item, and Remove-Item.\n- Do not use Unix-only helpers like head, grep, sed, awk, cat, or ls -la unless the user explicitly asks for a Unix shell.\n- Internal agent tools are separate from terminal commands. list_files means the internal agent tool, not Get-ChildItem, dir, or ls.\n- If the user says not to run a terminal command, do not produce CMD blocks.",
-      buildInternalToolInventoryPrompt(),
-    ].filter(Boolean).join("\n\n");
-
-    const payload = await assemblePersistentPayload({
-      globalGoal: activeTask.task,
-      currentSubtask: `${currentTask} (attempt ${activeTask.attempt}/${activeTask.maxAttempts})${historyContext ? "\n" + historyContext : ""}`,
-      fullHistory: messages,
-      activeFileSnippets: snippets,
-      latestErrors: errorContextText.slice(-2000),
-      projectMemory: commandMemory,
+    // Build context using extracted agentContextBuilder
+    const { payload, currentTask, existingFiles } = await buildAgentContext({
+      activeTask,
       projectPath,
-      activeFilePath: activeFilePath || undefined,
-      projectFiles: files,
-      openTabPaths: openTabs.map((t) => getRelativePath(projectPath, t.path)),
+      files,
+      openTabs,
+      activeFilePath,
+      terminalOutput,
+      proactiveError,
+      messages,
+      existingFiles: collectExistingFiles(),
     });
 
     // ── Send to AI using the optimized payload ──────────────────────────────
@@ -1952,28 +1758,12 @@ export default function AiChat({
 
       const { listen } = await import("@tauri-apps/api/event");
       let streamedText = "";
-      let lastFlushedIndex = 0;
-      let tokenCount = 0;
-      const streamStart = performance.now();
-      let rafId = 0;
 
-      const flushStreamedText = () => {
-        if (!isCurrentAgentRun()) return;
-        rafId = 0;
-        const delta = streamedText.slice(lastFlushedIndex);
-        lastFlushedIndex = streamedText.length;
-        const result = appendStreamText(delta);
-        const blocks = [...result.completed, ...(result.inProgress ? [result.inProgress] : [])];
-        const elapsed = (performance.now() - streamStart) / 1000;
-        const tps = elapsed > 0 ? Math.round(tokenCount / elapsed) : 0;
-        setMessages(prev => prev.map(m =>
-          (m as any).streamId === streamId
-            ? blocks.length > 0
-              ? { ...m, content: "", blocks, isComplete: false, streamProgress: `${tps} t/s` }
-              : { ...m, content: streamedText + "▍", isComplete: false, streamProgress: `${tps} t/s` }
-            : m
-        ));
-      };
+      // Wire Rust IPC listener to unified token handler
+      activeStreamIdRef.current = streamId;
+      resetTokenBuffer();
+      resetParseState();
+      blockParserRef.current = createBlockParser();
 
       const streamController = new AbortController();
       const unlisten = await listen<{ stream_id: string; token: string; done: boolean }>("llm-stream", (event) => {
@@ -1982,8 +1772,7 @@ export default function AiChat({
         if (stream_id !== streamId) return;
         if (!done && token) {
           streamedText += token;
-          tokenCount++;
-          if (!rafId) rafId = requestAnimationFrame(() => { rafId = 0; flushStreamedText(); });
+          onStreamToken(token, streamId);
         }
       });
       activeStreamRef.current = {
@@ -1991,47 +1780,37 @@ export default function AiChat({
         kind: "agent_stream",
         cancel: () => {
           streamController.abort();
-          cancelAnimationFrame(rafId);
+          cancelPendingFlush();
           unlisten();
           agentCancelledRef.current = true;
         },
       };
 
-      resetParseState();
-
       const agentDecision = decideAgentRoute(currentTask);
+
+      // For openai-compatible providers (DeepSeek, Groq, Mistral, etc.), ALWAYS use the tool loop.
+      // These providers use structured tool_calls in API responses — the standard streaming path
+      // can't handle their tool calls (it only captures text). The tool loop has its own
+      // approval gate and verification, so safety is maintained.
+      const forceToolLoop = provider.type === "openai-compatible";
 
       // Read-only inspection/search tasks use the tool loop. Edits and commands
       // stay on the standard guarded path so diff previews and command approval remain intact.
-      if (agentDecision.route === "tool_loop") {
-        setAgentActivityText("Inspecting project with internal tools...");
+      // Exception: openai-compatible providers always use tool loop (forceToolLoop).
+      if (agentDecision.route === "tool_loop" || forceToolLoop) {
+        setAgentActivityText(forceToolLoop ? "Agent working..." : "Inspecting project with internal tools...");
         unlisten();
-        cancelAnimationFrame(rafId);
+        cancelPendingFlush();
+        activeStreamIdRef.current = null;
         setMessages(prev => prev.filter(m => (m as any).streamId !== streamId));
         const toolStreamId = `stream-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
-        const toolTrace: Array<{ tool: string; input?: Record<string, unknown> }> = [];
-        const formatTraceInput = (input?: Record<string, unknown>) => {
-          const entries = Object.entries(input || {}).filter(([, value]) => value !== undefined && value !== null && value !== "");
-          if (entries.length === 0) return "";
-          return `: ${entries.map(([key, value]) => `${key}=${JSON.stringify(value)}`).join(", ")}`;
-        };
-        const formatToolTrace = (status = "Running...") =>
-          [
-            "Agent route",
-            `Type: ${agentDecision.kind}`,
-            `Reason: ${agentDecision.reason}`,
-            "",
-            "Tools used",
-            ...(toolTrace.length > 0
-              ? toolTrace.map((entry) => `- ${entry.tool}${formatTraceInput(entry.input)}`)
-              : ["- Waiting for first tool..."]),
-            "",
-            `Status: ${status}`,
-          ].join("\n");
+
+        const toolTrace: ToolTraceEntry[] = [];
+        const formatTrace = (status = "Running...") => formatToolTrace(toolTrace, agentDecision.kind, agentDecision.reason, status);
 
         setMessages(prev => [...prev, {
           role: "assistant",
-          content: `${formatToolTrace()}\n\n▍`,
+          content: `${formatTrace()}\n\n▍`,
           mode: "chat",
           streamId: toolStreamId,
         } as any]);
@@ -2045,6 +1824,9 @@ export default function AiChat({
           },
         };
 
+        // Clear previous task cost summary when starting a new tool loop
+        setTaskCostSummary(null);
+
         // Use the existing runAgentToolLoop which sends AGENT_TOOL_DEFINITIONS
         await runAgentToolLoop({
           provider,
@@ -2053,16 +1835,95 @@ export default function AiChat({
           task: currentTask,
           projectPath,
           activeFilePath,
-          maxRounds: agentDecision.kind === "search" ? 6 : 8,
+          maxRounds: forceToolLoop ? 15 : (agentDecision.kind === "search" ? 6 : 8),
           shouldCancel: () => !isCurrentAgentRun(),
+
+          // Clarification protocol — shows inline dialog when ambiguity detected
+          enableClarification: true,
+          onClarificationNeeded: handleClarificationNeeded,
+
+          // Budget enforcement — per-task budget with mid-task warning dialog
+          budget: taskBudget,
+          onBudgetWarning: taskBudget ? handleBudgetWarning : undefined,
+
+          // Context optimization — unified multi-source context assembly
+          enableContextOptimization,
+
+          // Diff preview before agent writes — respects autopilot setting
+          onBeforeWrite: async (filePath, originalContent, newContent) => {
+            // If file is already locked by inline diff, reject immediately
+            const { isFileLockedForDiff: checkLock } = await import("../hooks/useInlineDiff");
+            if (checkLock(filePath)) {
+              return false; // Reject — file is locked
+            }
+
+            const { useSettingsStore } = await import("../store/settingsStore");
+            const autopilot = useSettingsStore.getState().config.agentAutopilot;
+
+            // ── Autopilot ON: auto-approve all writes ──
+            // Safety is handled by:
+            //   1. The approval gate (gatePatchWithApproval) for sensitive files
+            //   2. Rust inspect_command for dangerous commands (handled separately)
+            if (autopilot) {
+              return true;
+            }
+
+            // ── Autopilot OFF (supervised): require approval for every write ──
+            // Show inline diff for existing files, auto-approve new files
+            if (!originalContent || originalContent.trim() === "") {
+              // New file — show approval via event but don't block on diff
+              return new Promise<boolean>((resolve) => {
+                const event = new CustomEvent("punam-inline-diff-preview", {
+                  detail: { path: filePath, original: "", proposed: newContent, resolve },
+                });
+                window.dispatchEvent(event);
+              });
+            }
+
+            // Existing file — show inline diff for review
+            return new Promise<boolean>((resolve) => {
+              const event = new CustomEvent("punam-inline-diff-preview", {
+                detail: {
+                  path: filePath,
+                  original: originalContent,
+                  proposed: newContent,
+                  resolve,
+                },
+              });
+              window.dispatchEvent(event);
+            });
+          },
 
           onToolCall: (toolName, input) => {
             if (!isCurrentAgentRun()) return;
             setAgentActivityText(`Using internal tool: ${toolName}`);
             toolTrace.push({ tool: toolName, input });
+            // Update message with both text trace AND toolEvents for progressive rendering
             setMessages(prev => prev.map(m =>
               (m as any).streamId === toolStreamId
-                ? { ...m, content: `${formatToolTrace()}\n\n▍` }
+                ? {
+                    ...m,
+                    content: `${formatTrace()}\n\n▍`,
+                    toolEvents: [
+                      ...(m.toolEvents || []),
+                      { kind: "tool_call" as const, name: toolName, input, timestamp: Date.now() },
+                    ],
+                  }
+                : m
+            ));
+          },
+
+          onToolResult: (toolName, input, result, isError) => {
+            if (!isCurrentAgentRun()) return;
+            setMessages(prev => prev.map(m =>
+              (m as any).streamId === toolStreamId
+                ? {
+                    ...m,
+                    toolEvents: [
+                      ...(m.toolEvents || []),
+                      { kind: "tool_result" as const, name: toolName, input, output: result.slice(0, 2000), timestamp: Date.now() },
+                    ],
+                  }
                 : m
             ));
           },
@@ -2079,6 +1940,19 @@ export default function AiChat({
           onDone: async (finalText, metrics) => {
             if (!isCurrentAgentRun()) return;
             setAgentActivityText("Writing final answer...");
+
+            // Extract task cost summary from metrics when budget is active
+            if (taskBudget && metrics) {
+              const consumed: BudgetConsumed = {
+                inputTokens: metrics.promptTokens ?? 0,
+                outputTokens: metrics.responseTokens ?? 0,
+                totalTokens: metrics.totalTokens ?? ((metrics.promptTokens ?? 0) + (metrics.responseTokens ?? 0)),
+                estimatedCostUsd: metrics.estimatedCostUsd ?? 0,
+                rounds: toolTrace.length || 1,
+              };
+              setTaskCostSummary(consumed);
+            }
+
             // Parse and handle final answer using existing logic
             resetParseState();
             const finalBlocks = parseStreamBlocks(finalText).completed;
@@ -2094,7 +1968,7 @@ export default function AiChat({
               const blocks = finalBlocks.length > 0 ? finalBlocks : ((m as any).blocks || []);
               return {
                 ...rest,
-                content: `${formatToolTrace("Completed.")}\n\n${finalText}`,
+                content: `${formatTrace("Completed.")}\n\n${finalText}`,
                 blocks,
                 isComplete: true,
                 parsed: hasActions ? parsed : undefined,
@@ -2127,7 +2001,7 @@ export default function AiChat({
             setMessages(prev => prev.map(m => {
               if ((m as any).streamId !== toolStreamId) return m;
               const { streamId: _sid, streamProgress: _sp, ...rest } = m as any;
-              return { ...rest, content: formatToolTrace(traceStatus), isComplete: true };
+              return { ...rest, content: formatTrace(traceStatus), isComplete: true };
             }));
             setLoading(false);
             setAgentActivityText("");
@@ -2141,7 +2015,7 @@ export default function AiChat({
             setMessages(prev => prev.map(m => {
               if ((m as any).streamId !== toolStreamId) return m;
               const { streamId: _sid, streamProgress: _sp, ...rest } = m as any;
-              return { ...rest, content: formatToolTrace("Stopped."), isComplete: true };
+              return { ...rest, content: formatTrace("Stopped."), isComplete: true };
             }));
           },
         });
@@ -2177,12 +2051,14 @@ export default function AiChat({
       });
       setAgentActivityText("Writing final answer...");
       unlisten();
-      cancelAnimationFrame(rafId);
+      cancelPendingFlush();
       if (!isCurrentAgentRun()) {
+        activeStreamIdRef.current = null;
         activeStreamRef.current = null;
         return;
       }
-      flushStreamedText(); // final flush
+      flushBufferSync(); // final synchronous flush via unified handler
+      activeStreamIdRef.current = null;
 
       // Parse response
       const finalText = resp.success ? resp.text : (resp.error || "Unknown error");
@@ -2539,6 +2415,23 @@ export default function AiChat({
         </div>
       )}
 
+      {/* Image lightbox overlay */}
+      {lightboxSrc && (
+        <div className="chat-image-lightbox" onClick={() => setLightboxSrc(null)}>
+          <img src={lightboxSrc} alt="Expanded view" />
+        </div>
+      )}
+
+      {/* Agent Approval Gate overlay — shown when agent requires user approval for edits */}
+      {pendingApprovalPatch && (
+        <AgentApprovalGate
+          patch={pendingApprovalPatch}
+          onDecision={(decision: ApprovalDecision) => {
+            setPendingApprovalPatch(null);
+          }}
+        />
+      )}
+
       {/* Header with mode dropdown + session controls */}
       <ChatHeader
         agentMode={agentMode}
@@ -2564,7 +2457,7 @@ export default function AiChat({
       </div>
 
       {/* Messages — virtualized: browser skips rendering off-screen messages */}
-      <div className="chat-messages" ref={chatMessagesRef}>
+      <div className="chat-messages" ref={chatMessagesRef} onScroll={handleChatScroll}>
         {/* Proactive Error Detection — sticky at top so it doesn't scroll away (B008 fix) */}
         {proactiveError && (
           <div className="proactive-error-card" style={{ position: "sticky", top: 0, zIndex: 10 }}>
@@ -2625,6 +2518,14 @@ export default function AiChat({
           <div key={i} className={`chat-message ${msg.role}`}>
             <div className="chat-message-icon">
               {msg.role === "user" ? <User size={14} /> : <PunamAvatar />}
+              <button
+                className="chat-message-fork-btn"
+                onClick={() => handleForkSession(i)}
+                title="Fork conversation from here"
+                aria-label={`Fork conversation from message ${i + 1}`}
+              >
+                <GitFork size={10} />
+              </button>
             </div>
             <div className="chat-message-content">
               {msg.role === "user" ? (
@@ -2640,6 +2541,8 @@ export default function AiChat({
                               src={`data:${att.mimeType};base64,${att.base64}`}
                               alt={att.name}
                               className="chat-attachment-image"
+                              onClick={() => setLightboxSrc(`data:${att.mimeType};base64,${att.base64}`)}
+                              title="Click to expand"
                             />
                           ) : (
                             <div className="chat-attachment-file">
@@ -2679,6 +2582,37 @@ export default function AiChat({
                           isStreaming={!msg.isComplete}
                           showFinal={!msg.parsed && !msg.blocks}
                         />
+                      )}
+                      {/* Progressive tool call cards — rendered live during agent execution */}
+                      {msg.toolEvents && msg.toolEvents.length > 0 && (
+                        <div className="cl-tool-events-live">
+                          {msg.toolEvents.map((evt, idx) => {
+                            if (evt.kind === "tool_call") {
+                              // Check if there's a matching result for this call
+                              const matchingResult = msg.toolEvents?.find(
+                                (r, ri) => ri > idx && r.kind === "tool_result" && r.name === evt.name
+                              );
+                              return (
+                                <ToolCallCard
+                                  key={`tc-live-${idx}`}
+                                  name={evt.name}
+                                  params={evt.input ? JSON.stringify(evt.input) : undefined}
+                                  isComplete={!!matchingResult}
+                                  isError={false}
+                                />
+                              );
+                            }
+                            if (evt.kind === "tool_result" && evt.output) {
+                              return (
+                                <ToolResultCard
+                                  key={`tr-live-${idx}`}
+                                  content={evt.output}
+                                />
+                              );
+                            }
+                            return null;
+                          })}
+                        </div>
                       )}
                       {msg.parsed?.explanation && <MarkdownMessage text={msg.parsed.explanation} />}
                       {msg.parsed && (
@@ -2731,10 +2665,14 @@ export default function AiChat({
                         </div>
                       )}
                       {msg.thinking && <ThinkingBlock content={msg.thinking} />}
-                      {!agentTrace && !msg.parsed && !msg.blocks && <MarkdownMessage text={msg.content} />}
-                      {msg.blocks && msg.blocks.length > 0 && (
-                        <MessageBubble blocks={msg.blocks} isStreaming={!msg.isComplete} />
-                      )}
+                      {!agentTrace && !msg.parsed && !msg.blocks && !(msg.isComplete === false && streamingBlocks) && <MarkdownMessage text={msg.content} />}
+                      {(msg.blocks && msg.blocks.length > 0) || (msg.isComplete === false && streamingBlocks) ? (
+                        <MessageBubble
+                          message={msg}
+                          isStreaming={!msg.isComplete}
+                          streamingBlocks={msg.isComplete === false ? streamingBlocks ?? undefined : undefined}
+                        />
+                      ) : null}
                     </>
                   )}
                   {msg.metrics && <ResponseMetricsDisplay metrics={msg.metrics} />}
@@ -2805,6 +2743,8 @@ export default function AiChat({
           </div>
         )}
 
+        {/* Scroll sentinel — scrollIntoView target for auto-scroll */}
+        <div ref={messagesEndRef} />
       </div>
 
       {agentTask && agentTask.active && agentTask.step === "awaiting_run" && agentTask.suggestedCommand && (
@@ -2830,6 +2770,43 @@ export default function AiChat({
         />
       )}
 
+      {/* Clarification Dialog — inline above input when ambiguity detected */}
+      {clarificationReport && (
+        <ClarificationDialog
+          report={clarificationReport}
+          onAnswer={handleClarificationAnswer}
+          onSkip={handleClarificationSkip}
+        />
+      )}
+
+      {/* Budget Warning Dialog — inline above input when budget threshold reached */}
+      {budgetWarning && (
+        <BudgetWarningDialog
+          status={budgetWarning.status}
+          consumed={budgetWarning.consumed}
+          remaining={budgetWarning.remaining}
+          onDecision={handleBudgetDecision}
+        />
+      )}
+
+      {/* Task Cost Summary — shown after agent task completes with budget active */}
+      {taskCostSummary && (
+        <TaskCostSummary consumed={taskCostSummary} />
+      )}
+
+      {/* Reasoning Panel — shows agent chain-of-thought below messages */}
+      {reasoningChunks.length > 0 && (
+        <ReasoningPanel
+          chunks={reasoningChunks}
+          mode={reasoningMode}
+          visible={reasoningVisible}
+          phaseTimings={phaseTimings}
+          onToggleMode={() => setReasoningMode(reasoningMode === "compact" ? "expanded" : "compact")}
+          onClickReference={handleReasoningRefClick}
+          onClose={() => setReasoningVisible(false)}
+        />
+      )}
+
       {/* Input Area */}
       <ChatInputArea
         input={input}
@@ -2851,6 +2828,7 @@ export default function AiChat({
         removeAttachment={removeAttachment}
         handleFileAttach={handleFileAttach}
         handleFileInputChange={handleFileInputChange}
+        handlePaste={handlePaste}
         fileInputRef={fileInputRef}
         aiProviders={aiProviders}
         configModel={config.model}

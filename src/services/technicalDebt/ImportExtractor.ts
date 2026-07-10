@@ -89,6 +89,17 @@ const EXPORT_NODES = new Set([
   'export_declaration',       // TS alias
 ])
 
+// Python import node types
+const PYTHON_IMPORT_NODES = new Set([
+  'import_statement',         // import os, import sys
+  'import_from_statement',    // from os.path import join
+])
+
+// Rust import node types
+const RUST_IMPORT_NODES = new Set([
+  'use_declaration',          // use std::io::Read;
+])
+
 // ── Path resolution ────────────────────────────────────────────────────────────
 
 const EXTENSIONS_TO_TRY = ['.ts', '.tsx', '.js', '.jsx', '/index.ts', '/index.tsx', '/index.js']
@@ -217,6 +228,34 @@ export class ImportExtractor {
         if (reqEdge) {
           imports.push(reqEdge)
           if (reqEdge.isExternal) externalDeps.add(this.packageName(reqEdge.rawSpecifier))
+        }
+      }
+
+      // ── Python imports ──────────────────────────────────────────────────────
+      if (PYTHON_IMPORT_NODES.has(node.type) && !IMPORT_NODES.has(node.type)) {
+        // import_from_statement: from x import y
+        const pyEdge = this.extractPythonImport(node, filePath)
+        if (pyEdge) {
+          imports.push(pyEdge)
+          if (pyEdge.isExternal) externalDeps.add(this.packageName(pyEdge.rawSpecifier))
+        }
+      }
+
+      // Python import_statement with dotted_name (import os.path)
+      if (node.type === 'import_statement' && node.children.some(c => c.type === 'dotted_name')) {
+        const pyEdge = this.extractPythonBareImport(node, filePath)
+        if (pyEdge) {
+          imports.push(pyEdge)
+          if (pyEdge.isExternal) externalDeps.add(this.packageName(pyEdge.rawSpecifier))
+        }
+      }
+
+      // ── Rust use declarations ───────────────────────────────────────────────
+      if (RUST_IMPORT_NODES.has(node.type)) {
+        const rustEdge = this.extractRustUse(node, filePath)
+        if (rustEdge) {
+          imports.push(rustEdge)
+          if (rustEdge.isExternal) externalDeps.add(this.packageName(rustEdge.rawSpecifier))
         }
       }
     })
@@ -383,6 +422,232 @@ export class ImportExtractor {
     const { resolvedPath, isExternal } = resolveImportPath(filePath, specifier)
 
     return { fromFile: filePath, rawSpecifier: specifier, resolvedPath, isExternal, kind: 'require', importedNames: [], line: node.startPosition.row + 1 }
+  }
+
+  // ── Python import extraction ────────────────────────────────────────────────
+
+  /**
+   * Extract Python "from x import y" statements.
+   * AST structure: import_from_statement → [from, dotted_name, import, ...]
+   *
+   * Resolution strategy:
+   *  - Relative imports (from .foo import bar) → resolve relative to file
+   *  - Absolute imports (from os.path import join) → external
+   *  - Local project imports (from mypackage.utils import helper) → resolved
+   *    as external since we can't reliably distinguish without project config
+   */
+  private extractPythonImport(node: SyntaxNode, filePath: string): ImportEdge | null {
+    // Find the module name (dotted_name after 'from')
+    const dottedName = node.children.find(c => c.type === 'dotted_name')
+    const relativeImport = node.children.find(c => c.type === 'relative_import')
+
+    let specifier: string
+
+    if (relativeImport) {
+      // from .foo import bar → relative
+      // Get the dots and module name
+      const dots = relativeImport.children.filter(c => c.type === 'import_prefix' || c.text === '.')
+      const moduleName = relativeImport.children.find(c => c.type === 'dotted_name')
+      const prefix = dots.length > 0 ? '.'.repeat(dots.length) : '.'
+      specifier = moduleName ? `${prefix}${moduleName.text}` : prefix
+    } else if (dottedName) {
+      // from os.path import join → treat as external
+      specifier = dottedName.text
+    } else {
+      return null
+    }
+
+    // Extract imported names
+    const importedNames: string[] = []
+    for (const child of node.children) {
+      if (child.type === 'dotted_name' && child !== dottedName) {
+        importedNames.push(child.text)
+      }
+      if (child.type === 'aliased_import') {
+        const name = child.children.find(c => c.type === 'dotted_name' || c.type === 'identifier')
+        if (name) importedNames.push(name.text)
+      }
+      if (child.type === 'identifier' && child.text !== 'from' && child.text !== 'import') {
+        importedNames.push(child.text)
+      }
+    }
+
+    // Determine if relative (workspace-local) or external
+    const isRelative = specifier.startsWith('.')
+    if (isRelative) {
+      const pySpecifier = specifier.replace(/\./g, (m, offset) => {
+        if (offset === 0) return './'
+        return '/'
+      }).replace(/^\.\/\/+/, './')
+      const { resolvedPath, isExternal } = this.resolvePythonPath(filePath, pySpecifier)
+      return {
+        fromFile: filePath,
+        rawSpecifier: specifier,
+        resolvedPath,
+        isExternal,
+        kind: 'static',
+        importedNames,
+        line: node.startPosition.row + 1,
+      }
+    }
+
+    // Absolute Python import → external
+    return {
+      fromFile: filePath,
+      rawSpecifier: specifier,
+      resolvedPath: null,
+      isExternal: true,
+      kind: 'static',
+      importedNames,
+      line: node.startPosition.row + 1,
+    }
+  }
+
+  /**
+   * Extract Python bare "import x" statements.
+   * AST structure: import_statement → [import, dotted_name]
+   */
+  private extractPythonBareImport(node: SyntaxNode, filePath: string): ImportEdge | null {
+    const dottedName = node.children.find(c => c.type === 'dotted_name')
+    if (!dottedName) return null
+
+    const specifier = dottedName.text
+
+    // Bare imports are almost always external packages (import os, import sys)
+    return {
+      fromFile: filePath,
+      rawSpecifier: specifier,
+      resolvedPath: null,
+      isExternal: true,
+      kind: 'static',
+      importedNames: [specifier.split('.')[0]],
+      line: node.startPosition.row + 1,
+    }
+  }
+
+  /**
+   * Resolve a Python relative import path.
+   * from .utils import foo → ./utils.py
+   */
+  private resolvePythonPath(
+    fromFile: string,
+    specifier: string,
+  ): { resolvedPath: string | null; isExternal: boolean } {
+    if (!specifier.startsWith('.')) {
+      return { resolvedPath: null, isExternal: true }
+    }
+
+    const fromDir = fromFile.replace(/\\/g, '/').split('/').slice(0, -1).join('/')
+    const modulePath = specifier.replace(/\\/g, '/')
+    const joined = modulePath.startsWith('/')
+      ? modulePath
+      : joinPaths(fromDir, modulePath)
+    const normalized = normalizePath(joined)
+
+    // Python: try .py extension
+    if (/\.[a-z]+$/i.test(normalized)) {
+      return { resolvedPath: normalized, isExternal: false }
+    }
+    return { resolvedPath: normalized + '.py', isExternal: false }
+  }
+
+  // ── Rust use extraction ────────────────────────────────────────────────────
+
+  /**
+   * Extract Rust "use" declarations.
+   * AST structure: use_declaration → [use, scoped_identifier | use_wildcard | ...]
+   *
+   * Resolution strategy:
+   *  - use crate::module → workspace-local (resolve relative to crate root)
+   *  - use super::sibling → workspace-local (resolve relative to parent)
+   *  - use self::child → workspace-local (resolve relative to current)
+   *  - use std::io → external (standard library or crate dependency)
+   *  - use other_crate::foo → external
+   */
+  private extractRustUse(node: SyntaxNode, filePath: string): ImportEdge | null {
+    // Get the path identifier — can be scoped_identifier, use_wildcard, scoped_use_list, etc.
+    const pathNode = node.children.find(c =>
+      c.type === 'scoped_identifier' ||
+      c.type === 'scoped_use_list' ||
+      c.type === 'use_wildcard' ||
+      c.type === 'identifier' ||
+      c.type === 'use_as_clause'
+    )
+    if (!pathNode) return null
+
+    const fullPath = pathNode.text.replace(/;$/, '').trim()
+
+    // Extract imported names from the path
+    const importedNames: string[] = []
+    const lastSegment = fullPath.split('::').pop()
+    if (lastSegment && lastSegment !== '*' && !lastSegment.includes('{')) {
+      importedNames.push(lastSegment)
+    }
+
+    // Determine if workspace-local
+    const isCrate = fullPath.startsWith('crate::')
+    const isSuper = fullPath.startsWith('super::')
+    const isSelf  = fullPath.startsWith('self::')
+
+    if (isCrate || isSuper || isSelf) {
+      const resolvedPath = this.resolveRustPath(filePath, fullPath)
+      return {
+        fromFile: filePath,
+        rawSpecifier: fullPath,
+        resolvedPath,
+        isExternal: false,
+        kind: 'static',
+        importedNames,
+        line: node.startPosition.row + 1,
+      }
+    }
+
+    // External crate
+    const crateName = fullPath.split('::')[0]
+    return {
+      fromFile: filePath,
+      rawSpecifier: fullPath,
+      resolvedPath: null,
+      isExternal: true,
+      kind: 'static',
+      importedNames,
+      line: node.startPosition.row + 1,
+    }
+  }
+
+  /**
+   * Resolve Rust crate-relative, super-relative, or self-relative paths.
+   *
+   * use crate::utils::hash → /src/utils/hash.rs
+   * use super::sibling → ../sibling.rs
+   * use self::child → ./child.rs
+   */
+  private resolveRustPath(fromFile: string, usePath: string): string | null {
+    const fromDir = fromFile.replace(/\\/g, '/').split('/').slice(0, -1).join('/')
+    const segments = usePath.split('::')
+
+    if (segments[0] === 'crate') {
+      // Resolve relative to crate root (find src/ ancestor)
+      const normalized = fromFile.replace(/\\/g, '/')
+      const srcIdx = normalized.lastIndexOf('/src/')
+      if (srcIdx === -1) return null
+      const crateRoot = normalized.substring(0, srcIdx + 4) // includes /src/
+      const modulePath = segments.slice(1).join('/')
+      return normalizePath(crateRoot + modulePath) + '.rs'
+    }
+
+    if (segments[0] === 'super') {
+      const parentDir = fromDir.split('/').slice(0, -1).join('/')
+      const modulePath = segments.slice(1).join('/')
+      return normalizePath(parentDir + '/' + modulePath) + '.rs'
+    }
+
+    if (segments[0] === 'self') {
+      const modulePath = segments.slice(1).join('/')
+      return normalizePath(fromDir + '/' + modulePath) + '.rs'
+    }
+
+    return null
   }
 
   // ── Utilities ─────────────────────────────────────────────────────────────────

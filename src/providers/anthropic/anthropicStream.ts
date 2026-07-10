@@ -1,4 +1,16 @@
 /**
+ * @module anthropicStream
+ *
+ * SCOPE: Agent tool-use streaming with partial JSON accumulation ONLY.
+ * This module handles Anthropic's native tool_use streaming protocol where
+ * partial JSON (input_json_delta) must be accumulated across SSE events.
+ *
+ * Regular chat streaming is handled by the Rust backend streaming path
+ * (call_anthropic_stream command via Tauri IPC). Do NOT use this module
+ * for general chat streaming routes.
+ */
+
+/**
  * anthropicStream.ts — Claude 4 compatible SSE streaming parser.
  *
  * Handles ALL Anthropic streaming events:

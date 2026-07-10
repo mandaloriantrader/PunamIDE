@@ -1,7 +1,9 @@
-import { useState, useRef, useEffect } from "react";
-import { Play, Pause, StepForward, StopCircle, Variable, List, Code, ArrowDownToLine, ArrowUpFromLine } from "lucide-react";
+import { useState, useRef, useEffect, useCallback } from "react";
+import { Play, Pause, StepForward, StopCircle, Variable, List, Code, ArrowDownToLine, ArrowUpFromLine, BrainCircuit, Eye, RefreshCw, Check, X, AlertTriangle, Loader2 } from "lucide-react";
+import { invoke } from "@tauri-apps/api/core";
 import DebugConfigPicker from "./DebugConfigPicker";
 import type { DebugLaunchConfig } from "../utils/debugConfig";
+import { DapBridge, type DapBridgeState, type DapAnalysisResult } from "../services/debug/DapBridge";
 
 interface DebuggerPanelProps {
   sessionId: string | null;
@@ -46,9 +48,28 @@ export default function DebuggerPanel({
   onPause,
   onJumpToSource,
 }: DebuggerPanelProps) {
-  const [activeView, setActiveView] = useState<"stack" | "variables" | "console">("stack");
+  const [activeView, setActiveView] = useState<"stack" | "variables" | "console" | "ai-analysis">("stack");
   const [evalInput, setEvalInput] = useState("");
   const consoleEndRef = useRef<HTMLDivElement>(null);
+  const analysisEndRef = useRef<HTMLDivElement>(null);
+
+  // DapBridge state for AI Analysis tab
+  const [bridgeState, setBridgeState] = useState<DapBridgeState>(
+    DapBridge.getInstance().getState()
+  );
+
+  // Subscribe to DapBridge state changes
+  useEffect(() => {
+    const unsubscribe = DapBridge.getInstance().subscribe(setBridgeState);
+    return unsubscribe;
+  }, []);
+
+  // Auto-scroll analysis streaming text
+  useEffect(() => {
+    if (activeView === "ai-analysis" && analysisEndRef.current) {
+      analysisEndRef.current.scrollIntoView({ behavior: "smooth" });
+    }
+  }, [bridgeState.streamingText, activeView]);
 
   // Auto-scroll console to bottom
   useEffect(() => {
@@ -69,6 +90,27 @@ export default function DebuggerPanel({
       console.error("Evaluate failed:", err);
     }
   };
+
+  const handleRetryAnalysis = useCallback(() => {
+    DapBridge.getInstance().retry();
+  }, []);
+
+  const handleAddWatch = useCallback((expression: string) => {
+    if (!sessionId) return;
+    onSendRequest("evaluate", { expression, context: "watch" }).catch((err) => {
+      console.error("Failed to add watch expression:", err);
+    });
+  }, [sessionId, onSendRequest]);
+
+  const handleAcceptFix = useCallback(async (fix: NonNullable<DapAnalysisResult["suggestedFix"]>) => {
+    try {
+      await invoke("write_file", { path: fix.filePath, content: fix.patch });
+    } catch (err) {
+      console.error("Failed to apply fix:", err);
+    }
+  }, []);
+
+  const handleRejectFix = useCallback(() => {}, []);
 
   const getFileName = (path: string) => {
     const parts = path.replace(/\\/g, "/").split("/");
@@ -158,6 +200,15 @@ export default function DebuggerPanel({
         >
           <Code size={13} /> Console
         </button>
+        <button
+          className={`debugger-tab ${activeView === "ai-analysis" ? "active" : ""}`}
+          onClick={() => setActiveView("ai-analysis")}
+        >
+          <BrainCircuit size={13} /> AI Analysis
+          {bridgeState.status === "streaming" && (
+            <Loader2 size={11} className="ai-analysis-spinner" />
+          )}
+        </button>
       </div>
 
       <div className="debugger-content">
@@ -238,6 +289,104 @@ export default function DebuggerPanel({
                 disabled={adapterStatus !== "paused" || !sessionId}
               />
             </div>
+          </div>
+        )}
+
+        {activeView === "ai-analysis" && (
+          <div className="debug-section ai-analysis-section">
+            {bridgeState.status === "idle" && !bridgeState.result && (
+              <p className="empty-message">
+                {adapterStatus === "paused"
+                  ? "AI analysis will appear when a breakpoint is hit."
+                  : adapterStatus === "stopped"
+                  ? "Start a debug session to get AI-assisted analysis."
+                  : "Hit a breakpoint to trigger AI analysis."}
+              </p>
+            )}
+
+            {bridgeState.status === "collecting" && (
+              <div className="ai-analysis-loading">
+                <Loader2 size={16} className="ai-analysis-spinner" />
+                <span>Collecting debug context...</span>
+              </div>
+            )}
+
+            {(bridgeState.status === "error" || bridgeState.status === "timeout") && (
+              <div className="ai-analysis-error">
+                <AlertTriangle size={16} />
+                <span>{bridgeState.errorMessage || "AI analysis unavailable."}</span>
+                {bridgeState.canRetry && (
+                  <button className="ai-analysis-retry-btn" onClick={handleRetryAnalysis}>
+                    <RefreshCw size={12} /> Retry
+                  </button>
+                )}
+              </div>
+            )}
+
+            {(bridgeState.status === "streaming" || bridgeState.status === "complete") && (
+              <>
+                <div className="ai-analysis-text">
+                  <pre className="ai-analysis-stream">
+                    {bridgeState.result?.analysis || bridgeState.streamingText || ""}
+                    {bridgeState.status === "streaming" && <span className="ai-analysis-cursor">▊</span>}
+                  </pre>
+                  <div ref={analysisEndRef} />
+                </div>
+
+                {bridgeState.result?.watchSuggestions && bridgeState.result.watchSuggestions.length > 0 && (
+                  <div className="ai-analysis-watches">
+                    <div className="ai-analysis-watches-header">
+                      <Eye size={12} /><span>Suggested Watch Expressions</span>
+                    </div>
+                    <div className="ai-analysis-watch-chips">
+                      {bridgeState.result.watchSuggestions.slice(0, 5).map((expr, i) => (
+                        <button
+                          key={i}
+                          className="ai-analysis-watch-chip"
+                          onClick={() => handleAddWatch(expr)}
+                          title={`Add "${expr}" to watch panel`}
+                        >
+                          <Eye size={10} /><code>{expr}</code>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {bridgeState.result?.suggestedFix && (
+                  <div className="ai-analysis-fix-card">
+                    <div className="ai-analysis-fix-header">
+                      <span className="ai-analysis-fix-title">Suggested Fix</span>
+                      <span className="ai-analysis-fix-file">
+                        {getFileName(bridgeState.result.suggestedFix.filePath)}
+                      </span>
+                    </div>
+                    <p className="ai-analysis-fix-explanation">
+                      {bridgeState.result.suggestedFix.explanation}
+                    </p>
+                    <pre className="ai-analysis-fix-patch">
+                      <code>{bridgeState.result.suggestedFix.patch}</code>
+                    </pre>
+                    <div className="ai-analysis-fix-actions">
+                      <button
+                        className="ai-analysis-fix-accept"
+                        onClick={() => handleAcceptFix(bridgeState.result!.suggestedFix!)}
+                        title="Accept and apply this fix"
+                      >
+                        <Check size={12} /> Accept
+                      </button>
+                      <button
+                        className="ai-analysis-fix-reject"
+                        onClick={handleRejectFix}
+                        title="Reject this suggestion"
+                      >
+                        <X size={12} /> Reject
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </>
+            )}
           </div>
         )}
       </div>

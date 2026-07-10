@@ -135,6 +135,28 @@ export async function validatePatchAgainstRules(
 }
 
 /**
+ * Validate proposed file content against architecture rules by parsing
+ * imports from the in-memory content string (not from disk) and merging
+ * with the full project dependency graph.
+ *
+ * This catches the case where an agent adds a new forbidden import to a
+ * file that was previously clean — the on-disk scan would miss it because
+ * the edit hasn't landed yet.
+ */
+export async function validateProposedContent(
+  rules: ArchitectureRules,
+  filePath: string,
+  proposedContent: string,
+): Promise<ValidationResult> {
+  const rulesJson = JSON.stringify(rules);
+  return invoke<ValidationResult>("validate_proposed_content", {
+    rulesJson,
+    filePath,
+    proposedContent,
+  });
+}
+
+/**
  * Get the default/recommended architecture rules.
  * These can be customized by the user in settings.
  */

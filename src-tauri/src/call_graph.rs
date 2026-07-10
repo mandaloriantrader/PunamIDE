@@ -366,6 +366,65 @@ pub fn callgraph_stats(
     }))
 }
 
+/// Rebuild call graph edges for a single file.
+/// Removes all existing edges where `caller_file == file_path`, re-extracts
+/// edges from the provided `content`, inserts new edges, and returns the count.
+#[tauri::command]
+pub fn callgraph_rebuild_file(
+    file_path: String,
+    content: String,
+    graph_state: tauri::State<CallGraphState>,
+) -> Result<usize, String> {
+    // Determine the file extension for language-appropriate regex detection
+    let ext = file_path
+        .rsplit('.')
+        .next()
+        .unwrap_or("")
+        .to_string();
+
+    // Re-extract call edges from the new content
+    let new_edges = extract_calls_from_file(&content, &file_path, &ext);
+    let new_edge_count = new_edges.len();
+
+    let mut graph = graph_state.0.write().map_err(|_| "Lock error".to_string())?;
+
+    // Remove all existing edges where caller_file == file_path from forward map
+    for edges in graph.forward.values_mut() {
+        edges.retain(|e| e.caller_file != file_path);
+    }
+    // Remove empty keys from forward map
+    graph.forward.retain(|_, v| !v.is_empty());
+
+    // Remove all existing edges where caller_file == file_path from reverse map
+    for edges in graph.reverse.values_mut() {
+        edges.retain(|e| e.caller_file != file_path);
+    }
+    // Remove empty keys from reverse map
+    graph.reverse.retain(|_, v| !v.is_empty());
+
+    // Insert new edges into both forward and reverse maps
+    for edge in &new_edges {
+        let forward_key = edge.caller.to_lowercase();
+        graph.forward.entry(forward_key).or_default().push(edge.clone());
+
+        let reverse_key = edge.callee.to_lowercase();
+        graph.reverse.entry(reverse_key).or_default().push(edge.clone());
+    }
+
+    // Recompute totals
+    graph.total_edges = graph.forward.values().map(|v| v.len()).sum();
+    let mut seen_functions: HashSet<String> = HashSet::new();
+    for edges in graph.forward.values() {
+        for edge in edges {
+            seen_functions.insert(edge.caller.clone());
+            seen_functions.insert(edge.callee.clone());
+        }
+    }
+    graph.total_functions = seen_functions.len();
+
+    Ok(new_edge_count)
+}
+
 // ── Tests ──────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]

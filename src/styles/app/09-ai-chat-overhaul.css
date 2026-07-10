@@ -248,6 +248,38 @@
   align-items: center;
   justify-content: center;
   margin-top: 2px;
+  position: relative;
+}
+
+/* Fork button — appears on message hover */
+.chat-message-fork-btn {
+  display: none;
+  position: absolute;
+  bottom: -14px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 16px;
+  height: 16px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg-secondary);
+  color: var(--text-muted);
+  cursor: pointer;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  z-index: 5;
+  transition: all 0.12s;
+}
+
+.ai-chat .chat-message:hover .chat-message-fork-btn {
+  display: flex;
+}
+
+.chat-message-fork-btn:hover {
+  background: var(--bg-hover);
+  color: var(--accent);
+  border-color: var(--accent);
 }
 
 .ai-chat .chat-message.user .chat-message-icon {
@@ -472,6 +504,46 @@
   cursor: pointer;
   flex-shrink: 0;
   transition: background 0.15s, transform 0.1s;
+}
+
+/* ── Autopilot Toggle ─────────────────────────────────────────────────── */
+
+.ai-autopilot-toggle {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  padding: 2px 6px;
+  border: 1px solid var(--border-secondary);
+  border-radius: 10px;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 10px;
+  font-weight: 500;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: all 0.2s ease;
+  height: 20px;
+  line-height: 1;
+}
+
+.ai-autopilot-toggle.on {
+  background: rgba(76, 175, 80, 0.12);
+  border-color: rgba(76, 175, 80, 0.4);
+  color: #4caf50;
+}
+
+.ai-autopilot-toggle.off {
+  background: rgba(255, 152, 0, 0.1);
+  border-color: rgba(255, 152, 0, 0.35);
+  color: #ff9800;
+}
+
+.ai-autopilot-toggle:hover {
+  transform: scale(1.04);
+}
+
+.ai-autopilot-toggle .autopilot-label {
+  white-space: nowrap;
 }
 
 .ai-send-btn:hover:not(:disabled) {
@@ -823,6 +895,39 @@
   border-radius: 6px;
   object-fit: contain;
   display: block;
+  cursor: pointer;
+  transition: transform 0.15s ease, box-shadow 0.15s ease;
+}
+
+.chat-attachment-image:hover {
+  transform: scale(1.03);
+  box-shadow: 0 2px 12px rgba(137, 180, 250, 0.2);
+}
+
+/* Lightbox for expanded image view */
+.chat-image-lightbox {
+  position: fixed;
+  inset: 0;
+  z-index: 9999;
+  background: rgba(0, 0, 0, 0.85);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: zoom-out;
+  animation: fadeIn 0.15s ease;
+}
+
+.chat-image-lightbox img {
+  max-width: 90vw;
+  max-height: 90vh;
+  object-fit: contain;
+  border-radius: 8px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
 }
 
 .chat-attachment-file {

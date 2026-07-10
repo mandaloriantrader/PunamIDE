@@ -1,5 +1,7 @@
-import { useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { Check, X } from "lucide-react";
+import { getDiffLines } from "../utils/diffLines";
+import type { DiffLineEntry } from "../utils/diffLines";
 
 export interface ReviewFileChange {
   path: string;
@@ -20,98 +22,56 @@ export interface ReviewChanges {
   commands: string[];
 }
 
+/** A detected hunk (group of consecutive changed lines) within the diff. */
+export interface DetectedHunk {
+  id: number;
+  startIdx: number; // index in diffLines array
+  endIdx: number;   // inclusive
+  lineCount: number;
+}
+
 interface Props {
   changes: ReviewChanges;
   onApplyAll: () => void;
   onApplyFile: (path: string) => void;
   onRejectFile: (path: string) => void;
   onCancel: () => void;
+  /** When true, shows per-hunk checkboxes for individual hunk selection. */
+  selectable?: boolean;
+  /** Callback fired whenever the set of selected hunk IDs changes. */
+  onHunkSelectionChange?: (selectedIds: number[]) => void;
 }
 
 type ReviewItem =
   | { type: "file"; path: string; original: string; proposed: string; isNew: boolean; hasUnsavedChanges?: boolean }
   | { type: "delete"; path: string; original: string; proposed: string; isNew: false };
 
-function getDiffLines(original: string, proposed: string) {
-  const originalLines = original.split("\n");
-  const proposedLines = proposed.split("\n");
+/**
+ * Detect hunks from diff lines — a hunk is a contiguous group of changed lines.
+ */
+function detectHunks(lines: DiffLineEntry[]): DetectedHunk[] {
+  const hunks: DetectedHunk[] = [];
+  let hunkId = 0;
+  let i = 0;
 
-  // LCS-based diff: find longest common subsequence to identify actual changes
-  const lcs = computeLCS(originalLines, proposedLines);
-  const result: Array<{ id: number; original: string; proposed: string; changed: boolean }> = [];
-  let oi = 0, pi = 0, li = 0, id = 0;
-
-  while (oi < originalLines.length || pi < proposedLines.length) {
-    if (li < lcs.length && oi < originalLines.length && pi < proposedLines.length &&
-        originalLines[oi] === lcs[li] && proposedLines[pi] === lcs[li]) {
-      // Common line — unchanged
-      result.push({ id: id++, original: originalLines[oi], proposed: proposedLines[pi], changed: false });
-      oi++; pi++; li++;
-    } else if (li < lcs.length && pi < proposedLines.length && proposedLines[pi] === lcs[li] &&
-               (oi >= originalLines.length || originalLines[oi] !== lcs[li])) {
-      // Line removed from original
-      result.push({ id: id++, original: originalLines[oi] ?? "", proposed: "", changed: true });
-      oi++;
-    } else if (li < lcs.length && oi < originalLines.length && originalLines[oi] === lcs[li] &&
-               (pi >= proposedLines.length || proposedLines[pi] !== lcs[li])) {
-      // Line added in proposed
-      result.push({ id: id++, original: "", proposed: proposedLines[pi] ?? "", changed: true });
-      pi++;
-    } else {
-      // Both differ from LCS — show as changed pair
-      if (oi < originalLines.length && pi < proposedLines.length) {
-        result.push({ id: id++, original: originalLines[oi], proposed: proposedLines[pi], changed: true });
-        oi++; pi++;
-      } else if (oi < originalLines.length) {
-        result.push({ id: id++, original: originalLines[oi], proposed: "", changed: true });
-        oi++;
-      } else if (pi < proposedLines.length) {
-        result.push({ id: id++, original: "", proposed: proposedLines[pi], changed: true });
-        pi++;
+  while (i < lines.length) {
+    if (lines[i].changed) {
+      const startIdx = i;
+      while (i < lines.length && lines[i].changed) {
+        i++;
       }
-    }
-  }
-
-  return result;
-}
-
-/** Compute Longest Common Subsequence of two string arrays */
-function computeLCS(a: string[], b: string[]): string[] {
-  const m = a.length, n = b.length;
-  // For very large files, fall back to simple comparison to avoid memory issues
-  if (m * n > 1_000_000) {
-    // Fallback: simple line-by-line
-    const maxLines = Math.max(m, n);
-    return Array.from({ length: maxLines }, (_, i) => a[i] === b[i] ? a[i] : "").filter(Boolean);
-  }
-
-  const dp: number[][] = Array.from({ length: m + 1 }, () => Array(n + 1).fill(0));
-
-  for (let i = 1; i <= m; i++) {
-    for (let j = 1; j <= n; j++) {
-      if (a[i - 1] === b[j - 1]) {
-        dp[i][j] = dp[i - 1][j - 1] + 1;
-      } else {
-        dp[i][j] = Math.max(dp[i - 1][j], dp[i][j - 1]);
-      }
-    }
-  }
-
-  // Backtrack to find LCS
-  const lcs: string[] = [];
-  let i = m, j = n;
-  while (i > 0 && j > 0) {
-    if (a[i - 1] === b[j - 1]) {
-      lcs.unshift(a[i - 1]);
-      i--; j--;
-    } else if (dp[i - 1][j] > dp[i][j - 1]) {
-      i--;
+      hunks.push({
+        id: hunkId++,
+        startIdx,
+        endIdx: i - 1,
+        lineCount: i - startIdx,
+      });
     } else {
-      j--;
+      i++;
     }
   }
 
-  return lcs;
+  return hunks;
 }
 
 export default function AiDiffPreview({
@@ -120,6 +80,8 @@ export default function AiDiffPreview({
   onApplyFile,
   onRejectFile,
   onCancel,
+  selectable = false,
+  onHunkSelectionChange,
 }: Props) {
   const reviewItems = useMemo<ReviewItem[]>(
     () => [
@@ -140,6 +102,56 @@ export default function AiDiffPreview({
   const diffLines = selectedItem
     ? getDiffLines(selectedItem.original, selectedItem.proposed)
     : [];
+
+  // Detect hunks from the current diff lines
+  const hunks = useMemo(() => detectHunks(diffLines), [diffLines]);
+
+  // State tracking which hunk IDs are selected (all selected by default)
+  const [selectedHunkIds, setSelectedHunkIds] = useState<Set<number>>(new Set());
+
+  // Re-initialize selected hunks whenever hunks change (new file selected)
+  useEffect(() => {
+    const allIds = new Set(hunks.map((h) => h.id));
+    setSelectedHunkIds(allIds);
+  }, [hunks]);
+
+  // Notify parent when selection changes
+  useEffect(() => {
+    if (selectable && onHunkSelectionChange) {
+      onHunkSelectionChange(Array.from(selectedHunkIds));
+    }
+  }, [selectedHunkIds, selectable, onHunkSelectionChange]);
+
+  const toggleHunk = useCallback((hunkId: number) => {
+    setSelectedHunkIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(hunkId)) {
+        next.delete(hunkId);
+      } else {
+        next.add(hunkId);
+      }
+      return next;
+    });
+  }, []);
+
+  const selectAllHunks = useCallback(() => {
+    setSelectedHunkIds(new Set(hunks.map((h) => h.id)));
+  }, [hunks]);
+
+  const deselectAllHunks = useCallback(() => {
+    setSelectedHunkIds(new Set());
+  }, []);
+
+  // Build a map from line index → hunk for rendering
+  const lineToHunkMap = useMemo(() => {
+    const map = new Map<number, DetectedHunk>();
+    for (const hunk of hunks) {
+      for (let i = hunk.startIdx; i <= hunk.endIdx; i++) {
+        map.set(i, hunk);
+      }
+    }
+    return map;
+  }, [hunks]);
 
   return (
     <div className="diff-preview-overlay" role="dialog" aria-label="Review AI changes">
@@ -191,6 +203,26 @@ export default function AiDiffPreview({
                     )}
                   </span>
                   <div className="diff-selected-actions">
+                    {selectable && hunks.length > 0 && (
+                      <div className="diff-hunk-bulk-actions">
+                        <button
+                          type="button"
+                          className="btn-secondary compact"
+                          onClick={selectAllHunks}
+                          title="Select all hunks"
+                        >
+                          Select All
+                        </button>
+                        <button
+                          type="button"
+                          className="btn-secondary compact"
+                          onClick={deselectAllHunks}
+                          title="Deselect all hunks"
+                        >
+                          Deselect All
+                        </button>
+                      </div>
+                    )}
                     <button type="button" className="btn-secondary compact" onClick={() => onRejectFile(selectedItem.path)}>
                       Reject File
                     </button>
@@ -209,12 +241,37 @@ export default function AiDiffPreview({
                       📋
                     </button>
                   </div>
-                  {diffLines.map((line, idx) => (
-                    <div className="diff-line-pair" key={line.id}>
-                      <pre className={line.changed ? "changed removed" : ""}><span className="diff-line-num">{idx + 1}</span>{line.original || " "}</pre>
-                      <pre className={line.changed ? "changed added" : ""}><span className="diff-line-num">{idx + 1}</span>{line.proposed || " "}</pre>
-                    </div>
-                  ))}
+                  {diffLines.map((line, idx) => {
+                    const hunk = lineToHunkMap.get(idx);
+                    const isHunkStart = hunk && hunk.startIdx === idx;
+                    const isDeselected = selectable && hunk && !selectedHunkIds.has(hunk.id);
+
+                    return (
+                      <div className="diff-line-pair" key={line.id}>
+                        {/* Hunk header row with toggle — rendered before the first line of each hunk */}
+                        {selectable && isHunkStart && hunk && (
+                          <div className="diff-hunk-toggle-row">
+                            <label className="diff-hunk-toggle" aria-label={`Toggle hunk ${hunk.id + 1}`}>
+                              <input
+                                type="checkbox"
+                                checked={selectedHunkIds.has(hunk.id)}
+                                onChange={() => toggleHunk(hunk.id)}
+                              />
+                              <span className="diff-hunk-toggle-label">
+                                Hunk {hunk.id + 1} ({hunk.lineCount} line{hunk.lineCount > 1 ? "s" : ""})
+                              </span>
+                            </label>
+                          </div>
+                        )}
+                        <pre className={`${line.changed ? "changed removed" : ""}${isDeselected ? " hunk-deselected" : ""}`}>
+                          <span className="diff-line-num">{idx + 1}</span>{line.original || " "}
+                        </pre>
+                        <pre className={`${line.changed ? "changed added" : ""}${isDeselected ? " hunk-deselected" : ""}`}>
+                          <span className="diff-line-num">{idx + 1}</span>{line.proposed || " "}
+                        </pre>
+                      </div>
+                    );
+                  })}
                 </div>
               </>
             ) : (

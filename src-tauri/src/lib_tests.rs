@@ -230,7 +230,7 @@ fn test_search_exists_in_content() {
 
     let mut results: Vec<SearchResult> = Vec::new();
     let root_str = temp.to_string_lossy().to_string();
-    let _ = search_directory(&temp, &root_str, "hello", &mut results, 0);
+    let _ = search_directory(&temp, &root_str, "hello", &mut results, 0, &None, &None);
 
     assert_eq!(results.len(), 2);
     assert_eq!(results[0].line, 1);

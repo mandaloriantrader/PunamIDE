@@ -363,6 +363,70 @@ pub fn symbol_stats(
     }))
 }
 
+#[tauri::command]
+pub fn symbol_rebuild_file(
+    file_path: String,
+    content: String,
+    state: State<ProjectRoot>,
+    index_state: State<SymbolIndexState>,
+) -> Result<usize, String> {
+    let _root = get_project_root(&state)?;
+
+    // Determine file extension for symbol extraction
+    let ext = Path::new(&file_path)
+        .extension()
+        .unwrap_or_default()
+        .to_string_lossy()
+        .to_string();
+
+    if !should_analyze_ext(&ext) {
+        return Ok(0);
+    }
+
+    // Extract new symbols from the provided content
+    let new_symbols = extract_symbols(&content, &file_path, &ext);
+    let new_count = new_symbols.len();
+
+    // Acquire write lock on the index
+    let mut index = index_state
+        .0
+        .write()
+        .map_err(|_| "Symbol index lock error".to_string())?;
+
+    // Remove all existing entries for this file from by_name
+    if let Some(old_symbols) = index.by_file.remove(&file_path) {
+        let old_count = old_symbols.len();
+        for sym in &old_symbols {
+            let key = sym.name.to_lowercase();
+            if let Some(entries) = index.by_name.get_mut(&key) {
+                entries.retain(|e| e.file != file_path);
+                if entries.is_empty() {
+                    index.by_name.remove(&key);
+                }
+            }
+        }
+        index.total_symbols = index.total_symbols.saturating_sub(old_count);
+    }
+
+    // Insert new symbols
+    if !new_symbols.is_empty() {
+        for sym in &new_symbols {
+            let key = sym.name.to_lowercase();
+            index.by_name.entry(key).or_default().push(sym.clone());
+        }
+        index.by_file.insert(file_path, new_symbols);
+        index.total_symbols += new_count;
+    }
+
+    // Update timestamp
+    index.built_at = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64;
+
+    Ok(new_count)
+}
+
 // ── Tests ──────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]

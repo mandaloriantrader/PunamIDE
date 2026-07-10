@@ -6,10 +6,12 @@
  *
  * Design principles:
  *  - No I/O, no async — takes a Tree, returns ASTMetrics synchronously
- *  - Language-agnostic node type sets — TS and JS share most node names;
- *    differences are handled via per-language override maps
+ *  - Multi-language node type sets — TS/JS/Python/Rust handled via
+ *    unified sets containing all known node types per language
  *  - All thresholds match the Phase 3 spec exactly
  *  - Zero dependencies beyond web-tree-sitter types
+ *
+ * Supported languages: TypeScript, TSX, JavaScript, JSX, Python, Rust
  *
  * Metrics computed:
  *  cyclomaticComplexity  — McCabe complexity (decision points + 1 per function)
@@ -59,29 +61,50 @@ const EXCESSIVE_PARAMS       = 5
  * Standard McCabe set — decision points that create distinct execution paths.
  * Modern syntax features (optional chaining, nullish coalescing, logical operators)
  * are intentionally excluded as they are language idioms, not maintainability risks.
+ *
+ * Covers: TypeScript, JavaScript, Python, Rust
  */
 const COMPLEXITY_NODES = new Set([
-  // Conditionals
+  // Conditionals (JS/TS)
   'if_statement',
   'switch_case',
   'ternary_expression',
 
-  // Loops
+  // Loops (JS/TS)
   'for_statement',
   'for_in_statement',
   'for_of_statement',
   'while_statement',
   'do_statement',
 
-  // Exception handling
+  // Exception handling (JS/TS)
   'catch_clause',
+
+  // Python-specific
+  'elif_clause',
+  'except_clause',
+  'with_statement',
+  'conditional_expression',    // Python ternary: x if cond else y
+  'for_in_clause',             // list comprehension for
+
+  // Rust-specific
+  'if_expression',
+  'match_arm',
+  'for_expression',
+  'while_expression',
+  'while_let_expression',
+  'if_let_expression',
+  'loop_expression',
 ])
 
 /**
  * Node types that define a new nesting scope.
  * Used for both nesting depth and function boundary detection.
+ *
+ * Covers: TypeScript, JavaScript, Python, Rust
  */
 const NESTING_SCOPE_NODES = new Set([
+  // JS/TS
   'if_statement',
   'else_clause',
   'for_statement',
@@ -93,13 +116,32 @@ const NESTING_SCOPE_NODES = new Set([
   'try_statement',
   'catch_clause',
   'with_statement',
+
+  // Python-specific
+  'elif_clause',
+  'except_clause',
+  'finally_clause',
+  'with_statement',
+
+  // Rust-specific
+  'if_expression',
+  'if_let_expression',
+  'match_expression',
+  'for_expression',
+  'while_expression',
+  'while_let_expression',
+  'loop_expression',
+  'unsafe_block',
 ])
 
 /**
  * Node types that define a function boundary.
  * Used to count functions and measure per-function length.
+ *
+ * Covers: TypeScript, JavaScript, Python, Rust
  */
 const FUNCTION_NODES = new Set([
+  // JS/TS
   'function_declaration',
   'function_expression',
   'arrow_function',
@@ -111,13 +153,33 @@ const FUNCTION_NODES = new Set([
   'method_signature',
   'function_signature',
   'abstract_method_signature',
+
+  // Python
+  'function_definition',
+  'async_function_definition',     // async def
+
+  // Rust
+  'function_item',
+  'async_fn_item',                 // async fn (older grammar versions)
+  'impl_item',                     // impl block methods parsed individually
 ])
 
-/** Node types that define a class. */
+/** Node types that define a class.
+ * Covers: TypeScript, JavaScript, Python, Rust (structs/enums as class-like)
+ */
 const CLASS_NODES = new Set([
+  // JS/TS
   'class_declaration',
   'class_expression',
   'abstract_class_declaration',
+
+  // Python
+  'class_definition',
+
+  // Rust (struct/enum as class-equivalent for metrics)
+  'struct_item',
+  'enum_item',
+  'trait_item',
 ])
 
 // ── Extractor ──────────────────────────────────────────────────────────────────
@@ -237,9 +299,9 @@ export class ASTMetricsExtractor {
       const endLine   = node.endPosition.row
       const lineCount = endLine - startLine + 1
 
-      // Count parameters — look for formal_parameters or parameters child
+      // Count parameters — look for formal_parameters, parameters, or function_parameters child
       const paramNode = node.children.find(
-        (c) => c.type === 'formal_parameters' || c.type === 'parameters'
+        (c) => c.type === 'formal_parameters' || c.type === 'parameters' || c.type === 'function_parameters'
       )
       const paramCount = paramNode
         ? paramNode.children.filter(
@@ -247,7 +309,11 @@ export class ASTMetricsExtractor {
               c.isNamed &&
               c.type !== ',' &&
               c.type !== '(' &&
-              c.type !== ')'
+              c.type !== ')' &&
+              c.type !== 'self_parameter' &&  // Python: don't count `self`
+              c.text !== 'self' &&            // Python fallback
+              c.text !== '&self' &&           // Rust: don't count `&self`
+              c.text !== '&mut self'          // Rust: don't count `&mut self`
           ).length
         : 0
 
@@ -269,12 +335,14 @@ export class ASTMetricsExtractor {
       count++
 
       // Count methods inside the class body
+      // JS/TS: class_body, Python: block, Rust: declaration_list (impl) or field_declaration_list (struct)
       const body = node.children.find(
-        (c) => c.type === 'class_body'
+        (c) => c.type === 'class_body' || c.type === 'block' || c.type === 'declaration_list' || c.type === 'field_declaration_list'
       )
       if (body) {
         const methodCount = body.children.filter(
           (c) => c.type === 'method_definition' || c.type === 'public_field_definition'
+            || c.type === 'function_definition' || c.type === 'function_item'  // Python/Rust methods
         ).length
         if (methodCount > GOD_CLASS_METHOD_COUNT) godCount++
       }

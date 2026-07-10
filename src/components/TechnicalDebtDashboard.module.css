@@ -1,0 +1,250 @@
+/* TechnicalDebtDashboard.module.css — Fix #4
+ * Extracted from inline React.CSSProperties objects.
+ * Uses CSS custom properties for theming compatibility.
+ */
+
+.panel {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  background: var(--bg-primary, #1a1a2e);
+  color: var(--text-primary, #e0e0e0);
+  font-family: var(--font-mono, 'JetBrains Mono', monospace);
+  overflow: auto;
+}
+
+.header {
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--border-color, #2a2a4a);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  font-weight: 600;
+  flex-shrink: 0;
+}
+
+.sectionBtn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background: none;
+  border: none;
+  color: var(--text-secondary, #a0a0b0);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  font-family: inherit;
+  padding: 0;
+}
+
+.card {
+  margin: 12px 16px;
+  padding: 14px;
+  background: var(--bg-card, #16162a);
+  border: 1px solid var(--border-color, #2a2a4a);
+  border-radius: 8px;
+}
+
+.row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  background: var(--bg-input, #1a1a2e);
+  border-radius: 4px;
+  margin-bottom: 4px;
+  font-size: 11px;
+}
+
+.actionBar {
+  padding: 8px 16px;
+  border-bottom: 1px solid var(--border-color, #2a2a4a);
+  flex-shrink: 0;
+}
+
+.actionBarInner {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.analyzeBtn {
+  padding: 6px 14px;
+  background: var(--accent-color, #3b82f6);
+  border: none;
+  border-radius: 6px;
+  color: #fff;
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-family: inherit;
+}
+
+.analyzeBtn:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+.fileCount {
+  font-size: 10px;
+  color: var(--text-secondary, #a0a0b0);
+}
+
+.scoreCircle {
+  width: 52px;
+  height: 52px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 700;
+  font-size: 18px;
+}
+
+.scoreHeader {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  margin-bottom: 10px;
+}
+
+.scoreCategory {
+  font-size: 16px;
+  font-weight: 700;
+  text-transform: capitalize;
+}
+
+.scoreTrend {
+  font-size: 11px;
+  color: var(--text-secondary, #a0a0b0);
+}
+
+.sectionWrapper {
+  margin: 6px 16px;
+}
+
+.sectionTitle {
+  margin: 12px 16px 4px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-secondary, #a0a0b0);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.gridThreeCol {
+  margin-top: 6px;
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr;
+  gap: 6px;
+}
+
+.statCard {
+  padding: 6px 8px;
+  background: var(--bg-input, #1a1a2e);
+  border-radius: 4px;
+  text-align: center;
+}
+
+.statValue {
+  font-size: 16px;
+  font-weight: 700;
+}
+
+.statLabel {
+  font-size: 9px;
+  color: var(--text-secondary, #a0a0b0);
+}
+
+.statSub {
+  font-size: 8px;
+  margin-top: 1px;
+}
+
+.emptyState {
+  padding: 32px;
+  text-align: center;
+  color: var(--text-secondary, #a0a0b0);
+  font-size: 12px;
+}
+
+.footer {
+  padding: 8px 16px;
+  border-top: 1px solid var(--border-color, #2a2a4a);
+  font-size: 10px;
+  color: var(--text-secondary, #a0a0b0);
+  margin-top: auto;
+}
+
+.planItemCard {
+  padding: 7px 10px;
+  background: var(--bg-input, #1a1a2e);
+  border-radius: 4px;
+  margin-bottom: 4px;
+  cursor: pointer;
+}
+
+.planItemHeader {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 3px;
+}
+
+.planItemPath {
+  font-size: 10px;
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.planItemMeta {
+  font-size: 10px;
+  color: var(--text-secondary, #a0a0b0);
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.expandedDetail {
+  margin-top: 6px;
+  border-top: 1px solid var(--border-color, #2a2a4a);
+  padding-top: 6px;
+}
+
+.badge {
+  font-size: 9px;
+  padding: 1px 5px;
+  border-radius: 3px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.astDetailGrid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 4px;
+}
+
+.astMetricRow {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 2px 6px;
+  border-radius: 3px;
+}
+
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+.spinning {
+  animation: spin 1s linear infinite;
+}

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
-import { GitBranch, RefreshCw, X, Sparkles, Copy, Plus, Minus, Check, Upload, Undo2, Save, Shield } from "lucide-react";
-import { pathExists, readFile, runTerminalCommand, writeFile } from "../utils/tauri";
+import { GitBranch, RefreshCw, X, Sparkles, Copy, Plus, Minus, Check, Upload, Undo2, Save, Shield, ChevronDown } from "lucide-react";
+import { pathExists, readFile, runTerminalCommand, writeFile, gitBranchList, gitBranchCreate, gitBranchSwitch, gitStashList, gitStashSave, gitStashPop, gitStashDrop } from "../utils/tauri";
+import type { GitBranchInfo, GitStashEntry } from "../utils/tauri";
 import { sendToProviderStreaming } from "../utils/providers";
 import type { AIProviderConfig } from "../utils/providers";
 import { showToast } from "../utils/toast";
@@ -106,6 +107,17 @@ export default function GitPanel({ projectPath, refreshKey, onOpenFile, onViewDi
   const [pushing, setPushing] = useState(false);
   const [branch, setBranch] = useState("");
 
+  // Branch picker state
+  const [branchPickerOpen, setBranchPickerOpen] = useState(false);
+  const [branches, setBranches] = useState<GitBranchInfo[]>([]);
+  const [newBranchName, setNewBranchName] = useState("");
+  const [branchLoading, setBranchLoading] = useState(false);
+
+  // Stash state
+  const [stashes, setStashes] = useState<GitStashEntry[]>([]);
+  const [stashLoading, setStashLoading] = useState(false);
+  const [showStash, setShowStash] = useState(false);
+
   const stagedChanges = changes.filter((c) => c.staged);
   const unstagedChanges = changes.filter((c) => !c.staged);
 
@@ -147,6 +159,100 @@ export default function GitPanel({ projectPath, refreshKey, onOpenFile, onViewDi
   useEffect(() => {
     loadChanges();
   }, [loadChanges, refreshKey]);
+
+  // ── Branch management ─────────────────────────────────────────────────────
+
+  const loadBranches = useCallback(async () => {
+    try {
+      const list = await gitBranchList();
+      setBranches(list);
+    } catch { setBranches([]); }
+  }, []);
+
+  const handleSwitchBranch = async (name: string) => {
+    if (name === branch) { setBranchPickerOpen(false); return; }
+    setBranchLoading(true);
+    try {
+      await gitBranchSwitch(name);
+      setBranch(name);
+      setBranchPickerOpen(false);
+      await loadChanges();
+      showToast(`Switched to ${name}`, "success");
+    } catch (err) {
+      showToast(`Failed to switch: ${err}`, "error");
+    } finally {
+      setBranchLoading(false);
+    }
+  };
+
+  const handleCreateBranch = async () => {
+    const name = newBranchName.trim();
+    if (!name) return;
+    setBranchLoading(true);
+    try {
+      await gitBranchCreate(name);
+      await gitBranchSwitch(name);
+      setBranch(name);
+      setNewBranchName("");
+      setBranchPickerOpen(false);
+      await loadChanges();
+      showToast(`Created and switched to ${name}`, "success");
+    } catch (err) {
+      showToast(`Failed to create branch: ${err}`, "error");
+    } finally {
+      setBranchLoading(false);
+    }
+  };
+
+  // ── Stash management ──────────────────────────────────────────────────────
+
+  const loadStashes = useCallback(async () => {
+    try {
+      const list = await gitStashList();
+      setStashes(list);
+    } catch { setStashes([]); }
+  }, []);
+
+  const handleStashSave = async () => {
+    setStashLoading(true);
+    try {
+      await gitStashSave(`WIP on ${branch || "HEAD"}`);
+      showToast("Changes stashed", "success");
+      await loadChanges();
+      await loadStashes();
+    } catch (err) {
+      showToast(`Stash failed: ${err}`, "error");
+    } finally {
+      setStashLoading(false);
+    }
+  };
+
+  const handleStashPop = async (index: number) => {
+    setStashLoading(true);
+    try {
+      await gitStashPop(index);
+      showToast("Stash popped", "success");
+      await loadChanges();
+      await loadStashes();
+    } catch (err) {
+      showToast(`Stash pop failed: ${err}`, "error");
+    } finally {
+      setStashLoading(false);
+    }
+  };
+
+  const handleStashDrop = async (index: number) => {
+    setStashLoading(true);
+    try {
+      await gitStashDrop(index);
+      showToast("Stash dropped", "success");
+      await loadStashes();
+    } catch (err) {
+      showToast(`Stash drop failed: ${err}`, "error");
+    } finally {
+      setStashLoading(false);
+    }
+  };
 
   // ── Stage / Unstage ──────────────────────────────────────────────────────────
 
@@ -393,11 +499,90 @@ export default function GitPanel({ projectPath, refreshKey, onOpenFile, onViewDi
       </div>
 
       <div className="git-summary">
-        <GitBranch size={14} />
-        <span>{branch || "—"}</span>
+        <div className="git-branch-picker-wrap">
+          <button
+            className="git-branch-picker-btn"
+            onClick={() => { setBranchPickerOpen(!branchPickerOpen); if (!branchPickerOpen) loadBranches(); }}
+            title="Switch branch"
+          >
+            <GitBranch size={14} />
+            <span>{branch || "—"}</span>
+            <ChevronDown size={10} />
+          </button>
+          {branchPickerOpen && (
+            <div className="git-branch-dropdown">
+              <div className="git-branch-dropdown-header">
+                <input
+                  className="git-branch-create-input"
+                  value={newBranchName}
+                  onChange={(e) => setNewBranchName(e.target.value)}
+                  onKeyDown={(e) => { if (e.key === "Enter") handleCreateBranch(); }}
+                  placeholder="New branch name…"
+                  disabled={branchLoading}
+                />
+                <button
+                  className="git-branch-create-btn"
+                  onClick={handleCreateBranch}
+                  disabled={!newBranchName.trim() || branchLoading}
+                  title="Create and switch"
+                >
+                  <Plus size={11} />
+                </button>
+              </div>
+              <div className="git-branch-dropdown-list">
+                {branches.filter((b) => !b.is_remote).map((b) => (
+                  <button
+                    key={b.name}
+                    className={`git-branch-item ${b.is_current ? "active" : ""}`}
+                    onClick={() => handleSwitchBranch(b.name)}
+                    disabled={branchLoading}
+                  >
+                    {b.is_current && <Check size={10} />}
+                    <span>{b.name}</span>
+                  </button>
+                ))}
+                {branches.filter((b) => !b.is_remote).length === 0 && (
+                  <span className="git-branch-empty">No branches found</span>
+                )}
+              </div>
+            </div>
+          )}
+        </div>
         <span className="git-summary-count">
           {loading ? "..." : `${changes.length} change${changes.length === 1 ? "" : "s"}`}
         </span>
+      </div>
+
+      {/* Stash Section */}
+      <div className="git-stash-section">
+        <div className="git-stash-header">
+          <button
+            className="git-action-btn git-stash-btn"
+            onClick={handleStashSave}
+            disabled={stashLoading || changes.length === 0}
+            title="Stash all changes"
+          >
+            <Save size={11} /> Stash
+          </button>
+          <button
+            className="git-action-btn"
+            onClick={() => { setShowStash(!showStash); if (!showStash) loadStashes(); }}
+            title="Show stash list"
+          >
+            List ({stashes.length})
+          </button>
+        </div>
+        {showStash && stashes.length > 0 && (
+          <div className="git-stash-list">
+            {stashes.map((s) => (
+              <div key={s.index} className="git-stash-item">
+                <span className="git-stash-msg">{s.message}</span>
+                <button className="git-stash-action" onClick={() => handleStashPop(s.index)} title="Pop">↑</button>
+                <button className="git-stash-action danger" onClick={() => handleStashDrop(s.index)} title="Drop">×</button>
+              </div>
+            ))}
+          </div>
+        )}
       </div>
 
       <div className="git-checkpoint-section">

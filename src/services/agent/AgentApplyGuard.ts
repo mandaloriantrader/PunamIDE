@@ -11,12 +11,14 @@
  * Usage: Wrap every agent action (writeFile, openBrowser, etc.) with guard methods.
  */
 
+import { invoke } from "@tauri-apps/api/core";
 import { getAgentOrchestrator } from "./AgentOrchestrator";
 import { validateArchitecture, getCachedRules, getArchitectureHealth } from "../architecture/ArchitectureEngine";
 import type { DependencyViolation, ArchitectureRules } from "../architecture/ArchitectureEngine";
 import { scanArchitectureViolations } from "../architecture/ViolationReporter";
 import { ThreatAnalyzer } from "../security/ThreatAnalyzer";
 import type { ThreatSummary } from "../security/ThreatAnalyzer";
+import { isFileLockedForDiff } from "../../hooks/useInlineDiff";
 
 // ── Browser Instance Tracking ───────────────────────────────────────────────
 
@@ -141,6 +143,14 @@ export function checkFileWrite(
     };
   }
 
+  // Layer 1b: Inline diff preview lock — block writes while user is reviewing hunks
+  if (isFileLockedForDiff(filePath)) {
+    return {
+      allowed: false,
+      reason: `File "${filePath}" has an active inline diff preview. Resolve all hunks before applying new edits.`,
+    };
+  }
+
   // Deduplication: check recent writes
   const contentHash = simpleHash(content);
   const existing = recentWrites.get(filePath);
@@ -232,29 +242,64 @@ export async function validateApply(
 
   // ── Layer 3: Security scan (Phase 6) ────────────────────────────────
   try {
-    const analyzer = new ThreatAnalyzer();
-    // Build a minimal SecurityFinding for validation
-    const finding = {
-      patternId: "agent_guard_check",
-      filePath,
-      line: 1,
-      column: 1,
-      snippet: content.slice(0, 120),
-      severity: "low" as const,
-      owasp: "A04:2021-Insecure Design" as const,
-      description: "Agent write guard validation check",
-      suggestion: "No action needed — this is a guard check",
-    };
-    const summary = analyzer.summarize([finding]);
+    // Construct a minimal unified-diff patch so the Rust scanner sees
+    // every proposed line as an "added" line (all prefixed with '+').
+    const lines = content.split("\n");
+    const patchLines = [`@@ -1,0 +1,${lines.length} @@`];
+    for (const line of lines) {
+      patchLines.push(`+${line}`);
+    }
+    const patchContent = patchLines.join("\n");
 
-    if (summary.criticalCount > 0 || summary.highCount > 0) {
+    const scanResult = await invoke<{
+      allowed: boolean;
+      blocked: boolean;
+      findings: Array<{
+        pattern_id: string;
+        file_path: string;
+        line: number;
+        column: number;
+        snippet: string;
+        severity: string;
+        owasp: string;
+        description: string;
+        suggestion: string;
+        cwe: number | null;
+      }>;
+      critical_findings: Array<{
+        pattern_id: string;
+        file_path: string;
+        line: number;
+        column: number;
+        snippet: string;
+        severity: string;
+        owasp: string;
+        description: string;
+        suggestion: string;
+      }>;
+      summary: string;
+    }>("security_scan_patch", {
+      patchContent,
+      filePath,
+    });
+
+    // Block on critical OR high-severity findings.
+    // scanResult.blocked mirrors critical_findings.is_empty() in Rust —
+    // high-severity findings must be checked explicitly.
+    const highFindings = scanResult.findings.filter(
+      (f) => f.severity === "high",
+    );
+    if (
+      scanResult.blocked ||
+      scanResult.critical_findings.length > 0 ||
+      highFindings.length > 0
+    ) {
       result.allowed = false;
-      result.securityIssues = summary;
-      result.reason = `Security: ${summary.criticalCount} critical, ${summary.highCount} high severity findings`;
+      result.reason = highFindings.length > 0 && scanResult.critical_findings.length === 0
+        ? `Blocked: ${highFindings.length} high-severity security finding(s) detected in proposed content.`
+        : scanResult.summary;
       return result;
     }
-
-    result.securityIssues = summary;
   } catch {
     // Security scan unavailable — allow with warning
   }

@@ -3,18 +3,21 @@
  * Opens when user clicks the status bar indicator.
  */
 
-import { X, Play, Pause, Square, Check, AlertCircle, FileCode, Terminal, Clock } from "lucide-react";
+import { useState } from "react";
+import { X, Play, Pause, Square, Check, AlertCircle, FileCode, Terminal, Clock, ShieldAlert, ShieldCheck, ListChecks } from "lucide-react";
 import { useBackgroundAgentStore } from "../store/backgroundAgentStore";
 import type { BackgroundAgentLog } from "../store/backgroundAgentStore";
 import { runTerminalCommand } from "../utils/tauri";
 import { showToast } from "../utils/toast";
+import TaskPlannerPanel from "./TaskPlannerPanel";
 
 function quotePathForStart(path: string): string {
   return /\s/.test(path) ? `"${path.replace(/"/g, '""')}"` : path;
 }
 
 export default function BackgroundAgentPanel() {
-  const { session, isRunning, isPaused, showPanel, togglePanel, pause, resume, cancel, clearSession } = useBackgroundAgentStore();
+  const { session, isRunning, isPaused, showPanel, togglePanel, pause, resume, cancel, clearSession, pendingCommandApproval, resolveCommandApproval } = useBackgroundAgentStore();
+  const [activeTab, setActiveTab] = useState<"activity" | "files" | "plan">("activity");
 
   if (!showPanel || !session) return null;
 
@@ -110,8 +113,39 @@ export default function BackgroundAgentPanel() {
         )}
       </div>
 
-      {/* File changes */}
-      {session.fileChanges.length > 0 && (
+      {/* Tab bar */}
+      <div className="bg-agent-panel-tabs">
+        <button
+          className={`bg-agent-tab ${activeTab === "activity" ? "active" : ""}`}
+          onClick={() => setActiveTab("activity")}
+        >
+          <Terminal size={12} />
+          Activity
+        </button>
+        <button
+          className={`bg-agent-tab ${activeTab === "files" ? "active" : ""}`}
+          onClick={() => setActiveTab("files")}
+        >
+          <FileCode size={12} />
+          Files
+        </button>
+        <button
+          className={`bg-agent-tab ${activeTab === "plan" ? "active" : ""}`}
+          onClick={() => setActiveTab("plan")}
+        >
+          <ListChecks size={12} />
+          Plan
+        </button>
+      </div>
+
+      {/* Tab content */}
+      {activeTab === "plan" && (
+        <div className="bg-agent-panel-plan">
+          <TaskPlannerPanel />
+        </div>
+      )}
+
+      {activeTab === "files" && session.fileChanges.length > 0 && (
         <div className="bg-agent-panel-section">
           <div className="bg-agent-section-title">File Changes</div>
           <div className="bg-agent-file-list">
@@ -135,21 +169,64 @@ export default function BackgroundAgentPanel() {
         </div>
       )}
 
-      {/* Activity log */}
-      <div className="bg-agent-panel-section">
-        <div className="bg-agent-section-title">Activity</div>
-        <div className="bg-agent-log-list">
-          {session.logs.slice(-20).map((log, i) => (
-            <div key={i} className="bg-agent-log-item">
-              {getStepIcon(log)}
-              <span className="bg-agent-log-msg">{log.message}</span>
-              <span className="bg-agent-log-time">
-                {new Date(log.timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" })}
-              </span>
-            </div>
-          ))}
+      {activeTab === "files" && session.fileChanges.length === 0 && (
+        <div className="bg-agent-panel-section">
+          <div className="bg-agent-section-empty">No file changes yet</div>
         </div>
-      </div>
+      )}
+
+      {/* Command Approval Card (non-blocking — replaces window.confirm) */}
+      {activeTab === "activity" && pendingCommandApproval && (
+        <div className="bg-agent-panel-section bg-agent-approval-card">
+          <div className="bg-agent-approval-header">
+            <ShieldAlert size={14} className={`approval-icon risk-${pendingCommandApproval.riskLevel}`} />
+            <span className="bg-agent-approval-title">Command Approval Required</span>
+            <span className={`bg-agent-risk-badge ${pendingCommandApproval.riskLevel}`}>
+              {pendingCommandApproval.riskLevel.toUpperCase()}
+            </span>
+          </div>
+          <div className="bg-agent-approval-command">
+            <code>{pendingCommandApproval.sanitizedCommand}</code>
+          </div>
+          <div className="bg-agent-approval-message">
+            {pendingCommandApproval.feedbackMessage}
+          </div>
+          <div className="bg-agent-approval-actions">
+            <button
+              className="bg-agent-approval-btn approve"
+              onClick={() => resolveCommandApproval(true)}
+            >
+              <ShieldCheck size={13} />
+              Approve
+            </button>
+            <button
+              className="bg-agent-approval-btn deny"
+              onClick={() => resolveCommandApproval(false)}
+            >
+              <X size={13} />
+              Deny
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Activity log */}
+      {activeTab === "activity" && (
+        <div className="bg-agent-panel-section">
+          <div className="bg-agent-section-title">Activity</div>
+          <div className="bg-agent-log-list">
+            {session.logs.slice(-20).map((log, i) => (
+              <div key={i} className="bg-agent-log-item">
+                {getStepIcon(log)}
+                <span className="bg-agent-log-msg">{log.message}</span>
+                <span className="bg-agent-log-time">
+                  {new Date(log.timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" })}
+                </span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* Error display */}
       {session.error && (

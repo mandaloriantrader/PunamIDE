@@ -17,6 +17,7 @@
 import type { AIProviderConfig } from "../../utils/providers";
 import { getTaskScheduler } from "./TaskScheduler";
 import type { ScheduledTask } from "./TaskScheduler";
+import { SessionMemory } from "../memory/SessionMemory";
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
@@ -130,6 +131,8 @@ const AGENT_PERMISSIONS: Record<AgentType, {
 export class AgentOrchestrator {
   private state: OrchestratorState;
   private listeners: Array<() => void> = [];
+  private sessionMemory: SessionMemory;
+  private completedTaskCount: number = 0;
 
   constructor() {
     this.state = {
@@ -141,6 +144,12 @@ export class AgentOrchestrator {
       securityReport: null,
       isRunning: false,
     };
+    this.sessionMemory = new SessionMemory();
+
+    // Trigger eviction on startup (non-blocking)
+    this.sessionMemory.evictStaleEntries().catch(() => {
+      // Eviction failure is non-critical; silently ignore
+    });
   }
 
   /** Subscribe to state changes (for UI updates). Returns unsubscribe function. */
@@ -362,7 +371,7 @@ export class AgentOrchestrator {
   }
 
   /** Assign the next task from the queue to an idle agent. Uses TaskScheduler for Layer 6 ordering. */
-  assignNextTask(): AgentTask | null {
+  async assignNextTask(): Promise<AgentTask | null> {
     const scheduler = getTaskScheduler();
 
     // Sync queue into TaskScheduler if it has pending tasks not yet enqueued
@@ -397,6 +406,18 @@ export class AgentOrchestrator {
     const agent = this.findIdleAgent();
     if (!agent) return null;
 
+    // Build session context before task starts (non-blocking on failure)
+    try {
+      const pastContext = await this.sessionMemory.buildSessionContext(task.description);
+      if (pastContext) {
+        // Store context on the task result field temporarily for injection by ContextAssembler
+        // The ContextAssembler will read this as the project_memory slot
+        (task as AgentTask & { sessionContext?: string }).sessionContext = pastContext;
+      }
+    } catch {
+      // Session context retrieval failure is non-critical; proceed without context
+    }
+
     task.status = "running";
     task.assignedTo = agent.config.id;
     agent.status = "running";
@@ -414,13 +435,37 @@ export class AgentOrchestrator {
     const session = this.state.agents.get(agentId);
     if (!session || !session.currentTask) return;
 
-    session.currentTask.status = success ? "completed" : "failed";
-    session.currentTask.result = result;
-    session.completedTasks.push(session.currentTask.id);
+    const task = session.currentTask;
+    const durationMs = session.startedAt ? Date.now() - session.startedAt : 0;
+
+    task.status = success ? "completed" : "failed";
+    task.result = result;
+    session.completedTasks.push(task.id);
 
     // Notify TaskScheduler so dependent tasks can proceed
     const scheduler = getTaskScheduler();
-    scheduler.completeTask(session.currentTask.id);
+    scheduler.completeTask(task.id);
+
+    // Record task in session memory (non-blocking)
+    this.sessionMemory.recordTask({
+      taskDescription: task.description,
+      status: success ? "success" : "failure",
+      approach: result || "",
+      errorType: success ? undefined : "agent_error",
+      filesAffected: task.files,
+      patternsLearned: this.extractPatterns(result),
+      durationMs,
+    }).catch(() => {
+      // Session memory recording failure is non-critical; silently ignore
+    });
+
+    // Increment completed count and trigger eviction every 10th completion
+    this.completedTaskCount++;
+    if (this.completedTaskCount % 10 === 0) {
+      this.sessionMemory.evictStaleEntries().catch(() => {
+        // Eviction failure is non-critical; silently ignore
+      });
+    }
 
     session.currentTask = null;
     session.status = "idle";
@@ -490,6 +535,33 @@ export class AgentOrchestrator {
       if (session.status === "idle") return session;
     }
     return null;
+  }
+
+  /**
+   * Extract learned patterns from a task result string.
+   * Heuristic: lines starting with "Pattern:", "Learned:", or "- " are treated as patterns.
+   * Returns at most 10 patterns.
+   */
+  private extractPatterns(result?: string): string[] {
+    if (!result) return [];
+
+    const patterns: string[] = [];
+    const lines = result.split("\n");
+
+    for (const line of lines) {
+      const trimmed = line.trim();
+      if (
+        trimmed.startsWith("Pattern:") ||
+        trimmed.startsWith("Learned:") ||
+        trimmed.startsWith("Insight:")
+      ) {
+        const value = trimmed.replace(/^(Pattern|Learned|Insight):\s*/, "");
+        if (value) patterns.push(value);
+      }
+    }
+
+    // If no explicit patterns found, return empty array
+    return patterns.slice(0, 10);
   }
 
   /** Simple glob matching: supports ** and * wildcards. */

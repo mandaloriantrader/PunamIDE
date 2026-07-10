@@ -287,9 +287,9 @@ export async function enhanceSymbolIndexWithTreeSitter(): Promise<{
   const stats = { filesProcessed: 0, symbolsExtracted: 0, errors: 0 };
 
   try {
-    // Preload tree-sitter grammars
+    // Don't call engine.preload() — let the existing debt analyzer control WASM lifecycle.
+    // We only use parseFile() which loads grammars lazily on demand.
     const engine = getASTEngine();
-    await engine.preload();
 
     // Get all project files from the Rust file index
     const projectFiles = await invoke<
@@ -307,30 +307,36 @@ export async function enhanceSymbolIndexWithTreeSitter(): Promise<{
       })
       .map((f) => f.path);
 
-    // Process in batches of 20 to avoid overwhelming the main thread
-    const BATCH_SIZE = 20;
+    // Process in small batches (5 files) with generous yields to keep UI responsive.
+    // Tree-sitter parsing is CPU-intensive — smaller batches prevent micro-freezes.
+    const BATCH_SIZE = 5;
     for (let i = 0; i < tsFiles.length; i += BATCH_SIZE) {
       const batch = tsFiles.slice(i, i + BATCH_SIZE);
 
-      await Promise.allSettled(
-        batch.map(async (filePath) => {
-          try {
-            const content = await invoke<string>("read_file", { path: filePath });
-            if (!content) return;
+      for (const filePath of batch) {
+        try {
+          const content = await invoke<string>("read_file", { path: filePath });
+          if (!content) continue;
 
-            const symbols = await extractSymbolsFromFile(content, filePath);
-            if (symbols && symbols.length > 0) {
-              stats.filesProcessed++;
-              stats.symbolsExtracted += symbols.length;
-            }
-          } catch {
-            stats.errors++;
+          const symbols = await extractSymbolsFromFile(content, filePath);
+          if (symbols && symbols.length > 0) {
+            stats.filesProcessed++;
+            stats.symbolsExtracted += symbols.length;
           }
-        })
-      );
+        } catch {
+          stats.errors++;
+        }
+      }
 
-      // Yield to main thread between batches
-      await new Promise((resolve) => setTimeout(resolve, 0));
+      // Yield to main thread between batches — use requestIdleCallback for
+      // true idle-time scheduling so this never competes with user interactions
+      await new Promise<void>((resolve) => {
+        if (typeof requestIdleCallback === "function") {
+          requestIdleCallback(() => resolve());
+        } else {
+          setTimeout(resolve, 4);
+        }
+      });
     }
   } catch (err) {
     console.warn("[TreeSitterSymbolExtractor] Enhancement pass failed:", err);

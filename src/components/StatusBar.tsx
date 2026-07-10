@@ -3,9 +3,12 @@
  * Shows: git branch | problems | background agent | cursor position | language | encoding | spaces
  */
 
-import { GitBranch, AlertCircle, AlertTriangle, CheckCircle2, Loader2, Pause, X, Check } from "lucide-react";
+import { GitBranch, AlertCircle, AlertTriangle, CheckCircle2, Loader2, Pause, X, Check, ShieldAlert, ShieldCheck } from "lucide-react";
 import { useBackgroundAgentStore } from "../store/backgroundAgentStore";
+import { useAIStore } from "../store/aiStore";
 import { cancelBackgroundExecution } from "../services/backgroundAgentExecutor";
+import { getArchitectureHealth } from "../services/architecture/ArchitectureEngine";
+import { useCallback, useEffect, useState } from "react";
 
 interface Props {
   gitBranch?: string;
@@ -29,6 +32,30 @@ export default function StatusBar({
   isModified,
 }: Props) {
   const { session, isRunning, isPaused, togglePanel, pause, resume, cancel } = useBackgroundAgentStore();
+  const pendingApprovalCount = useAIStore((state) => state.pendingApprovalCount);
+  const tokenBudgetStatus = useAIStore((state) => state.tokenBudgetStatus);
+
+  const [archHealth, setArchHealth] = useState<{
+    score: "good" | "warning" | "critical";
+    errorCount: number;
+    loaded: boolean;
+  }>({ score: "good", errorCount: 0, loaded: false });
+
+  const refreshArchHealth = useCallback(async () => {
+    try {
+      const health = await getArchitectureHealth();
+      setArchHealth({ score: health.score, errorCount: health.circularDeps + health.layerViolations, loaded: true });
+    } catch {
+      setArchHealth((prev) => ({ ...prev, loaded: true }));
+    }
+  }, []);
+
+  useEffect(() => {
+    refreshArchHealth();
+    // Refresh every 60s
+    const interval = setInterval(refreshArchHealth, 60_000);
+    return () => clearInterval(interval);
+  }, [refreshArchHealth]);
 
   const handleCancel = () => {
     cancelBackgroundExecution();
@@ -120,10 +147,72 @@ export default function StatusBar({
             )}
           </span>
         )}
+
+        {/* Pending Approvals Badge */}
+        {pendingApprovalCount > 0 && (
+          <span
+            className="status-item status-pending-approvals"
+            title={`${pendingApprovalCount} patch approval(s) waiting`}
+          >
+            <span>⏳ {pendingApprovalCount} pending</span>
+          </span>
+        )}
+
+        {/* Architecture Health Indicator */}
+        {archHealth.loaded && (
+          <span
+            className={`status-item status-arch ${
+              archHealth.score === "critical" ? "status-error" :
+              archHealth.score === "warning" ? "status-warn" :
+              "status-ok"
+            }`}
+            title={
+              archHealth.score === "critical"
+                ? `Architecture: ${archHealth.errorCount} violations — manual review required`
+                : archHealth.score === "warning"
+                  ? `Architecture: ${archHealth.errorCount} violation(s) — review recommended`
+                  : "Architecture rules passing"
+            }
+            onClick={refreshArchHealth}
+            style={{ cursor: "pointer" }}
+          >
+            {archHealth.score === "critical" ? (
+              <ShieldAlert size={12} />
+            ) : archHealth.score === "warning" ? (
+              <AlertTriangle size={12} />
+            ) : (
+              <ShieldCheck size={12} />
+            )}
+            <span>
+              {archHealth.score === "critical"
+                ? `Arch: ${archHealth.errorCount}`
+                : archHealth.score === "warning"
+                  ? `Arch: ${archHealth.errorCount}`
+                  : "Arch: OK"}
+            </span>
+          </span>
+        )}
       </div>
 
       {/* Right side */}
       <div className="status-bar-right">
+        {tokenBudgetStatus && (
+          <span
+            className="status-item status-budget"
+            title={`Context budget: ${tokenBudgetStatus.percentUsed}% used (${tokenBudgetStatus.used.codeContext} / ${tokenBudgetStatus.allocation.codeContext} tokens)`}
+          >
+            <span className="status-budget-label">{tokenBudgetStatus.percentUsed}% context</span>
+            <span className="status-budget-bar-container">
+              <span
+                className={`status-budget-bar ${
+                  tokenBudgetStatus.percentUsed > 90 ? "budget-red" :
+                  tokenBudgetStatus.percentUsed > 70 ? "budget-yellow" : "budget-green"
+                }`}
+                style={{ width: `${Math.min(tokenBudgetStatus.percentUsed, 100)}%` }}
+              />
+            </span>
+          </span>
+        )}
         {filePath && isModified && (
           <span className="status-item status-modified" title="Unsaved changes">
             ●

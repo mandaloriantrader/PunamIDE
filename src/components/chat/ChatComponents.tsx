@@ -3,8 +3,8 @@
  * Extracted from AiChat.tsx for maintainability.
  */
 
-import React, { type ReactNode } from "react";
-import { Check, ChevronDown, Clock, Zap } from "lucide-react";
+import React, { type ReactNode, useState, useCallback } from "react";
+import { Check, ChevronDown, Clock, Zap, Copy, FileDown } from "lucide-react";
 import type { AIProviderConfig, ResponseMetrics } from "../../utils/providers";
 import type { ParsedResponse } from "../../utils/prompts";
 
@@ -78,6 +78,68 @@ function splitActionCodeBlocks(text: string): MessagePart[] {
   return parts.length > 0 ? parts : [{ type: "text", content: text }];
 }
 
+// --- Code Block With Actions (Copy + Apply) ---
+
+/**
+ * Emits a custom event when "Apply to File" is clicked.
+ * The parent (AiChat) listens for this event to handle the file write.
+ */
+export const APPLY_CODE_EVENT = "punam-apply-code";
+
+function emitApplyCode(code: string, language: string): void {
+  const event = new CustomEvent(APPLY_CODE_EVENT, {
+    detail: { code, language },
+  });
+  window.dispatchEvent(event);
+}
+
+function CodeBlockWithActions({ code, language }: { code: string; language: string }) {
+  const [copied, setCopied] = useState(false);
+
+  const handleCopy = useCallback(() => {
+    navigator.clipboard.writeText(code).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    }).catch(() => {});
+  }, [code]);
+
+  const handleApply = useCallback(() => {
+    emitApplyCode(code, language);
+  }, [code, language]);
+
+  return (
+    <div className="markdown-code-block">
+      <div className="markdown-code-header">
+        <span>{language || "code"}</span>
+        <div className="code-block-actions">
+          <button
+            type="button"
+            className="code-action-btn"
+            onClick={handleCopy}
+            title={copied ? "Copied!" : "Copy code"}
+            aria-label="Copy code"
+          >
+            {copied ? <Check size={13} /> : <Copy size={13} />}
+          </button>
+          <button
+            type="button"
+            className="code-action-btn apply-btn"
+            onClick={handleApply}
+            title="Apply to file"
+            aria-label="Apply code to file"
+          >
+            <FileDown size={13} />
+            <span>Apply</span>
+          </button>
+        </div>
+      </div>
+      <pre><code>{code}</code></pre>
+    </div>
+  );
+}
+
+// --- Markdown Message ---
+
 export const MarkdownMessage = React.memo(function MarkdownMessage({ text }: { text: string }) {
   const visibleText = text
     .split(/\r?\n/)
@@ -117,12 +179,11 @@ export const MarkdownMessage = React.memo(function MarkdownMessage({ text }: { t
           if (!code.trim()) return null;
 
           return (
-            <div className="markdown-code-block" key={`code-${index}`}>
-              <div className="markdown-code-header">
-                <span>{language || "code"}</span>
-              </div>
-              <pre><code>{code}</code></pre>
-            </div>
+            <CodeBlockWithActions
+              key={`code-${index}`}
+              code={code}
+              language={language}
+            />
           );
         }
 

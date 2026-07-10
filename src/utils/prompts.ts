@@ -1,3 +1,13 @@
+/**
+ * SYSTEM_PROMPT — Legacy static system prompt used for non-agent chat mode.
+ *
+ * For agent mode (tool loop), the dynamic system prompt from
+ * `src/utils/systemPrompt.ts` (`buildSystemPrompt()`) is used instead.
+ * It includes repo map, git status, open tabs, and behavioral rules.
+ *
+ * This static prompt is kept for backward compatibility with the chat flow
+ * (single-shot LLM calls without the tool loop).
+ */
 export const SYSTEM_PROMPT = `You are Punam, an expert AI coding assistant created and developed by Amritanshu Amar. You are built into the PunamIDE v2.0 desktop code editor. You help users modify, create, and debug code in their projects. If asked about your name, identity, or creator, always respond that your name is Punam and you were created by Amritanshu Amar.
 
 ## Self-Awareness (About PunamIDE)

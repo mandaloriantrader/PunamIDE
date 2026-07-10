@@ -7,12 +7,13 @@ Native desktop app with file explorer, Monaco code editor, built-in terminal, AI
 ## Features
 
 - **Monaco Code Editor** — Same editor engine as VS Code, with syntax highlighting for 30+ languages
+- **Inline AI Autocomplete** — Copilot-style ghost text completions with FIM and chat fallback, LRU cache, and suppression heuristics
 - **File Explorer** — Tree view sidebar with folder/file icons
 - **Multi-Tab Support** — Open and edit multiple files in tabs
 - **Built-in Terminal** — Run commands directly from the app
 - **AI Chat Panel** — Natural language instructions to modify your code
-- **Multi-Provider AI** — Google Gemini (free), Groq (free), OpenAI (cheap)
-- **Settings Panel** — Configure API keys, models, and themes
+- **Multi-Provider AI** — Google Gemini (free), Groq (free), DeepSeek, Mistral, OpenAI, Ollama (local)
+- **Settings Panel** — Configure API keys, models, themes, and autocomplete behavior
 - **Dark/Light Theme** — Catppuccin-inspired dark theme, clean light theme
 - **Native Desktop App** — Built with Tauri (Rust), ~15MB binary vs Electron's 200MB+
 - **Ctrl+S Save** — Save files with keyboard shortcut

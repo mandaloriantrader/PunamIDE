@@ -32,13 +32,18 @@ import {
   Database,
   Link,
   ArrowRightLeft,
+  Download,
 } from "lucide-react";
 import { getDebtAnalyzer }    from "../services/technicalDebt/DebtAnalyzer";
 import { getDebtScorer }      from "../services/technicalDebt/DebtScorer";
 import { getRefactorPlanner } from "../services/technicalDebt/RefactorPlanner";
 import { getDependencyGraphEngine } from "../services/technicalDebt/DependencyGraphEngine";
+import { getIncrementalGraphEngine } from "../services/technicalDebt/IncrementalGraphEngine";
 import { getCircularDepDetector }   from "../services/technicalDebt/CircularDepDetector";
 import { getCouplingAnalyzer }      from "../services/technicalDebt/CouplingAnalyzer";
+import { getDeadCodeAnalyzer }     from "../services/technicalDebt/DeadCodeAnalyzer";
+import { getDiffEngine }           from "../services/technicalDebt/DiffEngine";
+import { getGraphExporter }        from "../services/technicalDebt/GraphExporter";
 import type { DebtScore, ModuleDebtScore }   from "../services/technicalDebt/DebtScorer";
 import type {
   ProjectDebtAnalysis,
@@ -50,6 +55,8 @@ import type {
 import type { RefactorPlan, RefactorPlanItem } from "../services/technicalDebt/RefactorPlanner";
 import type { CycleDetectionResult }           from "../services/technicalDebt/CircularDepDetector";
 import type { CouplingAnalysis }               from "../services/technicalDebt/CouplingAnalyzer";
+import type { DeadCodeReport }                 from "../services/technicalDebt/DeadCodeAnalyzer";
+import type { ScanDiff }                       from "../services/technicalDebt/DiffEngine";
 import type { FileEntry } from "../utils/tauri";
 
 // ── Constants ─────────────────────────────────────────────────────────────────
@@ -113,20 +120,10 @@ const CATEGORY_LABEL: Record<string, string> = {
 
 // ── Styles ────────────────────────────────────────────────────────────────────
 
-const PANEL: React.CSSProperties = {
-  display: "flex", flexDirection: "column", height: "100%",
-  background: "var(--bg-primary, #1a1a2e)",
-  color: "var(--text-primary, #e0e0e0)",
-  fontFamily: "var(--font-mono, 'JetBrains Mono', monospace)",
-  overflow: "auto",
-};
+import styles from "./TechnicalDebtDashboard.module.css";
 
-const HEADER: React.CSSProperties = {
-  padding: "12px 16px",
-  borderBottom: "1px solid var(--border-color, #2a2a4a)",
-  display: "flex", alignItems: "center", gap: "8px",
-  fontSize: "13px", fontWeight: 600, flexShrink: 0,
-};
+// Legacy style objects retained for sub-components with dynamic styling.
+// Structural layout styles now use CSS Modules (styles.panel, styles.header, etc.)
 
 const SECTION_BTN: React.CSSProperties = {
   display: "flex", alignItems: "center", gap: "6px",
@@ -134,13 +131,6 @@ const SECTION_BTN: React.CSSProperties = {
   color: "var(--text-secondary, #a0a0b0)",
   fontSize: "12px", fontWeight: 600,
   cursor: "pointer", fontFamily: "inherit", padding: 0,
-};
-
-const CARD: React.CSSProperties = {
-  margin: "12px 16px", padding: "14px",
-  background: "var(--bg-card, #16162a)",
-  border: "1px solid var(--border-color, #2a2a4a)",
-  borderRadius: "8px",
 };
 
 const ROW: React.CSSProperties = {
@@ -277,6 +267,9 @@ export default function TechnicalDebtDashboard({
   const [showTrend,       setShowTrend]       = useState(false);
   const [showDiscovery,   setShowDiscovery]   = useState(false);
   const [showGraph,       setShowGraph]       = useState(true);
+  const [showDiff,        setShowDiff]        = useState(true);
+  const [deadCodeReport, setDeadCodeReport]   = useState<DeadCodeReport | null>(null);
+  const [scanDiff, setScanDiff]               = useState<ScanDiff | null>(null);
   const [showQuickWins,   setShowQuickWins]   = useState(true);
   const [showMajor,       setShowMajor]       = useState(false);
   const [showMaintenance, setShowMaintenance] = useState(false);
@@ -320,8 +313,9 @@ export default function TechnicalDebtDashboard({
       try {
         const importMaps = await buildImportMaps(filePaths, analysis);
 
-        const graphEngine  = getDependencyGraphEngine();
-        const graph        = graphEngine.build(importMaps, filePaths);
+        const incrementalEngine = getIncrementalGraphEngine();
+        const buildResult = incrementalEngine.buildIncremental(importMaps, filePaths);
+        const graph = buildResult.graph;
 
         const cycleDetector = getCircularDepDetector();
         const cycles        = cycleDetector.detect(graph);
@@ -340,6 +334,29 @@ export default function TechnicalDebtDashboard({
 
         setScore(scorer.score(analysis));
 
+        // ── Differential analysis ───────────────────────────────────────────
+        const diffEngine = getDiffEngine();
+        setScanDiff(diffEngine.computeDiff(analysis.files, analysis.overallScore));
+
+        // ── Phase 3: Dead Code Analysis ─────────────────────────────────────
+        try {
+          const { readFile } = await import("../utils/tauri");
+          const fileContents: Record<string, string> = {};
+          const deadCodeLimit = Math.min(filePaths.length, 500);
+          for (let i = 0; i < deadCodeLimit; i++) {
+            const fp = filePaths[i];
+            try {
+              const content = await readFile(fp);
+              if (content.trim()) fileContents[fp] = content;
+            } catch { /* skip unreadable files */ }
+          }
+          const deadCodeAnalyzer = getDeadCodeAnalyzer();
+          const report = await deadCodeAnalyzer.analyze(graph, fileContents);
+          setDeadCodeReport(report);
+        } catch {
+          setDeadCodeReport(null); // Non-blocking — analysis continues without dead code
+        }
+
         const planner = getRefactorPlanner();
         setPlan(planner.generatePlan(analysis));
 
@@ -352,6 +369,66 @@ export default function TechnicalDebtDashboard({
       setGraphBuilding(false);
     }
   }, [filePaths, maxFiles]);
+
+  // ── Graph export handler ─────────────────────────────────────────────────────
+
+  const handleExportGraph = useCallback(async (format: 'dot' | 'json' | 'mermaid') => {
+    if (!cycleResult || !couplingResult) return
+
+    const exporter = getGraphExporter()
+    const incrementalEngine = getIncrementalGraphEngine()
+    const graph = incrementalEngine.hasBaseline
+      ? incrementalEngine.buildIncremental([], filePaths).graph
+      : null
+
+    if (!graph) return
+
+    let content: string
+    let defaultName: string
+    let filterName: string
+    let filterExt: string
+
+    switch (format) {
+      case 'dot':
+        content = exporter.toDOT(graph, {
+          highlightCycles: cycleResult.filesInCycles,
+          highlightHubs: new Set(couplingResult.hubFiles),
+        })
+        defaultName = 'dependency-graph.dot'
+        filterName = 'Graphviz DOT'
+        filterExt = 'dot'
+        break
+      case 'json':
+        content = JSON.stringify(exporter.toJSON(graph, couplingResult), null, 2)
+        defaultName = 'dependency-graph.json'
+        filterName = 'JSON'
+        filterExt = 'json'
+        break
+      case 'mermaid':
+        content = exporter.toMermaid(graph, { highlightCycles: cycleResult.filesInCycles })
+        defaultName = 'dependency-graph.mmd'
+        filterName = 'Mermaid'
+        filterExt = 'mmd'
+        break
+    }
+
+    try {
+      const { save } = await import("@tauri-apps/plugin-dialog")
+      const { writeTextFile } = await import("@tauri-apps/plugin-fs")
+      const savePath = await save({
+        defaultPath: defaultName,
+        filters: [{ name: filterName, extensions: [filterExt] }],
+      })
+      if (savePath) {
+        await writeTextFile(savePath, content)
+      }
+    } catch {
+      // Fallback: copy to clipboard
+      try {
+        await navigator.clipboard.writeText(content)
+      } catch { /* silent */ }
+    }
+  }, [cycleResult, couplingResult, filePaths])
 
   // ── Render helpers ───────────────────────────────────────────────────────────
 
@@ -388,10 +465,10 @@ export default function TechnicalDebtDashboard({
   // ── Main render ───────────────────────────────────────────────────────────────
 
   return (
-    <div style={PANEL}>
+    <div className={styles.panel}>
 
       {/* Header */}
-      <div style={HEADER}>
+      <div className={styles.header}>
         <BarChart3 size={16} />
         Technical Debt Intelligence
         <span style={{ fontSize: "10px", color: "var(--text-secondary, #a0a0b0)", marginLeft: "auto", display: "flex", alignItems: "center", gap: "6px" }}>
@@ -404,8 +481,8 @@ export default function TechnicalDebtDashboard({
       </div>
 
       {/* Action bar */}
-      <div style={{ padding: "8px 16px", borderBottom: "1px solid var(--border-color, #2a2a4a)", flexShrink: 0 }}>
-        <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
+      <div className={styles.actionBar}>
+        <div className={styles.actionBarInner}>
           <button
             onClick={handleAnalyze}
             disabled={loading || scanning || graphBuilding || filePaths.length === 0}
@@ -459,7 +536,7 @@ export default function TechnicalDebtDashboard({
       {score && (
         <>
           {/* ── Overall score card ─────────────────────────────────────────── */}
-          <div style={CARD}>
+          <div className={styles.card}>
             <div style={{ display: "flex", alignItems: "center", gap: "16px", marginBottom: "10px" }}>
               <div style={{
                 width: 52, height: 52, borderRadius: "50%",
@@ -539,7 +616,102 @@ export default function TechnicalDebtDashboard({
                 )}
               </button>
               {showGraph && cycleResult && couplingResult && (
-                <GraphSummaryPanel cycles={cycleResult} coupling={couplingResult} />
+                <>
+                  <GraphSummaryPanel cycles={cycleResult} coupling={couplingResult} />
+                  <div style={{ display: "flex", gap: "6px", marginTop: "8px" }}>
+                    <button onClick={() => handleExportGraph('dot')} style={{
+                      padding: "3px 8px", fontSize: "9px", fontWeight: 600,
+                      background: "var(--bg-input, #1a1a2e)", border: "1px solid var(--border-color, #2a2a4a)",
+                      borderRadius: "4px", color: "var(--text-secondary, #a0a0b0)",
+                      cursor: "pointer", fontFamily: "inherit", display: "flex", alignItems: "center", gap: "3px",
+                    }}>
+                      <Download size={9} /> DOT
+                    </button>
+                    <button onClick={() => handleExportGraph('json')} style={{
+                      padding: "3px 8px", fontSize: "9px", fontWeight: 600,
+                      background: "var(--bg-input, #1a1a2e)", border: "1px solid var(--border-color, #2a2a4a)",
+                      borderRadius: "4px", color: "var(--text-secondary, #a0a0b0)",
+                      cursor: "pointer", fontFamily: "inherit", display: "flex", alignItems: "center", gap: "3px",
+                    }}>
+                      <Download size={9} /> JSON
+                    </button>
+                    <button onClick={() => handleExportGraph('mermaid')} style={{
+                      padding: "3px 8px", fontSize: "9px", fontWeight: 600,
+                      background: "var(--bg-input, #1a1a2e)", border: "1px solid var(--border-color, #2a2a4a)",
+                      borderRadius: "4px", color: "var(--text-secondary, #a0a0b0)",
+                      cursor: "pointer", fontFamily: "inherit", display: "flex", alignItems: "center", gap: "3px",
+                    }}>
+                      <Download size={9} /> Mermaid
+                    </button>
+                  </div>
+                </>
+              )}
+            </div>
+          )}
+
+          {/* ── Changes since last scan (Fix #10) ────────────────────────── */}
+          {scanDiff && scanDiff.hasPrevious && (scanDiff.improved.length > 0 || scanDiff.regressed.length > 0 || scanDiff.newFiles.length > 0) && (
+            <div style={{ margin: "6px 16px" }}>
+              <button onClick={() => setShowDiff(!showDiff)} style={SECTION_BTN}>
+                {showDiff ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+                <TrendingUp size={13} />
+                Changes Since Last Scan
+                <span style={{
+                  color: scanDiff.overallDelta >= 0 ? "#34d399" : "#f87171",
+                  fontSize: "10px", marginLeft: "4px",
+                }}>
+                  {scanDiff.overallDelta >= 0 ? "+" : ""}{scanDiff.overallDelta} pts
+                </span>
+              </button>
+              {showDiff && (
+                <div style={{ marginTop: "6px" }}>
+                  {scanDiff.improved.length > 0 && (
+                    <div style={{ marginBottom: "6px" }}>
+                      <div style={{ fontSize: "10px", color: "#34d399", fontWeight: 600, marginBottom: "3px" }}>
+                        ↑ Improved ({scanDiff.improved.length})
+                      </div>
+                      {scanDiff.improved.slice(0, 5).map((d) => (
+                        <div key={d.filePath} style={{ ...ROW, borderLeft: "2px solid #34d399" }}>
+                          <span style={{ flex: 1, fontSize: "10px" }}>
+                            {d.filePath.replace(/\\/g, "/").split("/").slice(-2).join("/")}
+                          </span>
+                          <span style={{ color: "#34d399", fontWeight: 600, fontSize: "10px" }}>+{d.delta}</span>
+                          {d.resolvedIssues.length > 0 && (
+                            <span style={{ fontSize: "9px", color: "#a0a0b0" }}>✓ {d.resolvedIssues[0]}</span>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                  {scanDiff.regressed.length > 0 && (
+                    <div style={{ marginBottom: "6px" }}>
+                      <div style={{ fontSize: "10px", color: "#f87171", fontWeight: 600, marginBottom: "3px" }}>
+                        ↓ Regressed ({scanDiff.regressed.length})
+                      </div>
+                      {scanDiff.regressed.slice(0, 5).map((d) => (
+                        <div key={d.filePath} style={{ ...ROW, borderLeft: "2px solid #f87171" }}>
+                          <span style={{ flex: 1, fontSize: "10px" }}>
+                            {d.filePath.replace(/\\/g, "/").split("/").slice(-2).join("/")}
+                          </span>
+                          <span style={{ color: "#f87171", fontWeight: 600, fontSize: "10px" }}>{d.delta}</span>
+                          {d.newIssues.length > 0 && (
+                            <span style={{ fontSize: "9px", color: "#a0a0b0" }}>⚠ {d.newIssues[0]}</span>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                  {scanDiff.newFiles.length > 0 && (
+                    <div style={{ fontSize: "9px", color: "#a0a0b0", marginTop: "4px" }}>
+                      + {scanDiff.newFiles.length} new file{scanDiff.newFiles.length > 1 ? "s" : ""}
+                    </div>
+                  )}
+                  {scanDiff.removedFiles.length > 0 && (
+                    <div style={{ fontSize: "9px", color: "#a0a0b0" }}>
+                      − {scanDiff.removedFiles.length} removed
+                    </div>
+                  )}
+                </div>
               )}
             </div>
           )}
@@ -620,7 +792,7 @@ export default function TechnicalDebtDashboard({
 
       {/* Empty state */}
       {!score && !loading && (
-        <div style={{ padding: "32px", textAlign: "center", color: "var(--text-secondary, #a0a0b0)", fontSize: "12px" }}>
+        <div className={styles.emptyState}>
           <BarChart3 size={24} style={{ marginBottom: "8px", opacity: 0.5 }} />
           <div>Run analysis to calculate project technical debt</div>
           {filePaths.length > 0 && (
@@ -632,12 +804,7 @@ export default function TechnicalDebtDashboard({
       )}
 
       {/* Footer */}
-      <div style={{
-        padding: "8px 16px",
-        borderTop: "1px solid var(--border-color, #2a2a4a)",
-        fontSize: "10px", color: "var(--text-secondary, #a0a0b0)",
-        marginTop: "auto",
-      }}>
+      <div className={styles.footer}>
         Scored on: file size · function length · comment ratio · dependency coupling · TODO density · duplication
       </div>
     </div>

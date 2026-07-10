@@ -67,8 +67,29 @@ let indexed = false;
 // ── Public API ────────────────────────────────────────────────────────────────
 
 /**
+ * Yield control back to the main thread.
+ * Uses requestIdleCallback when available, falls back to setTimeout(0).
+ * This prevents the UI from freezing during long indexing loops.
+ */
+function yieldToMain(): Promise<void> {
+  return new Promise((resolve) => {
+    if (typeof requestIdleCallback === "function") {
+      requestIdleCallback(() => resolve());
+    } else {
+      setTimeout(resolve, 0);
+    }
+  });
+}
+
+/** How many files to process before yielding to the main thread. */
+const INDEX_BATCH_SIZE = 8;
+
+/**
  * Index the entire project. Call once on project open.
  * Subsequent calls re-index from scratch.
+ *
+ * Processes files in small batches with main-thread yields between them
+ * so the UI stays responsive during indexing.
  */
 export async function indexProject(
   projectPath: string,
@@ -80,6 +101,7 @@ export async function indexProject(
 
   const filePaths = flattenFiles(files);
   let filesIndexed = 0;
+  let batchCount = 0;
 
   for (const relPath of filePaths) {
     if (shouldIgnore(relPath)) continue;
@@ -96,9 +118,16 @@ export async function indexProject(
     } catch {
       // File read failed — skip silently
     }
+
+    // Yield to main thread every INDEX_BATCH_SIZE files to prevent UI freeze
+    batchCount++;
+    if (batchCount >= INDEX_BATCH_SIZE) {
+      batchCount = 0;
+      await yieldToMain();
+    }
   }
 
-  // Build inverted index
+  // Build inverted index (also in batches)
   docCount = chunks.length;
   for (let i = 0; i < chunks.length; i++) {
     const tokenCounts = new Map<string, number>();
@@ -108,6 +137,11 @@ export async function indexProject(
     for (const [token, count] of tokenCounts) {
       if (!invertedIndex.has(token)) invertedIndex.set(token, []);
       invertedIndex.get(token)!.push({ chunkIdx: i, tf: count / chunks[i].tokens.length });
+    }
+
+    // Yield every 50 chunks during index build phase
+    if (i > 0 && i % 50 === 0) {
+      await yieldToMain();
     }
   }
 

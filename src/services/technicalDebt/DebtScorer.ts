@@ -2,12 +2,10 @@
  * DebtScorer.ts — Phase 3
  *
  * Phase 3 changes over Phase 1:
- *  - adjustedFileScore() is now a fully specified method (not a partial stub).
- *    All Phase 3 thresholds applied precisely with rationale comments.
- *    Note: with Phase 3 DebtAnalyzer, AST penalties are already baked into
- *    fileScore at analysis time. adjustedFileScore() applies a *secondary*
- *    display-time adjustment so the module breakdown and hotspot sorting
- *    reflect AST quality even for cached heuristic-only entries.
+ *  - adjustedFileScore() no longer re-applies AST penalties (double-counting
+ *    fix). It now acts as a thin pass-through with only minor graph-enrichment
+ *    delta for display sorting. fileScore from computeFileScore() is the
+ *    single source of truth.
  *  - classifyIssue() handles all new AST issue types:
  *    high_complexity, excessive_nesting, god_function, god_class, excessive_params
  *  - suggestFix() produces specific advice using astDetail numbers when available
@@ -166,68 +164,37 @@ export class DebtScorer {
       .sort((a, b) => b.priority - a.priority);
   }
 
-  // ── Phase 3: adjustedFileScore ────────────────────────────────────────────────
+  // ── adjustedFileScore ───────────────────────────────────────────────────────
 
   /**
-   * Display-time score adjustment using AST data.
+   * Display-time score for module breakdowns and hotspot sorting.
    *
-   * Context: Phase 3 DebtAnalyzer already bakes AST penalties into fileScore
-   * at analysis time (in computeFileScore). This method provides a secondary
-   * adjustment for display in module breakdowns and hotspot sorting — it
-   * ensures that even cached heuristic-only entries (from before Tree-sitter
-   * ran) are presented with appropriate weighting when astMetrics is now
-   * available in memory.
+   * Since Phase 3, computeFileScore() already bakes ALL penalties into
+   * fileScore at analysis time (AST complexity, nesting, god functions, etc.).
+   * Since Phase 4, applyGraphData() re-scores with coupling/cycle penalties.
    *
-   * It uses the same threshold bands as computeFileScore but applies them
-   * additively to the stored score rather than recalculating from scratch.
-   * This means files re-analyzed by the worker get double-counted slightly,
-   * but since computeFileScore clamps to [0, 100] and this also clamps,
-   * the worst case is a floor hit — never an artificially inflated score.
+   * This method now acts as a thin pass-through that only applies a minor
+   * graph-enrichment delta for files whose graph data arrived AFTER their
+   * fileScore was last computed (edge case during two-phase loading).
    *
-   * Phase 4 will refactor this to use a single source of truth score once
-   * the dependency graph penalty is also incorporated.
+   * Previously this method re-applied AST penalties, causing double-counting.
+   * That has been removed — fileScore is now the single source of truth.
    */
   adjustedFileScore(file: FileDebtMetrics): number {
-    let score      = file.fileScore;
-    const ast      = file.astMetrics;
-    if (!ast) return score;
+    let score = file.fileScore;
 
-    const cc    = ast.cyclomaticComplexity;
-    const depth = ast.maxNestingDepth;
-
-    // ── Cyclomatic complexity (Phase 3 spec bands) ──────────────────────────
-    // Critical band (30+): severe penalty — file is objectively unmaintainable
-    if      (cc >= THRESHOLDS.CC_CRITICAL) score -= 25;
-    // High band (21–30): significant — should be in the refactor queue
-    else if (cc >= THRESHOLDS.CC_HIGH)     score -= 15;
-    // Moderate band (11–20): noticeable — flag but not emergency
-    else if (cc >= THRESHOLDS.CC_MODERATE) score -= 7;
-    // Good band (1–10): no penalty
-
-    // ── Nesting depth (Phase 3 spec bands) ──────────────────────────────────
-    // Refactor Candidate (6+): deep nesting = hard to read and test
-    if      (depth >= THRESHOLDS.NESTING_REFACTOR) score -= 15;
-    // Warning (4–5): noticeable
-    else if (depth >= THRESHOLDS.NESTING_WARNING)  score -= 7;
-    // Good (1–3): no penalty
-
-    // ── God functions ────────────────────────────────────────────────────────
-    // Each god function is a significant architectural problem
-    if (ast.godFunctionCount > 0)
-      score -= Math.min(20, ast.godFunctionCount * 8);
-
-    // ── God classes ──────────────────────────────────────────────────────────
-    if (ast.godClassCount > 0)
-      score -= Math.min(15, ast.godClassCount * 10);
-
-    // ── Excessive parameters ─────────────────────────────────────────────────
-    if (ast.maxParameterCount > THRESHOLDS.EXCESSIVE_PARAMS)
-      score -= 5;
-
-    // ── Clean file bonus ─────────────────────────────────────────────────────
-    // Reward genuinely simple files — not just absence of penalty
-    if (cc <= 5 && depth <= 2 && ast.godFunctionCount === 0 && ast.godClassCount === 0)
-      score += 2;
+    // Graph-enrichment delta: only applies if graph data exists on the file
+    // but was not yet incorporated into fileScore (two-phase loading edge case).
+    // After applyGraphData() runs, these are already in fileScore — the penalties
+    // below are idempotent-safe because they only fire for non-null values that
+    // would indicate graph data is present, and the floor clamp prevents over-penalty.
+    if (file.isInCycle === true && score > 20) {
+      // Small nudge for display sorting — the main -15 is in computeFileScore
+      score -= 3;
+    }
+    if (file.couplingScore != null && file.couplingScore > THRESHOLDS.HIGH_COUPLING_SCORE && score > 20) {
+      score -= Math.min(5, Math.round((file.couplingScore - THRESHOLDS.HIGH_COUPLING_SCORE) / 10));
+    }
 
     return Math.max(0, Math.min(100, Math.round(score)));
   }

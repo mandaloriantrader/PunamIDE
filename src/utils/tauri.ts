@@ -15,6 +15,10 @@ export interface AppConfig {
   theme: string;
   adaptiveMode?: boolean;
   adaptiveStrategy?: import("../lib/ai/providerCapabilities").AdaptiveStrategy;
+  autocompleteEnabled?: boolean;
+  autocompleteMode?: "auto" | "fim" | "chat" | "disabled";
+  autocompleteDebounceMs?: number;
+  autocompleteMaxTokens?: number;
 }
 
 export interface LlmRequest {
@@ -60,33 +64,42 @@ export interface RunProfile {
 // Project root (sandbox boundary)
 export const setProjectRoot = async (path: string) => {
   await invoke<void>("set_project_root", { path });
-  // Auto-trigger background indexing (fire-and-forget)
-  setTimeout(() => {
-    // Phase 1: Rust regex-based indexes (instant, ~ms)
-    invoke<number>("symbol_rebuild").catch(() => {});
-    invoke<number>("callgraph_build").catch(() => {});
 
-    // Phase 2: TF-IDF codebase index → embedding pipeline
-    invoke<void>("index_codebase").then(() => {
-      // Embedding pipeline runs after codebase is indexed
+  // Background indexing — staggered to avoid flooding Rust IPC and freezing the UI.
+  // Each step waits for the previous to finish before starting the next.
+  // All steps are fire-and-forget — UI never blocks on them.
+  setTimeout(async () => {
+    try {
+      // Step 1: Symbol index (fast, regex-based, ~100-500ms)
+      await invoke<number>("symbol_rebuild").catch(() => {});
+
+      // Step 2: Call graph (fast, regex-based, ~100-500ms)
+      await invoke<number>("callgraph_build").catch(() => {});
+
+      // Step 3: TF-IDF codebase index (heavier, reads file content, ~1-3s)
+      // Only after symbol + callgraph are done to avoid concurrent file reads
+      await invoke<void>("index_codebase").catch(() => {});
+
+      // Step 4: Embedding pipeline (runs in web worker, non-blocking)
       import("../services/intelligence/EmbeddingOrchestrator")
         .then(({ runEmbeddingPipeline }) => runEmbeddingPipeline())
-        .catch(() => {}); // Non-fatal: embeddings are optional
-    }).catch(() => {});
+        .catch(() => {});
 
-    // Phase 3: Tree-sitter enhancement pass (after regex index is built)
-    // Refines TS/JS symbols with full AST accuracy; regex results remain for Python/Rust
-    setTimeout(() => {
-      import("../services/intelligence/TreeSitterSymbolExtractor")
-        .then(({ enhanceSymbolIndexWithTreeSitter }) => enhanceSymbolIndexWithTreeSitter())
-        .then((stats) => {
-          if (stats.filesProcessed > 0) {
-            console.log(`[Index] Tree-sitter enhanced ${stats.filesProcessed} files, ${stats.symbolsExtracted} symbols`);
-          }
-        })
-        .catch(() => {}); // Non-fatal: regex index still works
-    }, 2000); // Wait 2s for Rust indexes to finish
-  }, 500);
+      // Step 5: Tree-sitter enhancement (lazily, after everything else)
+      setTimeout(() => {
+        import("../services/intelligence/TreeSitterSymbolExtractor")
+          .then(({ enhanceSymbolIndexWithTreeSitter }) => enhanceSymbolIndexWithTreeSitter())
+          .then((stats) => {
+            if (stats.filesProcessed > 0) {
+              console.log(`[Index] Tree-sitter enhanced ${stats.filesProcessed} files, ${stats.symbolsExtracted} symbols`);
+            }
+          })
+          .catch(() => {});
+      }, 3000);
+    } catch {
+      // Non-fatal — app works without indexing
+    }
+  }, 1000); // Wait 1s after project root is set for UI to settle
 };
 
 // File System
@@ -119,6 +132,65 @@ export const revealPath = (path: string) =>
 
 export const searchProject = (query: string) =>
   invoke<SearchResult[]>("search_project", { query });
+
+// Enhanced search with regex, file type filters, and exclude patterns
+export interface SearchOptions {
+  query: string;
+  isRegex?: boolean;
+  caseSensitive?: boolean;
+  fileExtensions?: string[];
+  excludePatterns?: string[];
+  maxResults?: number;
+}
+
+export const searchProjectEnhanced = (options: SearchOptions) =>
+  invoke<SearchResult[]>("search_project_enhanced", {
+    query: options.query,
+    isRegex: options.isRegex ?? false,
+    caseSensitive: options.caseSensitive ?? false,
+    fileExtensions: options.fileExtensions ?? null,
+    excludePatterns: options.excludePatterns ?? null,
+    maxResults: options.maxResults ?? 500,
+  });
+
+// Search & Replace
+export interface ReplacePreview {
+  path: string;
+  line: number;
+  column: number;
+  original: string;
+  replaced: string;
+}
+
+export const searchAndReplacePreview = (
+  query: string,
+  replacement: string,
+  isRegex: boolean,
+  caseSensitive: boolean,
+  fileExtensions?: string[],
+) =>
+  invoke<ReplacePreview[]>("search_and_replace_preview", {
+    query,
+    replacement,
+    isRegex,
+    caseSensitive,
+    fileExtensions: fileExtensions ?? null,
+  });
+
+export const searchAndReplaceApply = (
+  query: string,
+  replacement: string,
+  isRegex: boolean,
+  caseSensitive: boolean,
+  filePaths: string[],
+) =>
+  invoke<number>("search_and_replace_apply", {
+    query,
+    replacement,
+    isRegex,
+    caseSensitive,
+    filePaths,
+  });
 
 // Terminal
 export const runTerminalCommand = (command: string, cwd: string, timeoutMs = 600_000) =>
@@ -190,7 +262,7 @@ export async function saveAIProviders(providers: import("./providers").AIProvide
 }
 
 // Config — uses tauri-plugin-store (app data directory, not plaintext in project)
-const STORE_NAME = "punamide-settings.json";
+const STORE_NAME = import.meta.env.DEV ? "punamide-settings-dev.json" : "punamide-settings.json";
 const RECENT_PROJECT_PATH_KEY = "recent_project_path";
 const RUN_PROFILES_KEY = "run_profiles_by_project";
 
@@ -203,7 +275,17 @@ export async function loadConfigFromStore(): Promise<AppConfig> {
     const theme = ((await store.get("theme")) as string) || "dark";
     const adaptiveMode = Boolean(await store.get("adaptiveMode"));
     const adaptiveStrategy = ((await store.get("adaptiveStrategy")) as AppConfig["adaptiveStrategy"]) || "coding_optimized";
-    return { provider, api_key, model, theme, adaptiveMode, adaptiveStrategy };
+    const autocompleteEnabled = (await store.get("autocompleteEnabled")) as boolean | undefined;
+    const autocompleteMode = (await store.get("autocompleteMode")) as AppConfig["autocompleteMode"] | undefined;
+    const autocompleteDebounceMs = (await store.get("autocompleteDebounceMs")) as number | undefined;
+    const autocompleteMaxTokens = (await store.get("autocompleteMaxTokens")) as number | undefined;
+    return {
+      provider, api_key, model, theme, adaptiveMode, adaptiveStrategy,
+      autocompleteEnabled: autocompleteEnabled ?? true,
+      autocompleteMode: autocompleteMode ?? "auto",
+      autocompleteDebounceMs: autocompleteDebounceMs ?? 150,
+      autocompleteMaxTokens: autocompleteMaxTokens ?? 128,
+    };
   } catch {
     return {
       provider: "gemini",
@@ -212,6 +294,10 @@ export async function loadConfigFromStore(): Promise<AppConfig> {
       theme: "dark",
       adaptiveMode: false,
       adaptiveStrategy: "coding_optimized",
+      autocompleteEnabled: true,
+      autocompleteMode: "auto",
+      autocompleteDebounceMs: 150,
+      autocompleteMaxTokens: 128,
     };
   }
 }
@@ -224,6 +310,10 @@ export async function saveConfigToStore(config: AppConfig): Promise<void> {
   await store.set("theme", config.theme);
   await store.set("adaptiveMode", Boolean(config.adaptiveMode));
   await store.set("adaptiveStrategy", config.adaptiveStrategy || "coding_optimized");
+  if (config.autocompleteEnabled !== undefined) await store.set("autocompleteEnabled", config.autocompleteEnabled);
+  if (config.autocompleteMode !== undefined) await store.set("autocompleteMode", config.autocompleteMode);
+  if (config.autocompleteDebounceMs !== undefined) await store.set("autocompleteDebounceMs", config.autocompleteDebounceMs);
+  if (config.autocompleteMaxTokens !== undefined) await store.set("autocompleteMaxTokens", config.autocompleteMaxTokens);
   await store.save();
 }
 
@@ -582,26 +672,71 @@ export async function importAllSettings(json: string): Promise<void> {
   await store.save();
 }
 
-// ─── Recent Projects (list of last N project paths) ───────────────────────────
+// ─── Recent Projects (list of last N project paths with timestamps) ───────────
 
 const RECENT_PROJECTS_KEY = "recent_projects_list";
+const RECENT_PROJECTS_TIMES_KEY = "recent_projects_timestamps";
 const MAX_RECENT_PROJECTS = 8;
 
-export async function loadRecentProjects(): Promise<string[]> {
+export interface RecentProject {
+  path: string;
+  openedAt: number; // Unix timestamp ms
+}
+
+export async function loadRecentProjects(): Promise<RecentProject[]> {
   try {
     const store = await load(STORE_NAME, { autoSave: true, defaults: {} });
-    return ((await store.get(RECENT_PROJECTS_KEY)) as string[]) || [];
+    const raw = await store.get(RECENT_PROJECTS_KEY);
+    if (!raw) return [];
+
+    // Handle case where store was migrated to object format (revert to string[])
+    if (Array.isArray(raw) && raw.length > 0 && typeof raw[0] === "object" && raw[0] !== null) {
+      // Store has objects — extract paths back to string[] for compat
+      const paths = (raw as Array<{ path?: string }>).map(item => item.path || String(item)).filter(Boolean);
+      const timestamps = (raw as Array<{ openedAt?: number }>).map(item => item.openedAt || Date.now());
+      // Rewrite store as string[] for backward compat with installed NSIS builds
+      await store.set(RECENT_PROJECTS_KEY, paths);
+      // Store timestamps separately
+      const timesMap: Record<string, number> = {};
+      paths.forEach((p, i) => { timesMap[p] = timestamps[i] || Date.now(); });
+      await store.set(RECENT_PROJECTS_TIMES_KEY, timesMap);
+      await store.save();
+      return paths.map((p, i) => ({ path: p, openedAt: timestamps[i] || Date.now() }));
+    }
+
+    // Normal case: string[]
+    if (Array.isArray(raw) && (raw.length === 0 || typeof raw[0] === "string")) {
+      const paths = raw as string[];
+      // Load timestamps from separate key
+      const timesMap = ((await store.get(RECENT_PROJECTS_TIMES_KEY)) as Record<string, number>) || {};
+      return paths.map((p, i) => ({
+        path: p,
+        openedAt: timesMap[p] || Date.now() - i * 86_400_000,
+      }));
+    }
+
+    return [];
   } catch {
     return [];
   }
 }
 
-export async function addRecentProject(path: string): Promise<void> {
+export async function addRecentProject(path: string): Promise<RecentProject[]> {
   const store = await load(STORE_NAME, { autoSave: true, defaults: {} });
-  const list = ((await store.get(RECENT_PROJECTS_KEY)) as string[]) || [];
-  const updated = [path, ...list.filter((p) => p !== path)].slice(0, MAX_RECENT_PROJECTS);
-  await store.set(RECENT_PROJECTS_KEY, updated);
+  // Keep store as string[] for backward compat
+  const currentPaths = ((await store.get(RECENT_PROJECTS_KEY)) as string[]) || [];
+  // Filter out objects if they somehow exist
+  const cleanPaths = currentPaths
+    .map(p => typeof p === "string" ? p : (p as any)?.path || "")
+    .filter(Boolean);
+  const updatedPaths = [path, ...cleanPaths.filter((p) => p !== path)].slice(0, MAX_RECENT_PROJECTS);
+  await store.set(RECENT_PROJECTS_KEY, updatedPaths);
+  // Update timestamps separately
+  const timesMap = ((await store.get(RECENT_PROJECTS_TIMES_KEY)) as Record<string, number>) || {};
+  timesMap[path] = Date.now();
+  await store.set(RECENT_PROJECTS_TIMES_KEY, timesMap);
   await store.save();
+  return updatedPaths.map(p => ({ path: p, openedAt: timesMap[p] || Date.now() }));
 }
 
 // ─── Project Context Cache (Rust-side fast index) ─────────────────────────────
@@ -648,6 +783,103 @@ export const gitLog = (count: number) =>
 
 export const gitBranch = () =>
   invoke<string>("git_branch");
+
+// Git Blame
+export interface BlameLine {
+  line: number;
+  commit_id: string;
+  author: string;
+  date: string;
+  summary: string;
+}
+
+export const gitBlameFile = (path: string) =>
+  invoke<BlameLine[]>("git_blame_file", { path });
+
+// Git Branch Management
+export interface GitBranchInfo {
+  name: string;
+  is_current: boolean;
+  is_remote: boolean;
+}
+
+export const gitBranchList = () =>
+  invoke<GitBranchInfo[]>("git_branch_list");
+
+export const gitBranchCreate = (name: string) =>
+  invoke<string>("git_branch_create", { name });
+
+export const gitBranchSwitch = (name: string) =>
+  invoke<string>("git_branch_switch", { name });
+
+// Git Stash
+export interface GitStashEntry {
+  index: number;
+  message: string;
+}
+
+export const gitStashList = () =>
+  invoke<GitStashEntry[]>("git_stash_list");
+
+export const gitStashSave = (message?: string) =>
+  invoke<string>("git_stash_save", { message: message ?? null });
+
+export const gitStashPop = (index: number) =>
+  invoke<string>("git_stash_pop", { index });
+
+export const gitStashDrop = (index: number) =>
+  invoke<string>("git_stash_drop", { index });
+
+// ─── AI Workspace Import ──────────────────────────────────────────────────────
+
+export interface ImportFileEntry {
+  path: string;
+  language: string | null;
+  line_count: number | null;
+  size: number | null;
+}
+
+export interface ImportSource {
+  provider?: string;
+  conversationName?: string;
+  generatedAt?: string;
+}
+
+export interface ImportPreview {
+  project_name: string;
+  description: string | null;
+  source: ImportSource | null;
+  files: ImportFileEntry[];
+  total_files: number;
+  total_lines: number;
+  total_bytes: number;
+  languages: string[];
+  has_manifest: boolean;
+  suggested_build_command: string | null;
+  suggested_run_command: string | null;
+}
+
+export interface ConflictInfo {
+  path: string;
+  existing_size: number;
+  incoming_size: number;
+}
+
+export interface ImportResult {
+  success: boolean;
+  files_written: number;
+  destination: string;
+  error: string | null;
+}
+
+export const importZipPreview = (zipPath: string) =>
+  invoke<ImportPreview>("import_zip_preview", { zipPath });
+
+export const importZipExtract = (zipPath: string, destination: string) =>
+  invoke<ImportResult>("import_zip_extract", { zipPath, destination });
+
+export const importDetectConflicts = (zipPath: string, destination: string) =>
+  invoke<ConflictInfo[]>("import_detect_conflicts", { zipPath, destination });
 
 // Alpha diagnostics / feedback
 export const generateDiagnosticsReport = (

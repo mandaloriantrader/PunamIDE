@@ -469,6 +469,44 @@ pub fn validate_patch_against_rules(
     validate_proposed_changes(&rules_config, &changed_files, &root)
 }
 
+/// Validate proposed file content against architecture rules by parsing
+/// imports from the in-memory content string (not from disk) and merging
+/// with the full project dependency graph.
+///
+/// This catches the case where an agent adds a new forbidden import to a
+/// file that was previously clean — the on-disk scan would miss it because
+/// the edit hasn't landed yet.
+#[tauri::command]
+pub fn validate_proposed_content(
+    rules_json: String,
+    file_path: String,
+    proposed_content: String,
+    state: State<crate::ProjectRoot>,
+) -> Result<ValidationResult, String> {
+    use std::path::Path;
+
+    let rules_config: ArchitectureRules =
+        serde_json::from_str(&rules_json).map_err(|e| format!("Invalid rules JSON: {}", e))?;
+    let root = crate::get_project_root(&state)?;
+
+    let ext = Path::new(&file_path)
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("");
+
+    // Parse imports from the proposed in-memory content
+    let proposed_edges =
+        super::dependency_analyzer::parse_imports(&proposed_content, &file_path, ext);
+
+    // Merge with full project edges for cross-file rule checking
+    let existing = super::dependency_analyzer::analyze_all_files(&root);
+    let mut all_edges = existing.edges;
+    all_edges.extend(proposed_edges);
+
+    let graph = DependencyGraph::build_from_edges(&all_edges);
+    Ok(validate_rules(&rules_config, &graph))
+}
+
 #[tauri::command]
 pub fn get_default_rules() -> ArchitectureRules {
     ArchitectureRules {

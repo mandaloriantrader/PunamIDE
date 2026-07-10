@@ -3,25 +3,128 @@
    Typography, spacing, transitions, visual hierarchy
    ============================================================ */
 
-/* ── 1. Typography Hierarchy ──────────────────────────────── */
+/* ── #1: Activity bar & sidebar density ────────────────────── */
 
-/* Panel titles — stronger, consistent */
-.panel-header,
-.notepads-header,
-.docker-header h4,
-.mcp-header h4 {
-  font-size: 11px !important;
-  font-weight: 700 !important;
-  text-transform: uppercase;
-  letter-spacing: 0.8px;
-  color: var(--text-secondary) !important;
+/* Tighter activity bar buttons — match VS Code 36px */
+.activity-btn {
+  width: 36px !important;
+  height: 36px !important;
+  border-radius: 6px !important;
 }
 
-/* Sidebar/explorer text */
+.activity-bar {
+  width: 44px !important;
+  padding: 6px 0 !important;
+}
+
+/* Combine panel-header + workspace-strip into one compact row */
+.panel-header {
+  padding: 5px 12px !important;
+  min-height: 0 !important;
+  height: 26px !important;
+  font-size: 10px !important;
+  letter-spacing: 0.8px !important;
+}
+
+.workspace-strip {
+  min-height: 24px !important;
+  padding: 3px 10px !important;
+  font-size: 10.5px !important;
+}
+
+/* File tree items — VS Code uses 22px, we use 24px for comfortable touch */
+.file-tree-item {
+  min-height: 22px !important;
+  padding: 1px 8px !important;
+  margin: 0 3px !important;
+  font-size: 12.5px !important;
+  border-radius: 3px !important;
+}
+
+/* ── #2: Editor tab bar — tighter, cleaner active state ───── */
+.editor-tabs {
+  min-height: 28px !important;
+}
+
+.editor-tab {
+  padding: 0 8px !important;
+  font-size: 11.5px !important;
+  height: 28px !important;
+  gap: 4px !important;
+}
+
+/* Remove duplicate active indicator — keep only ::before underline */
+.editor-tab.active {
+  box-shadow: none !important;
+}
+
+/* Smaller close button hit target */
+.tab-close {
+  width: 16px !important;
+  height: 16px !important;
+  padding: 1px !important;
+  border-radius: 3px !important;
+}
+
+/* ── #3: Status bar — already 22px, confirmed good ─────────── */
+/* (no changes needed — matches VS Code) */
+
+/* ── #4: Scrollbar styling ─────────────────────────────────── */
+/* (Handled by section 9 below with !important — 7px thin overlay) */
+
+/* ── #5: Font consistency — all UI chrome ─────────────────── */
+.panel-header,
+.workspace-strip,
+.bottom-panel-tab,
+.terminal-tab,
+.status-bar,
+.activity-btn,
+.editor-tab {
+  font-family: var(--font-sans) !important;
+}
+
+/* ── #6: Border/separator consistency ─────────────────────── */
+.sidebar,
+.activity-bar,
+.editor-tabs,
+.bottom-panel-tabs,
+.terminal-tabs,
+.panel-header,
+.workspace-strip {
+  border-color: var(--border) !important;
+}
+
+/* ── #7: Hover/focus state consistency ────────────────────── */
+.activity-btn,
+.editor-tab,
 .file-tree-item,
-.file-tree-name {
-  font-size: 13px;
-  line-height: 1.4;
+.terminal-tab,
+.welcome-shortcut-btn,
+.welcome-recent-btn,
+.bottom-panel-tab {
+  transition: background 0.12s, color 0.12s, border-color 0.12s !important;
+}
+
+/* Consistent hover lift for card-like elements */
+.welcome-shortcut-btn:hover,
+.welcome-recent-btn:hover {
+  transform: translateX(2px);
+}
+
+/* ── #8: AI Chat panel density ────────────────────────────── */
+.ai-chat-header {
+  padding: 4px 10px !important;
+  min-height: 28px !important;
+}
+
+.chat-workspace-strip {
+  min-height: 22px !important;
+  padding: 2px 10px !important;
+  font-size: 10px !important;
+}
+
+.chat-input-area {
+  border-top: 1px solid var(--border) !important;
 }
 
 /* AI response text — better readability */
@@ -69,14 +172,14 @@
   z-index: 1;
 }
 
-/* Welcome heading — more prominent */
+/* Welcome heading — refined size */
 .welcome-title {
-  font-size: 26px !important;
-  font-weight: 700 !important;
+  font-size: 20px !important;
+  font-weight: 600 !important;
   color: var(--text-primary) !important;
   opacity: 1 !important;
-  letter-spacing: -0.3px;
-  margin-bottom: 6px !important;
+  letter-spacing: -0.2px;
+  margin-bottom: 20px !important;
 }
 
 /* Welcome subtitle */
@@ -136,6 +239,91 @@
   border-color: var(--accent) !important;
   box-shadow: 0 2px 12px rgba(137, 180, 250, 0.08);
   transform: translateY(-1px);
+}
+
+/* ── 2b. Welcome Screen — Primary CTA & Footer ───────────── */
+
+/* Import AI Project — primary/hero action */
+.welcome-shortcut-btn--primary {
+  border-color: rgba(137, 180, 250, 0.4) !important;
+  background: rgba(137, 180, 250, 0.08) !important;
+  position: relative;
+}
+
+.welcome-shortcut-btn--primary:hover {
+  background: rgba(137, 180, 250, 0.14) !important;
+  border-color: var(--accent) !important;
+  box-shadow: 0 2px 12px rgba(137, 180, 250, 0.15) !important;
+}
+
+/* Badge (non-keyboard labels like ZIP, Alpha, Web) — compact inline pill */
+.welcome-badge {
+  display: inline-flex;
+  align-items: center;
+  margin-left: 10px;
+  font-size: 9px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  padding: 2px 6px;
+  border-radius: 3px;
+  background: rgba(137, 180, 250, 0.15);
+  color: var(--accent, #89b4fa);
+  border: none;
+  flex: 0 0 auto !important;
+  width: auto;
+  min-width: 0;
+  text-align: center !important;
+}
+
+.welcome-badge--subtle {
+  background: rgba(166, 173, 200, 0.1);
+  color: var(--text-muted, #6c7086);
+}
+
+/* Relative timestamps on recent project entries */
+.welcome-recent-time {
+  margin-left: auto;
+  font-size: 10px;
+  color: var(--text-muted, #6c7086);
+  opacity: 0.8;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+/* Footer — Documentation & Discord demoted */
+.welcome-footer {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 24px;
+  padding-top: 16px;
+  border-top: 1px solid rgba(69, 71, 90, 0.3);
+}
+
+.welcome-footer-link {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  background: none;
+  border: none;
+  color: var(--text-muted, #6c7086);
+  font-size: 11px;
+  cursor: pointer;
+  padding: 4px 8px;
+  border-radius: 4px;
+  transition: color 0.15s, background 0.15s;
+}
+
+.welcome-footer-link:hover {
+  color: var(--text-primary, #cdd6f4);
+  background: rgba(69, 71, 90, 0.3);
+}
+
+.welcome-footer-dot {
+  color: var(--text-muted, #6c7086);
+  opacity: 0.4;
+  font-size: 11px;
 }
 
 /* ── 3. AI Chat Panel Polish ──────────────────────────────── */
@@ -431,12 +619,19 @@
   border-bottom: 2px solid var(--accent);
 }
 
-/* Breadcrumb bar — subtle */
+/* Breadcrumb bar — minimal, blends with editor background */
 .breadcrumb-bar {
-  font-size: 12px;
-  padding: 4px 12px !important;
-  border-bottom: 1px solid rgba(69, 71, 90, 0.4);
-  background: rgba(24, 24, 37, 0.5);
+  font-size: 11px !important;
+  padding: 2px 12px !important;
+  min-height: 20px !important;
+  border-bottom: 1px solid rgba(69, 71, 90, 0.25) !important;
+  background: var(--tab-active-bg, rgba(24, 24, 37, 0.3)) !important;
+  opacity: 0.85;
+  transition: opacity 0.15s;
+}
+
+.breadcrumb-bar:hover {
+  opacity: 1;
 }
 
 .breadcrumb-item {
@@ -774,4 +969,990 @@ select:focus-visible {
   background: rgba(249, 226, 175, 0.15);
   border: 1px solid rgba(249, 226, 175, 0.3);
   color: var(--yellow, #f9e2af);
+}
+
+/* ============================================================
+   TIER 2 — Visual Refinements Pass
+   ============================================================ */
+
+/* ── T2-1: Breadcrumb bar — already done above (20px, fade on idle) ── */
+
+/* ── T2-2: Titlebar — tighter, 30px ──────────────────────── */
+.titlebar {
+  height: 30px !important;
+}
+
+.toolbar-btn {
+  width: 28px !important;
+  height: 24px !important;
+  border-radius: 4px !important;
+}
+
+.titlebar-text {
+  font-size: 11px !important;
+}
+
+/* ── T2-3: Gutter handles — already 4px (done in section 6) ── */
+
+/* ── T2-4: Context menu — already polished (8px radius, shadow, animation) ── */
+
+/* ── T2-5: Modal/dialog consistency ──────────────────────── */
+.settings-overlay,
+.import-panel-backdrop,
+.command-palette-overlay,
+.confirm-overlay {
+  backdrop-filter: blur(3px) !important;
+  background: rgba(0, 0, 0, 0.5) !important;
+}
+
+.settings-panel,
+.import-panel,
+.command-palette,
+.confirm-dialog {
+  border-radius: 10px !important;
+  border: 1px solid rgba(69, 71, 90, 0.6) !important;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.5),
+              0 0 0 1px rgba(137, 180, 250, 0.04) !important;
+}
+
+/* ── T2-6: Loading & panel transitions ───────────────────── */
+.sidebar,
+.ai-panel,
+.bottom-panel {
+  transition: width 0.2s cubic-bezier(0.4, 0, 0.2, 1),
+              height 0.2s cubic-bezier(0.4, 0, 0.2, 1),
+              opacity 0.15s ease !important;
+}
+
+/* File tree fade-in on load */
+.file-tree {
+  animation: fadeInTree 0.15s ease;
+}
+
+@keyframes fadeInTree {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+/* ── T2-7: Icon sizing scale — 12/14/16/20 ───────────────── */
+/* Ensure consistent icon sizing in key UI areas */
+.activity-btn svg {
+  width: 20px !important;
+  height: 20px !important;
+}
+
+.panel-header svg,
+.workspace-strip svg {
+  width: 12px !important;
+  height: 12px !important;
+}
+
+.editor-tab svg {
+  width: 14px !important;
+  height: 14px !important;
+}
+
+.bottom-panel-tab svg {
+  width: 12px !important;
+  height: 12px !important;
+}
+
+.file-tree-item .tree-icon svg {
+  width: 14px !important;
+  height: 14px !important;
+}
+
+/* ── T2-8: Dark theme depth — background layer separation ── */
+/* Ensure clear visual hierarchy between layers */
+.activity-bar {
+  background: color-mix(in srgb, var(--bg-tertiary) 100%, black 5%) !important;
+}
+
+.sidebar {
+  background: var(--bg-secondary) !important;
+}
+
+.editor-tabs {
+  background: color-mix(in srgb, var(--bg-tertiary) 100%, black 3%) !important;
+}
+
+.bottom-panel-tabs {
+  background: color-mix(in srgb, var(--bg-secondary) 100%, black 3%) !important;
+}
+
+/* Editor area itself stays cleanest/lightest */
+.editor-main,
+.monaco-editor .overflow-guard {
+  background: var(--bg-primary) !important;
+}
+
+/* ============================================================
+   TIER 3 — Micro-interactions & Detail Polish (#5-#8)
+   ============================================================ */
+
+/* ── T3-5: Drag & drop feedback ──────────────────────────── */
+
+/* Gutter active state — more visible accent line during drag */
+.gutter:active {
+  background: var(--accent) !important;
+  opacity: 0.6;
+}
+
+.gutter:active::after {
+  opacity: 0 !important; /* disable the secondary indicator during active drag */
+}
+
+/* AI drag overlay — smoother animation */
+.ai-drag-overlay {
+  animation: dragOverlayIn 0.15s ease !important;
+}
+
+@keyframes dragOverlayIn {
+  from { opacity: 0; border-color: transparent; }
+  to { opacity: 1; border-color: var(--accent); }
+}
+
+/* Editor tab drop indicator (future: tab reorder) */
+.editor-tab.drag-over-left {
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+
+.editor-tab.drag-over-right {
+  box-shadow: inset -2px 0 0 var(--accent);
+}
+
+.editor-tab[draggable="true"] {
+  cursor: grab;
+}
+
+.editor-tab[draggable="true"]:active {
+  cursor: grabbing;
+  opacity: 0.6;
+}
+
+/* ── T3-6: Settings panel refinements ────────────────────── */
+
+/* Settings modal — proper sizing and scrolling */
+.settings-panel,
+.settings-panel-wide {
+  border-radius: 12px !important;
+  padding: 20px 24px !important;
+  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.5),
+              0 0 0 1px rgba(69, 71, 90, 0.4) !important;
+}
+
+.settings-panel h2 {
+  font-size: 16px !important;
+  font-weight: 600 !important;
+  margin-bottom: 16px !important;
+}
+
+/* Settings tabs — pill style like VS Code */
+.settings-tabs {
+  gap: 2px !important;
+  padding: 3px !important;
+  background: var(--bg-tertiary) !important;
+  border-radius: 8px !important;
+  border-bottom: none !important;
+  margin-bottom: 20px !important;
+}
+
+.settings-tab {
+  padding: 5px 12px !important;
+  border-radius: 6px !important;
+  font-size: 11.5px !important;
+  font-weight: 500 !important;
+  border: none !important;
+}
+
+.settings-tab.active {
+  background: var(--bg-primary) !important;
+  color: var(--text-primary) !important;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2) !important;
+}
+
+/* Provider cards — cleaner look */
+.provider-card {
+  border-radius: 8px !important;
+  overflow: hidden !important;
+}
+
+.provider-card-header {
+  padding: 10px 12px !important;
+}
+
+/* Input fields — consistent styling */
+.settings-input,
+.provider-name-input,
+.model-name-input,
+.api-key-input input,
+.mcp-input {
+  border-radius: 6px !important;
+  padding: 7px 10px !important;
+  font-size: 12px !important;
+  border: 1px solid var(--border) !important;
+  background: var(--bg-primary) !important;
+  transition: border-color 0.15s, box-shadow 0.15s !important;
+}
+
+.settings-input:focus,
+.provider-name-input:focus,
+.model-name-input:focus,
+.api-key-input input:focus,
+.mcp-input:focus {
+  border-color: var(--accent) !important;
+  box-shadow: 0 0 0 2px rgba(137, 180, 250, 0.1) !important;
+  outline: none !important;
+}
+
+/* Toggle switch — modern iOS-style (targets the actual switch elements) */
+.settings-toggle-switch {
+  position: relative;
+  width: 36px !important;
+  height: 20px !important;
+  border-radius: 10px !important;
+  border: none !important;
+  cursor: pointer;
+  transition: background 0.2s !important;
+  flex-shrink: 0;
+  padding: 0 !important;
+}
+
+.settings-toggle-switch.off {
+  background: var(--bg-active, #45475a) !important;
+}
+
+.settings-toggle-switch.on {
+  background: var(--accent) !important;
+}
+
+.settings-toggle-knob {
+  width: 14px !important;
+  height: 14px !important;
+  border-radius: 50% !important;
+  background: white !important;
+  transition: left 0.2s cubic-bezier(0.4, 0, 0.2, 1) !important;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3) !important;
+}
+
+.settings-toggle-switch.on .settings-toggle-knob {
+  left: 19px !important;
+}
+
+.settings-toggle-switch.off .settings-toggle-knob {
+  left: 3px !important;
+}
+
+/* Adaptive mode card — fix the label toggle (checkbox inside label) */
+.settings-toggle {
+  display: inline-flex !important;
+  align-items: center !important;
+  gap: 6px !important;
+  cursor: pointer !important;
+  font-size: 12px !important;
+  color: var(--text-secondary) !important;
+}
+
+.settings-toggle input[type="checkbox"] {
+  position: relative;
+  appearance: none;
+  -webkit-appearance: none;
+  width: 36px;
+  height: 20px;
+  border-radius: 10px;
+  background: var(--bg-active, #45475a);
+  cursor: pointer;
+  transition: background 0.2s;
+  flex-shrink: 0;
+  margin: 0;
+  border: none;
+  outline: none;
+}
+
+.settings-toggle input[type="checkbox"]:checked {
+  background: var(--accent, #89b4fa);
+}
+
+.settings-toggle input[type="checkbox"]::after {
+  content: "";
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: white;
+  transition: transform 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
+}
+
+.settings-toggle input[type="checkbox"]:checked::after {
+  transform: translateX(16px);
+}
+
+/* ── T3-7: Monaco editor overlays — dark theme ───────────── */
+
+/* Suggest widget (autocomplete dropdown) */
+.monaco-editor .suggest-widget {
+  border: 1px solid var(--border, #45475a) !important;
+  border-radius: 8px !important;
+  background: var(--bg-secondary, #181825) !important;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4) !important;
+  overflow: hidden !important;
+}
+
+.monaco-editor .suggest-widget .monaco-list .monaco-list-row {
+  border-radius: 4px !important;
+  margin: 1px 4px !important;
+}
+
+.monaco-editor .suggest-widget .monaco-list .monaco-list-row.focused {
+  background: var(--active-soft, rgba(137, 180, 250, 0.12)) !important;
+  color: var(--text-primary) !important;
+}
+
+.monaco-editor .suggest-widget .details {
+  border-left: 1px solid var(--border, #45475a) !important;
+  background: var(--bg-secondary, #181825) !important;
+}
+
+/* Hover widget (tooltips on hover) */
+.monaco-editor .monaco-hover {
+  border: 1px solid var(--border, #45475a) !important;
+  border-radius: 6px !important;
+  background: var(--bg-secondary, #181825) !important;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4) !important;
+}
+
+.monaco-editor .monaco-hover .hover-row {
+  padding: 4px 8px !important;
+}
+
+/* Parameter hints widget */
+.monaco-editor .parameter-hints-widget {
+  border: 1px solid var(--border, #45475a) !important;
+  border-radius: 6px !important;
+  background: var(--bg-secondary, #181825) !important;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4) !important;
+}
+
+/* Find/Replace widget */
+.monaco-editor .find-widget {
+  border-radius: 0 0 8px 8px !important;
+  border: 1px solid var(--border, #45475a) !important;
+  border-top: none !important;
+  background: var(--bg-secondary, #181825) !important;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3) !important;
+}
+
+.monaco-editor .find-widget input {
+  border-radius: 4px !important;
+  border: 1px solid var(--border) !important;
+  background: var(--bg-primary) !important;
+}
+
+.monaco-editor .find-widget input:focus {
+  border-color: var(--accent) !important;
+}
+
+/* Editor widget (lightbulb, quick fix) */
+.monaco-editor .codicon-light-bulb,
+.monaco-editor .codicon-lightbulb-autofix {
+  color: var(--yellow, #f9e2af) !important;
+}
+
+/* Minimap slider */
+.monaco-editor .minimap-slider .minimap-slider-horizontal {
+  background: rgba(137, 180, 250, 0.08) !important;
+}
+
+.monaco-editor .minimap-slider:hover .minimap-slider-horizontal {
+  background: rgba(137, 180, 250, 0.15) !important;
+}
+
+/* Selection highlight */
+.monaco-editor .selectionHighlight {
+  background: rgba(137, 180, 250, 0.12) !important;
+}
+
+/* Word highlight */
+.monaco-editor .wordHighlight {
+  background: rgba(137, 180, 250, 0.08) !important;
+  border: 1px solid rgba(137, 180, 250, 0.2) !important;
+}
+
+.monaco-editor .wordHighlightStrong {
+  background: rgba(137, 180, 250, 0.15) !important;
+  border: 1px solid rgba(137, 180, 250, 0.3) !important;
+}
+
+/* ── T3-8: AI streaming feel ─────────────────────────────── */
+
+/* Streaming cursor — smoother, more visible */
+.cl-cursor,
+.ai-cursor {
+  display: inline-block;
+  width: 2px;
+  height: 1em;
+  background: var(--accent, #89b4fa);
+  animation: streamCursorBlink 0.8s ease-in-out infinite;
+  margin-left: 1px;
+  vertical-align: text-bottom;
+  border-radius: 1px;
+}
+
+@keyframes streamCursorBlink {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.3; }
+}
+
+/* Streaming text — smooth appearance */
+.cl-response.streaming .markdown-message,
+.chat-message.assistant.streaming .chat-message-content {
+  animation: streamTextIn 0.1s ease;
+}
+
+@keyframes streamTextIn {
+  from { opacity: 0.7; }
+  to { opacity: 1; }
+}
+
+/* Stream progress indicator (tokens/sec) */
+.stream-progress,
+.response-metrics {
+  font-size: 10px !important;
+  color: var(--text-muted) !important;
+  opacity: 0.7;
+  transition: opacity 0.3s;
+}
+
+.stream-progress:hover,
+.response-metrics:hover {
+  opacity: 1;
+}
+
+/* Thinking indicator — subtle pulsing background */
+.cl-thinking.streaming .cl-thinking-toggle {
+  background: linear-gradient(
+    90deg,
+    var(--bg-tertiary) 0%,
+    rgba(137, 180, 250, 0.05) 50%,
+    var(--bg-tertiary) 100%
+  ) !important;
+  background-size: 200% 100% !important;
+  animation: thinkingPulse 2s ease-in-out infinite !important;
+}
+
+@keyframes thinkingPulse {
+  0%, 100% { background-position: 0% 50%; }
+  50% { background-position: 100% 50%; }
+}
+
+/* Code block streaming — fade in each new block */
+.cl-response.streaming .cl-code-block {
+  animation: codeBlockIn 0.2s ease;
+}
+
+@keyframes codeBlockIn {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+/* Tool call cards during streaming — subtle entry */
+.cl-tool-call {
+  animation: toolCallIn 0.2s ease !important;
+}
+
+@keyframes toolCallIn {
+  from { opacity: 0; transform: translateY(2px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+
+/* ── Terminal Virtualization ───────────────────────────────── */
+.terminal-lines-virtual {
+  position: relative;
+  min-height: 0;
+}
+
+.terminal-lines-virtual .terminal-line {
+  display: flex;
+  align-items: flex-start;
+  padding: 0 0 0 0;
+  overflow: hidden;
+  box-sizing: border-box;
+}
+
+.terminal-lines-virtual .terminal-line pre {
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-all;
+  line-height: 20px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-height: 20px;
+}
+
+/* ── 18. Clarification Dialog ─────────────────────────────── */
+
+.clarification-panel {
+  position: relative;
+  margin: 0 8px 8px 8px;
+  padding: 12px 14px;
+  background: var(--bg-secondary, #181825);
+  border: 1px solid var(--border, #45475a);
+  border-radius: 8px;
+  box-shadow: 0 -2px 12px rgba(0, 0, 0, 0.2);
+  animation: clarification-slide-up 0.18s cubic-bezier(0.4, 0, 0.2, 1);
+  z-index: 50;
+}
+
+@keyframes clarification-slide-up {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.clarification-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 6px;
+}
+
+.clarification-icon {
+  color: var(--accent, #89b4fa);
+  flex-shrink: 0;
+}
+
+.clarification-label {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--accent, #89b4fa);
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+}
+
+.clarification-question {
+  font-size: 13px;
+  color: var(--text-primary, #cdd6f4);
+  line-height: 1.5;
+  margin: 0 0 10px 0;
+}
+
+.clarification-options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+
+.clarification-option-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 10px;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-secondary, #a6adc8);
+  background: var(--bg-tertiary, #11111b);
+  border: 1px solid var(--border, #45475a);
+  border-radius: 5px;
+  cursor: pointer;
+  transition: all 0.12s ease;
+}
+
+.clarification-option-btn:hover {
+  background: var(--bg-hover, #313244);
+  color: var(--text-primary, #cdd6f4);
+  border-color: var(--accent, #89b4fa);
+}
+
+.clarification-option-btn.selected {
+  background: rgba(137, 180, 250, 0.12);
+  color: var(--accent, #89b4fa);
+  border-color: var(--accent, #89b4fa);
+}
+
+.clarification-option-key {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  font-size: 10px;
+  font-weight: 700;
+  border-radius: 3px;
+  background: rgba(137, 180, 250, 0.15);
+  color: var(--accent, #89b4fa);
+}
+
+.clarification-custom {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+
+.clarification-input {
+  flex: 1;
+  padding: 6px 10px;
+  font-size: 12px;
+  color: var(--text-primary, #cdd6f4);
+  background: var(--bg-primary, #1e1e2e);
+  border: 1px solid var(--border, #45475a);
+  border-radius: 5px;
+  outline: none;
+  transition: border-color 0.15s ease;
+}
+
+.clarification-input::placeholder {
+  color: var(--text-muted, #6c7086);
+}
+
+.clarification-input:focus {
+  border-color: var(--accent, #89b4fa);
+}
+
+.clarification-submit-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border: none;
+  border-radius: 5px;
+  background: var(--accent, #89b4fa);
+  color: var(--bg-primary, #1e1e2e);
+  cursor: pointer;
+  transition: background 0.12s ease, opacity 0.12s ease;
+}
+
+.clarification-submit-btn:hover:not(:disabled) {
+  background: var(--accent-hover, #74c7ec);
+}
+
+.clarification-submit-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.clarification-footer {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.clarification-skip-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 8px;
+  font-size: 11px;
+  color: var(--text-muted, #6c7086);
+  background: none;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: color 0.12s ease, background 0.12s ease;
+}
+
+.clarification-skip-btn:hover {
+  color: var(--text-secondary, #a6adc8);
+  background: var(--bg-hover, #313244);
+}
+
+
+/* ── 18. Budget Selector — Compact Preset Picker ──────────── */
+/* Legacy: original BudgetSelector rendered above input. Kept for reference. */
+
+.budget-selector {
+  display: none; /* Replaced by inline ai-budget-pills in input toolbar */
+}
+
+/* ── 18b. Inline Budget Pills — inside ai-input-row toolbar ── */
+
+.ai-budget-pills {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.ai-budget-pill {
+  padding: 1px 6px;
+  font-size: 9px;
+  font-weight: 500;
+  border-radius: 8px;
+  border: 1px solid var(--border, #45475a);
+  background: transparent;
+  color: var(--text-muted, #6c7086);
+  cursor: pointer;
+  white-space: nowrap;
+  font-family: inherit;
+  line-height: 1.4;
+  transition: background 0.12s ease, color 0.12s ease, border-color 0.12s ease;
+}
+
+.ai-budget-pill:hover {
+  background: var(--bg-hover, #313244);
+  color: var(--text-secondary, #a6adc8);
+}
+
+.ai-budget-pill.active {
+  background: rgba(137, 180, 250, 0.12);
+  border-color: var(--accent, #89b4fa);
+  color: var(--accent, #89b4fa);
+  font-weight: 600;
+}
+
+/* ── 18c. Context Optimization Badge — tiny inline indicator ── */
+
+.ai-ctx-opt-badge {
+  display: none; /* Replaced by ContextWindowBar below input */
+}
+
+/* ── 18d. Context Window Bar — token usage progress bar ── */
+
+.context-window-bar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 12px 5px;
+  font-size: 10px;
+  font-family: var(--font-mono, 'JetBrains Mono', monospace);
+  color: var(--text-muted, #6c7086);
+}
+
+.context-window-used {
+  min-width: 32px;
+  text-align: right;
+  font-weight: 500;
+  color: var(--text-secondary, #a6adc8);
+}
+
+.context-window-track {
+  flex: 1;
+  height: 3px;
+  background: var(--bg-tertiary, #1e1e2e);
+  border-radius: 2px;
+  overflow: hidden;
+}
+
+.context-window-fill {
+  height: 100%;
+  border-radius: 2px;
+  transition: width 0.3s ease, background 0.3s ease;
+}
+
+.context-window-max {
+  min-width: 32px;
+  font-weight: 400;
+}
+
+.context-window-text {
+  font-weight: 500;
+  color: var(--text-secondary, #a6adc8);
+}
+
+
+/* ── 19. Budget Warning Dialog — Non-blocking overlay ─────── */
+
+.budget-warning-panel {
+  position: relative;
+  margin: 0 8px 8px 8px;
+  padding: 12px 14px;
+  background: var(--bg-secondary, #181825);
+  border: 1px solid var(--border, #45475a);
+  border-radius: 8px;
+  box-shadow: 0 -2px 12px rgba(0, 0, 0, 0.2);
+  animation: budget-warning-slide-up 0.18s cubic-bezier(0.4, 0, 0.2, 1);
+  z-index: 50;
+}
+
+.budget-warning-panel.budget-warning--warn {
+  border-color: rgba(249, 226, 175, 0.4);
+}
+
+.budget-warning-panel.budget-warning--critical {
+  border-color: rgba(243, 139, 168, 0.4);
+}
+
+@keyframes budget-warning-slide-up {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* Header */
+.budget-warning-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+
+.budget-warning--warn .budget-warning-icon {
+  color: var(--yellow, #f9e2af);
+}
+
+.budget-warning--critical .budget-warning-icon {
+  color: var(--red, #f38ba8);
+}
+
+.budget-warning-label {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+}
+
+.budget-warning--warn .budget-warning-label {
+  color: var(--yellow, #f9e2af);
+}
+
+.budget-warning--critical .budget-warning-label {
+  color: var(--red, #f38ba8);
+}
+
+/* Progress bar */
+.budget-warning-progress-track {
+  width: 100%;
+  height: 4px;
+  border-radius: 2px;
+  background: var(--bg-tertiary, #11111b);
+  overflow: hidden;
+  margin-bottom: 6px;
+}
+
+.budget-warning-progress-fill {
+  height: 100%;
+  border-radius: 2px;
+  transition: width 0.3s ease;
+}
+
+.budget-warning--warn .budget-warning-progress-fill {
+  background: var(--yellow, #f9e2af);
+}
+
+.budget-warning--critical .budget-warning-progress-fill {
+  background: var(--red, #f38ba8);
+}
+
+/* Stats row */
+.budget-warning-stats {
+  font-size: 12px;
+  color: var(--text-secondary, #a6adc8);
+  margin: 0 0 10px 0;
+  line-height: 1.4;
+}
+
+/* Action buttons */
+.budget-warning-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.budget-warning-btn {
+  padding: 6px 12px;
+  font-size: 12px;
+  font-weight: 500;
+  border-radius: 5px;
+  border: none;
+  cursor: pointer;
+  transition: background 0.12s ease, opacity 0.12s ease;
+}
+
+.budget-warning-btn--continue {
+  background: var(--bg-hover, #313244);
+  color: var(--text-primary, #cdd6f4);
+  border: 1px solid var(--border, #45475a);
+}
+
+.budget-warning-btn--continue:hover {
+  background: var(--bg-active, #45475a);
+}
+
+.budget-warning-btn--stop {
+  background: rgba(243, 139, 168, 0.12);
+  color: var(--red, #f38ba8);
+  border: 1px solid rgba(243, 139, 168, 0.3);
+}
+
+.budget-warning-btn--stop:hover {
+  background: rgba(243, 139, 168, 0.2);
+}
+
+.budget-warning-btn:focus-visible {
+  outline: 2px solid var(--accent, #89b4fa);
+  outline-offset: 1px;
+}
+
+/* ── 20. Task Cost Summary — Post-task inline display ─────── */
+
+.task-cost-summary {
+  font-size: 11px;
+  color: var(--text-muted, #6c7086);
+  padding: 4px 12px;
+  margin: 2px 0 6px 44px;
+  letter-spacing: 0.01em;
+  opacity: 0.85;
+  user-select: text;
+}
+
+/* ── 21. Context Budget Indicator — Inline optimization status ── */
+/* Legacy: now replaced by .ai-ctx-opt-badge in the input toolbar */
+
+.context-budget-indicator {
+  display: none; /* Replaced by inline badge */
+}
+  gap: 8px;
+  padding: 4px 12px;
+  margin: 2px 0 4px 44px;
+  font-size: 11px;
+  color: var(--text-muted, #6c7086);
+  letter-spacing: 0.01em;
+  opacity: 0.85;
+  user-select: text;
+  transition: opacity 0.15s ease;
+}
+
+.context-budget-indicator:hover {
+  opacity: 1;
+}
+
+.context-budget-indicator--placeholder {
+  color: var(--green, #a6e3a1);
+  opacity: 0.7;
+}
+
+.context-budget-indicator--pressure {
+  color: var(--yellow, #f9e2af);
+}
+
+.context-budget-icon {
+  flex-shrink: 0;
+  opacity: 0.7;
+}
+
+.context-budget-usage {
+  font-weight: 500;
+}
+
+.context-budget-sources {
+  color: var(--text-muted, #6c7086);
+  font-size: 10px;
+  opacity: 0.8;
+}
+
+.context-budget-label {
+  font-weight: 500;
 }

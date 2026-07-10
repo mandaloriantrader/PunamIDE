@@ -425,6 +425,55 @@
   color: var(--red, #f38ba8);
 }
 
+/* Pending Approvals Badge */
+.status-pending-approvals {
+  color: var(--peach, #fab387);
+  background: rgba(250, 179, 135, 0.12);
+  border-radius: 3px;
+  padding: 0 5px;
+  font-size: 11px;
+  font-weight: 600;
+}
+
+/* Token Budget Indicator */
+.status-budget {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0 6px;
+  font-size: 11px;
+}
+
+.status-budget-label {
+  white-space: nowrap;
+}
+
+.status-budget-bar-container {
+  width: 40px;
+  height: 4px;
+  background: rgba(255, 255, 255, 0.12);
+  border-radius: 2px;
+  overflow: hidden;
+}
+
+.status-budget-bar {
+  height: 100%;
+  border-radius: 2px;
+  transition: width 0.3s ease, background 0.3s ease;
+}
+
+.status-budget-bar.budget-green {
+  background: #a6e3a1;
+}
+
+.status-budget-bar.budget-yellow {
+  background: #f9e2af;
+}
+
+.status-budget-bar.budget-red {
+  background: #f38ba8;
+}
+
 /* Background Agent Panel */
 .bg-agent-panel {
   position: fixed;
@@ -545,6 +594,55 @@
   gap: 4px;
 }
 
+/* ── Tab Bar ────────────────────────────────────────────────────── */
+
+.bg-agent-panel-tabs {
+  display: flex;
+  align-items: center;
+  gap: 0;
+  padding: 0 14px;
+  border-bottom: 1px solid var(--border);
+  background: rgba(0, 0, 0, 0.1);
+}
+
+.bg-agent-tab {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 7px 12px;
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--text-muted);
+  background: none;
+  border: none;
+  border-bottom: 2px solid transparent;
+  cursor: pointer;
+  transition: color 0.15s, border-color 0.15s;
+}
+
+.bg-agent-tab:hover {
+  color: var(--text-secondary);
+}
+
+.bg-agent-tab.active {
+  color: var(--accent);
+  border-bottom-color: var(--accent);
+}
+
+.bg-agent-panel-plan {
+  flex: 1;
+  overflow: hidden;
+  min-height: 120px;
+  max-height: 300px;
+}
+
+.bg-agent-section-empty {
+  font-size: 11px;
+  color: var(--text-muted);
+  text-align: center;
+  padding: 16px 0;
+}
+
 .bg-agent-panel-section {
   padding: 8px 14px;
   border-bottom: 1px solid var(--border);
@@ -655,6 +753,110 @@
   font-size: 11px;
   line-height: 1.4;
 }
+
+/* ── Command Approval Card ───────────────────────────────────────── */
+
+.bg-agent-approval-card {
+  background: rgba(250, 179, 135, 0.06);
+  border: 1px solid rgba(250, 179, 135, 0.3);
+  border-radius: 6px;
+  margin: 8px 10px;
+  padding: 12px 14px !important;
+  animation: approval-pulse 2s ease-in-out infinite;
+}
+
+@keyframes approval-pulse {
+  0%, 100% { border-color: rgba(250, 179, 135, 0.3); }
+  50% { border-color: rgba(250, 179, 135, 0.6); }
+}
+
+.bg-agent-approval-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.bg-agent-approval-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text);
+  flex: 1;
+}
+
+.bg-agent-risk-badge {
+  font-size: 9px;
+  font-weight: 700;
+  text-transform: uppercase;
+  padding: 2px 6px;
+  border-radius: 3px;
+  letter-spacing: 0.4px;
+}
+
+.bg-agent-risk-badge.high { background: rgba(243, 139, 168, 0.2); color: var(--red); }
+.bg-agent-risk-badge.medium { background: rgba(250, 179, 135, 0.2); color: var(--peach); }
+.bg-agent-risk-badge.low { background: rgba(166, 218, 149, 0.2); color: var(--green); }
+.bg-agent-risk-badge.safe { background: rgba(137, 180, 250, 0.2); color: var(--blue); }
+
+.approval-icon.risk-high { color: var(--red); }
+.approval-icon.risk-medium { color: var(--peach); }
+.approval-icon.risk-low { color: var(--green); }
+.approval-icon.risk-safe { color: var(--blue); }
+
+.bg-agent-approval-command {
+  background: var(--surface0);
+  border-radius: 4px;
+  padding: 8px 10px;
+  margin-bottom: 6px;
+  overflow-x: auto;
+}
+
+.bg-agent-approval-command code {
+  font-family: var(--font-mono, 'Fira Code', monospace);
+  font-size: 12px;
+  color: var(--text);
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+.bg-agent-approval-message {
+  font-size: 11px;
+  color: var(--text-muted);
+  margin-bottom: 10px;
+  line-height: 1.4;
+}
+
+.bg-agent-approval-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.bg-agent-approval-btn {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 6px 14px;
+  border: none;
+  border-radius: 4px;
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.15s, transform 0.1s;
+}
+
+.bg-agent-approval-btn:active { transform: scale(0.96); }
+
+.bg-agent-approval-btn.approve {
+  background: rgba(166, 218, 149, 0.2);
+  color: var(--green);
+}
+.bg-agent-approval-btn.approve:hover { background: rgba(166, 218, 149, 0.35); }
+
+.bg-agent-approval-btn.deny {
+  background: rgba(243, 139, 168, 0.15);
+  color: var(--red);
+}
+.bg-agent-approval-btn.deny:hover { background: rgba(243, 139, 168, 0.3); }
 
 
 /* zen-mode-exit-btn â€” always fully visible when rendered (only rendered in zen mode) */

@@ -1,4 +1,4 @@
-/* Terminal Panel — Mode toggle (Command / Shell) */
+/* Terminal Panel — Zero-chrome wrapper */
 .terminal-panel-wrapper {
   display: flex;
   flex-direction: column;
@@ -6,27 +6,33 @@
   overflow: hidden;
 }
 
-.terminal-mode-bar {
+/* Mode toggle — inline inside .terminal-tabs, separated by a border */
+.terminal-mode-toggle {
   display: flex;
-  gap: 2px;
-  padding: 4px 8px;
-  background: var(--bg-secondary);
-  border-bottom: 1px solid var(--border);
+  align-items: center;
+  gap: 1px;
+  padding: 0 6px 0 4px;
+  margin-right: 6px;
+  border-right: 1px solid var(--border);
   flex-shrink: 0;
+  height: 100%;
 }
 
 .terminal-mode-btn {
   display: flex;
   align-items: center;
-  gap: 5px;
-  padding: 4px 10px;
+  gap: 4px;
+  padding: 2px 7px;
   font-size: 11px;
   border: 1px solid transparent;
-  border-radius: 4px;
+  border-radius: 3px;
   background: transparent;
   color: var(--text-muted);
   cursor: pointer;
-  transition: all 0.15s;
+  transition: all 0.12s;
+  height: 20px;
+  line-height: 1;
+  white-space: nowrap;
 }
 
 .terminal-mode-btn:hover {
@@ -36,50 +42,22 @@
 
 .terminal-mode-btn.active {
   color: var(--accent);
-  background: var(--bg-primary);
-  border-color: var(--border);
-}
-
-.terminal-guidance {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  min-height: 27px;
-  padding: 5px 10px;
-  border-bottom: 1px solid var(--border);
-  background: color-mix(in srgb, var(--bg-secondary) 82%, var(--bg-primary));
-  color: var(--text-muted);
-  font-size: 11px;
-  flex-shrink: 0;
-  min-width: 0;
-}
-
-.terminal-guidance.warning {
-  color: #f9e2af;
-  background: rgba(249, 226, 175, 0.07);
-}
-
-.terminal-guidance-mode {
-  flex: 0 0 auto;
-  color: var(--text-secondary);
-  font-weight: 750;
-}
-
-.terminal-guidance.warning .terminal-guidance-mode {
-  color: #f9e2af;
-}
-
-.terminal-guidance-text {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  background: rgba(137, 180, 250, 0.1);
+  border-color: rgba(137, 180, 250, 0.25);
 }
 
 .terminal-mode-content {
   flex: 1;
   overflow: hidden;
   position: relative;
+  min-height: 0;
+}
+
+/* Shell terminal wrapper reuses .terminal layout */
+.shell-with-tabs {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
 }
 
 /* Shell Terminal (xterm.js) */

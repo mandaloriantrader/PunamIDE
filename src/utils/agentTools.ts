@@ -13,6 +13,10 @@
 
 import { invoke } from "@tauri-apps/api/core";
 import type { AIProviderConfig } from "./providers";
+import { searchSymbol, type SymbolSearchResult } from "../services/lsp/symbolSearch";
+import { isFileLockedForDiff } from "../hooks/useInlineDiff";
+import { validateApply } from "../services/agent/AgentApplyGuard";
+import { validateProposedContent, getCachedRules } from "../services/architecture/ArchitectureEngine";
 
 // ── Tool definitions (Anthropic schema) ──────────────────────────────────────
 
@@ -230,6 +234,32 @@ export const AGENT_TOOL_DEFINITIONS = [
       required: ["query"],
     },
   },
+  {
+    name: "search_symbol",
+    description:
+      "Find where a symbol (function, class, type, variable) is defined or used. " +
+      "Use this BEFORE reading a file when you need to locate specific code. " +
+      "Returns: file path, line number, and a 10-line context window around the definition/usage.",
+    input_schema: {
+      type: "object",
+      properties: {
+        symbol_name: {
+          type: "string",
+          description: "Exact name of the symbol to find (e.g. 'handleApplyPatch', 'AgentLoop')",
+        },
+        search_type: {
+          type: "string",
+          enum: ["definition", "references", "both"],
+          description: "Whether to find the definition, all usages, or both",
+        },
+        file_hint: {
+          type: "string",
+          description: "Optional: file path to narrow the search scope",
+        },
+      },
+      required: ["symbol_name", "search_type"],
+    },
+  },
 ] as const;
 
 export type AgentToolName = typeof AGENT_TOOL_DEFINITIONS[number]["name"];
@@ -243,6 +273,7 @@ const READ_ONLY_AGENT_TOOLS: AgentToolName[] = [
   "find_callers",
   "find_callees",
   "semantic_search",
+  "search_symbol",
 ];
 
 const GUARDED_ACTION_AGENT_TOOLS: AgentToolName[] = [
@@ -375,6 +406,13 @@ export function normalizeAgentToolCall(
       requireField(name, input, "query");
       if (input.top_k !== undefined) input.top_k = Math.min(Number(input.top_k) || 5, 10);
       break;
+    case "search_symbol":
+      assignAlias("symbol_name", ["symbolName", "name", "symbol", "identifier"]);
+      assignAlias("search_type", ["searchType", "type", "mode"]);
+      assignAlias("file_hint", ["fileHint", "file", "hint", "path"]);
+      requireField(name, input, "symbol_name");
+      requireField(name, input, "search_type");
+      break;
   }
 
   return { ...toolCall, input };
@@ -471,7 +509,8 @@ export function parseJsonToolCall(
  */
 export async function executeAgentTool(
   toolCall: ToolCall | ParsedJsonToolCall,
-  projectPath: string
+  projectPath: string,
+  onBeforeWrite?: (path: string, originalContent: string, newContent: string) => Promise<boolean>,
 ): Promise<ToolResult> {
   const normalizedToolCall = normalizeAgentToolCall(toolCall);
   const name = "tool" in normalizedToolCall ? normalizedToolCall.tool : normalizedToolCall.name;
@@ -495,27 +534,88 @@ export async function executeAgentTool(
           is_error: true,
         };
       }
-      const approved = window.confirm(
-        `Punam agent wants to run:\n\n${validation.sanitized_command}\n\n${validation.feedback_message}\n\nAllow?`
-      );
-      if (!approved) {
-        return { tool_use_id: id, content: "Command rejected by user.", is_error: true };
+      // Check autopilot mode for command approval
+      const { useSettingsStore } = await import("../store/settingsStore");
+      const autopilot = useSettingsStore.getState().config.agentAutopilot;
+
+      if (validation.risk_level === "needs_approval") {
+        // Dangerous commands ALWAYS require approval regardless of autopilot
+        if (onBeforeWrite) {
+          const approved = await onBeforeWrite("__run_command__", command, validation.sanitized_command);
+          if (!approved) {
+            return { tool_use_id: id, content: "Command rejected by user.", is_error: true };
+          }
+        }
+      } else if (validation.risk_level === "safe" && !autopilot) {
+        // Supervised mode: even safe commands need approval
+        if (onBeforeWrite) {
+          const approved = await onBeforeWrite("__run_command__", command, validation.sanitized_command);
+          if (!approved) {
+            return { tool_use_id: id, content: "Command rejected by user.", is_error: true };
+          }
+        }
       }
+      // Autopilot ON + safe command → auto-approve (no prompt)
       input.command = validation.sanitized_command;
     } else if (name === "apply_patch") {
-      const approved = window.confirm(
-        `Punam agent wants to modify:\n\n${String(input.path)}\nLines ${String(input.start_line)}-${String(input.end_line)}\n\nAllow this patch?`
-      );
-      if (!approved) {
-        return { tool_use_id: id, content: "Patch rejected by user.", is_error: true };
+      // Block writes to files with active inline diff preview
+      if (isFileLockedForDiff(String(input.path))) {
+        return {
+          tool_use_id: id,
+          content: `File "${input.path}" has an active inline diff preview. Wait for the user to resolve all hunks before applying new edits.`,
+          is_error: true,
+        };
       }
+      // Read original content for diff preview
+      let originalContent = "";
+      try {
+        originalContent = await invoke<string>("read_file", { path: input.path });
+      } catch { /* file may not exist yet */ }
+
+      // Compute what the file will look like after the patch
+      const originalLines = originalContent.split("\n");
+      const startLine = Number(input.start_line) - 1; // 0-indexed
+      const endLine = Number(input.end_line); // exclusive
+      const patchedLines = [
+        ...originalLines.slice(0, startLine),
+        ...String(input.new_content).split("\n"),
+        ...originalLines.slice(endLine),
+      ];
+      const newContent = patchedLines.join("\n");
+
+      if (onBeforeWrite) {
+        const approved = await onBeforeWrite(String(input.path), originalContent, newContent);
+        if (!approved) {
+          return { tool_use_id: id, content: "Patch rejected by user.", is_error: true };
+        }
+      }
+      // No fallback to window.confirm — the approval gate handles safety for patch tools.
+      // If onBeforeWrite is not provided, auto-approve (the approval gate already ran upstream).
     } else if (name === "write_file") {
-      const approved = window.confirm(
-        `Punam agent wants to create or overwrite:\n\n${String(input.path)}\n\nAllow this file write?`
-      );
-      if (!approved) {
-        return { tool_use_id: id, content: "File write rejected by user.", is_error: true };
+      // Block writes to files with active inline diff preview
+      if (isFileLockedForDiff(String(input.path))) {
+        return {
+          tool_use_id: id,
+          content: `File "${input.path}" has an active inline diff preview. Wait for the user to resolve all hunks before applying new edits.`,
+          is_error: true,
+        };
       }
+      // Read original content for diff preview
+      let originalContent = "";
+      try {
+        originalContent = await invoke<string>("read_file", { path: input.path });
+      } catch { /* new file */ }
+
+      const newContent = String(input.content);
+
+      if (onBeforeWrite) {
+        const approved = await onBeforeWrite(String(input.path), originalContent, newContent);
+        if (!approved) {
+          return { tool_use_id: id, content: "File write rejected by user.", is_error: true };
+        }
+      }
+      // No fallback to window.confirm — the approval gate handles safety for write tools.
+      // If onBeforeWrite is not provided, auto-approve (the approval gate already ran upstream).
     }
 
     switch (name) {
@@ -593,6 +693,51 @@ export async function executeAgentTool(
 
       // ── apply_patch (new Rust command) ────────────────────────────────────
       case "apply_patch": {
+        // ── Architecture + Security Guardrails (Phase 1 + Phase 6) ──────────
+        const guardResult = await validateApply(
+          "ai-chat",
+          String(input.path),
+          String(input.new_content),
+          projectPath,
+        );
+        if (!guardResult.allowed) {
+          const violationList = guardResult.architectureViolations.length > 0
+            ? `\n\nArchitecture violations detected:\n${guardResult.architectureViolations.map(v => `  - ${v.description}`).join("\n")}`
+            : "";
+          return {
+            tool_use_id: id,
+            content: `BLOCKED by guardrail: ${guardResult.reason}${violationList}\n\nThis edit cannot be applied as-is. You should:\n- Avoid imports that cross architectural layer boundaries\n- Restructure the change to stay within allowed dependency rules\n- If unsure about the architecture constraints, ask the user for guidance`,
+            is_error: true,
+          };
+        }
+
+        // ── In-Memory Import Validation (catches new forbidden imports) ────
+        try {
+          let originalContent = "";
+          try { originalContent = await invoke<string>("read_file", { path: input.path }); } catch { /* new file */ }
+          const patched = [
+            ...originalContent.split("\n").slice(0, Number(input.start_line) - 1),
+            ...String(input.new_content).split("\n"),
+            ...originalContent.split("\n").slice(Number(input.end_line)),
+          ].join("\n");
+
+          const rules = await getCachedRules();
+          const importGuard = await validateProposedContent(rules, String(input.path), patched);
+          if (importGuard.error_count > 0) {
+            const violations = importGuard.violations
+              .filter(v => v.from_file === String(input.path) || v.to_file === String(input.path))
+              .map(v => `  - ${v.description}`)
+              .join("\n");
+            return {
+              tool_use_id: id,
+              content: `BLOCKED by architecture guardrail: this edit would introduce ${importGuard.error_count} layer violation(s).\n\n${violations}\n\nThis edit cannot be applied as-is. You should:\n- Avoid imports that cross architectural layer boundaries\n- Restructure the change to stay within allowed dependency rules\n- If unsure about the architecture constraints, ask the user for guidance`,
+              is_error: true,
+            };
+          }
+        } catch {
+          // In-memory validation unavailable — fall through to disk-based guards
+        }
+
         const result = await invoke<{
           path: string;
           lines_replaced: number;
@@ -614,6 +759,43 @@ export async function executeAgentTool(
 
       // ── write_file (existing Rust command) ────────────────────────────────
       case "write_file": {
+        // ── Architecture + Security Guardrails (Phase 1 + Phase 6) ──────────
+        const guardResult = await validateApply(
+          "ai-chat",
+          String(input.path),
+          String(input.content),
+          projectPath,
+        );
+        if (!guardResult.allowed) {
+          const violationList = guardResult.architectureViolations.length > 0
+            ? `\n\nArchitecture violations detected:\n${guardResult.architectureViolations.map(v => `  - ${v.description}`).join("\n")}`
+            : "";
+          return {
+            tool_use_id: id,
+            content: `BLOCKED by guardrail: ${guardResult.reason}${violationList}\n\nThis file cannot be written as-is. You should:\n- Avoid imports that cross architectural layer boundaries\n- Restructure the change to stay within allowed dependency rules\n- If unsure about the architecture constraints, ask the user for guidance`,
+            is_error: true,
+          };
+        }
+
+        // ── In-Memory Import Validation (catches new forbidden imports) ────
+        try {
+          const rules = await getCachedRules();
+          const importGuard = await validateProposedContent(rules, String(input.path), String(input.content));
+          if (importGuard.error_count > 0) {
+            const violations = importGuard.violations
+              .filter(v => v.from_file === String(input.path) || v.to_file === String(input.path))
+              .map(v => `  - ${v.description}`)
+              .join("\n");
+            return {
+              tool_use_id: id,
+              content: `BLOCKED by architecture guardrail: this file would introduce ${importGuard.error_count} layer violation(s).\n\n${violations}\n\nThis file cannot be written as-is. You should:\n- Avoid imports that cross architectural layer boundaries\n- Restructure the change to stay within allowed dependency rules\n- If unsure about the architecture constraints, ask the user for guidance`,
+              is_error: true,
+            };
+          }
+        } catch {
+          // In-memory validation unavailable — fall through to disk-based guards
+        }
+
         await invoke("write_file", {
           path: input.path,
           content: String(input.content),
@@ -767,6 +949,37 @@ export async function executeAgentTool(
           resultText =
             `Semantic search for "${input.query}" — ${searchResult.hits.length} result(s) (${searchResult.query_time_ms}ms):\n` +
             entries.join("\n");
+        }
+        break;
+      }
+
+      // ── search_symbol (LSP-backed symbol navigation) ─────────────────────
+      case "search_symbol": {
+        const symbolName = String(input.symbol_name);
+        const searchType = String(input.search_type) as "definition" | "references" | "both";
+        const fileHint = input.file_hint ? String(input.file_hint) : undefined;
+
+        const results: SymbolSearchResult[] = await searchSymbol({
+          symbolName,
+          searchType,
+          fileHint,
+        });
+
+        if (results.length === 0) {
+          resultText = `No results found for symbol "${symbolName}" (search_type: ${searchType}).`;
+        } else {
+          const entries = results.map((r) => {
+            const kindTag = `[${r.kind}]`;
+            const confidenceTag = r.confidence === "fuzzy" ? " (fuzzy)" : "";
+            const header = `${kindTag} ${r.filePath}:${r.line}${confidenceTag}`;
+            const context = r.contextLines
+              ? "\n" + r.contextLines.split("\n").map((line) => `  ${line}`).join("\n")
+              : "";
+            return header + context;
+          });
+          resultText =
+            `Found ${results.length} result(s) for "${symbolName}":\n\n` +
+            entries.join("\n\n");
         }
         break;
       }

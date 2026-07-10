@@ -1,38 +1,75 @@
-# Logs
-logs
-*.log
+# ============================================================
+# PunamIDE v2.0 — .gitignore
+# Only original source files are tracked.
+# ============================================================
+
+# ── Dependencies ─────────────────────────────────────────────
+node_modules/
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 pnpm-debug.log*
-lerna-debug.log*
 
-node_modules
-dist
-dist-ssr
+# ── Build outputs ────────────────────────────────────────────
+dist/
+dist-ssr/
 src-tauri/target/
+
+# ── IDE snapshots & backups (PunamIDE internal) ──────────────
+.punam-backups/
+.punam-snapshots/
+
+# ── Non-source folders ───────────────────────────────────────
+tda-engine/
+punamide-downloads/
+AST-FULL-ROADMAP-GLM5.2/
+debt-analyzer-v2.0/
+claude/
+backup/
+research/
+plans/
+punam/
+files/
+docs/
+
+# ── Internal planning & roadmap docs ─────────────────────────
+INTEGRATION_PLAN.md
+PUNAMIDE_CODE_REVIEW_PRODUCT_ROADMAP.md
+TECHNICAL_DEBT_ANALYZER_BLUEPRINT.md
+RELEASE_NOTES_v2.1.1.md
+RELEASE_NOTES_v2.1.2.md
+a.md
+
+# ── Workspace & editor config (machine-specific) ─────────────
+*.code-workspace
+.vscode/*
+!.vscode/extensions.json
+
+# ── Kiro IDE config (machine-specific) ───────────────────────
+.kiro/
+
+# ── Media / binary artifacts ─────────────────────────────────
+*.webm
+*.mp4
+*.mov
+
+# ── Build logs & temp files ──────────────────────────────────
+*.log
+build-output.log
 recovery-backups/
 recovered-build-css/
 test-debug/
 *.local
 
-# Editor directories and files
-.vscode/*
-!.vscode/extensions.json
-.idea
+# ── OS junk ──────────────────────────────────────────────────
 .DS_Store
 *.suo
 *.ntvs*
 *.njsproj
 *.sln
 *.sw?
-# PunamIDE project checkpoints
-node_modules/
-dist/
-dist-ssr/
-src-tauri/target/
-recovery-backups/
-recovered-build-css/
-test-debug/
-*.log
-*.local
+Thumbs.db
+
+# ── Misc root-level non-source files ─────────────────────────
+new.punam
+autorun.bat

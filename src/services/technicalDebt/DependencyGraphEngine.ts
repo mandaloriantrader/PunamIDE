@@ -194,7 +194,7 @@ export class DependencyGraphEngine {
 
       const normalized = fp.replace(/\\/g, '/')
 
-      const stripped = normalized.replace(/\.(ts|tsx|js|jsx)$/, '')
+      const stripped = normalized.replace(/\.(ts|tsx|js|jsx|py|rs)$/, '')
       if (!map.has(stripped)) map.set(stripped, fp)
 
       if (normalized.endsWith('.ts')) {
@@ -208,6 +208,22 @@ export class DependencyGraphEngine {
         if (!map.has(dir))         map.set(dir, fp)
         if (!map.has(dir + '.ts')) map.set(dir + '.ts', fp)
       }
+
+      // Python: __init__.py acts as directory index
+      const initMatch = normalized.match(/^(.+)\/__init__\.py$/)
+      if (initMatch) {
+        const dir = initMatch[1]
+        if (!map.has(dir))          map.set(dir, fp)
+        if (!map.has(dir + '.py'))  map.set(dir + '.py', fp)
+      }
+
+      // Rust: mod.rs acts as directory index
+      const modMatch = normalized.match(/^(.+)\/mod\.rs$/)
+      if (modMatch) {
+        const dir = modMatch[1]
+        if (!map.has(dir))         map.set(dir, fp)
+        if (!map.has(dir + '.rs')) map.set(dir + '.rs', fp)
+      }
     }
     return map
   }
@@ -220,18 +236,26 @@ export class DependencyGraphEngine {
 
     if (pathAliases.has(normalized)) return pathAliases.get(normalized)!
 
-    const stripped = normalized.replace(/\.(ts|tsx|js|jsx)$/, '')
+    const stripped = normalized.replace(/\.(ts|tsx|js|jsx|py|rs)$/, '')
     if (pathAliases.has(stripped)) return pathAliases.get(stripped)!
 
-    for (const ext of ['.ts', '.tsx', '.js', '.jsx']) {
+    for (const ext of ['.ts', '.tsx', '.js', '.jsx', '.py', '.rs']) {
       const candidate = stripped + ext
       if (pathAliases.has(candidate)) return pathAliases.get(candidate)!
     }
 
     for (const ext of ['.ts', '.tsx', '.js', '.jsx']) {
-      const candidate = normalized.replace(/\.(ts|tsx|js|jsx)$/, '') + '/index' + ext
+      const candidate = normalized.replace(/\.(ts|tsx|js|jsx|py|rs)$/, '') + '/index' + ext
       if (pathAliases.has(candidate)) return pathAliases.get(candidate)!
     }
+
+    // Python: directory/__init__.py
+    const pyInit = normalized.replace(/\.(py)$/, '') + '/__init__.py'
+    if (pathAliases.has(pyInit)) return pathAliases.get(pyInit)!
+
+    // Rust: directory/mod.rs
+    const rsMod = normalized.replace(/\.(rs)$/, '') + '/mod.rs'
+    if (pathAliases.has(rsMod)) return pathAliases.get(rsMod)!
 
     return null
   }

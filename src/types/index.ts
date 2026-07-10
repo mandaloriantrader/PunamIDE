@@ -32,6 +32,8 @@ export interface ToolEvent {
 // --- Chat Messages ---
 
 export interface ChatMessage {
+  /** Stable unique identifier for this message (used for memoization comparisons). */
+  id?: string;
   role: "user" | "assistant";
   /** Final user-visible answer (never contains <thinking> tags). */
   content: string;

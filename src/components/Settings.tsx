@@ -567,6 +567,72 @@ export default function Settings({ config, onConfigChange, onClose, onProvidersC
                 <span className="settings-toggle-knob" />
               </button>
             </div>
+
+            <h3 style={{ marginTop: 20 }}>Inline Autocomplete</h3>
+
+            {/* Enable/disable toggle */}
+            <div className="settings-toggle-row">
+              <div className="settings-toggle-info">
+                <span className="settings-toggle-label">Enable Autocomplete</span>
+                <span className="settings-toggle-desc">Master switch for the inline autocomplete engine</span>
+              </div>
+              <button
+                className={`settings-toggle-switch ${local.autocompleteEnabled ? "on" : "off"}`}
+                onClick={() => setLocal((prev) => ({ ...prev, autocompleteEnabled: !prev.autocompleteEnabled }))}
+                role="switch"
+                aria-checked={local.autocompleteEnabled}
+                aria-label="Toggle autocomplete"
+              >
+                <span className="settings-toggle-knob" />
+              </button>
+            </div>
+
+            {/* Mode selector */}
+            <div className="provider-field" style={{ marginTop: 12 }}>
+              <label>Completion Mode</label>
+              <select
+                className="settings-input"
+                value={local.autocompleteMode}
+                onChange={(e) => setLocal((prev) => ({ ...prev, autocompleteMode: e.target.value as AppConfig["autocompleteMode"] }))}
+              >
+                <option value="auto">Auto (detect from model)</option>
+                <option value="fim">Force FIM</option>
+                <option value="chat">Force Chat Fallback</option>
+                <option value="disabled">Disabled</option>
+              </select>
+            </div>
+
+            {/* Trigger delay */}
+            <div className="provider-field" style={{ marginTop: 12 }}>
+              <label>Trigger Delay: {local.autocompleteDebounceMs}ms</label>
+              <input
+                type="range"
+                min={150}
+                max={800}
+                step={50}
+                value={local.autocompleteDebounceMs}
+                onChange={(e) => setLocal((prev) => ({ ...prev, autocompleteDebounceMs: Math.max(150, Number(e.target.value)) }))}
+                className="settings-range"
+              />
+              <span className="settings-toggle-desc">Delay before triggering completion (150–800ms)</span>
+            </div>
+
+            {/* Max tokens */}
+            <div className="provider-field" style={{ marginTop: 12 }}>
+              <label>Max Tokens: {local.autocompleteMaxTokens}</label>
+              <input
+                type="number"
+                min={16}
+                max={512}
+                value={local.autocompleteMaxTokens}
+                onChange={(e) => {
+                  const val = Math.min(512, Math.max(16, Number(e.target.value)));
+                  setLocal((prev) => ({ ...prev, autocompleteMaxTokens: val }));
+                }}
+                className="settings-input"
+              />
+              <span className="settings-toggle-desc">Max tokens per completion response (16–512)</span>
+            </div>
           </div>
         )}
 

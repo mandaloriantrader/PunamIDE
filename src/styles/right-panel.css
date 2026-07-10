@@ -276,6 +276,114 @@
   opacity: 0.9;
 }
 
+/* Composer: Auto-detect file styles */
+.composer-auto-badge {
+  display: inline-block;
+  margin-left: 6px;
+  font-size: 9px;
+  padding: 1px 5px;
+  border-radius: 3px;
+  background: rgba(137, 180, 250, 0.2);
+  color: var(--accent);
+  font-weight: 600;
+  text-transform: none;
+  letter-spacing: 0;
+}
+
+.composer-detect-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  margin-left: auto;
+  padding: 2px 7px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: transparent;
+  color: var(--accent);
+  font-size: 10px;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.composer-detect-btn:hover {
+  background: rgba(137, 180, 250, 0.12);
+  border-color: var(--accent);
+}
+
+.composer-detected-files {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--border);
+}
+
+.composer-file-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  border-radius: 4px;
+  background: rgba(137, 180, 250, 0.1);
+  border: 1px solid rgba(137, 180, 250, 0.2);
+  font-size: 11px;
+  color: var(--text-secondary);
+  max-width: 200px;
+}
+
+.composer-file-chip span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.composer-file-chip-remove {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 13px;
+  height: 13px;
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  border-radius: 50%;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.composer-file-chip-remove:hover {
+  background: rgba(243, 139, 168, 0.2);
+  color: var(--red);
+}
+
+.composer-files-details {
+  border-top: 1px solid var(--border);
+}
+
+.composer-files-summary {
+  padding: 6px 10px;
+  font-size: 11px;
+  color: var(--text-muted);
+  cursor: pointer;
+  user-select: none;
+}
+
+.composer-files-summary:hover {
+  color: var(--text-secondary);
+}
+
+.composer-detecting {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  border-radius: 6px;
+  background: rgba(137, 180, 250, 0.08);
+  border: 1px solid rgba(137, 180, 250, 0.2);
+  color: var(--accent);
+  font-size: 12px;
+}
+
 /* Usage Dashboard */
 .usage-dashboard {
   display: flex;
