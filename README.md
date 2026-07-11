@@ -34,7 +34,7 @@ Multi-provider AI, agentic tool-calling, technical debt analysis, and a full IDE
 
 <br/>
 
-> **PunamIDE** is not just a chat wrapper around an AI — it's a full desktop IDE with a native Rust backend, real terminal, Git integration, GitHub management, DAP debugger, local embeddings, architecture analysis, and a multi-agent system that can autonomously read, write, and refactor your codebase.
+> **PunamIDE** is not just a chat wrapper around an AI , it's a full desktop IDE with a native Rust backend, real terminal, Git integration, GitHub management, DAP debugger, local embeddings, architecture analysis, and a multi-agent system that can autonomously read, write, and refactor your codebase.
 
 </div>
 
