@@ -8,7 +8,7 @@
  * Requirements: 12.1, 12.4, 12.5, 12.7, 12.8, 12.9
  */
 
-import { useState, useCallback, useMemo, useEffect, useRef } from "react";
+import { useState, useCallback, useEffect, useRef } from "react";
 import {
   Loader2,
   PenLine,
@@ -23,9 +23,7 @@ import {
   ChevronRight,
   FileCode,
 } from "lucide-react";
-import { useEditorStore } from "../store/editorStore";
 import { showToast } from "../utils/toast";
-import { buildConflictMarkedContent } from "../utils/conflictParser";
 import {
   RefactorService,
   RefactorError,
@@ -41,7 +39,7 @@ import type { DiffHunk, DiffLine } from "../services/agent/differ";
 
 // ─── Types ─────────────────────────────────────────────────────────────────────
 
-type RefactorMode = "rename" | "extract" | "move";
+export type RefactorMode = "rename" | "extract" | "move";
 
 type PanelPhase =
   | "input"       // User is filling in the form
@@ -52,6 +50,11 @@ type PanelPhase =
   | "error";      // Error occurred
 
 interface RefactorPanelProps {
+  activeFile: { path: string; name: string } | null;
+  cursorPosition: { line: number; column: number };
+  selection: { startLine: number; startColumn: number; endLine: number; endColumn: number; text: string } | null;
+  initialMode?: RefactorMode;
+  onApplied?: (changeSet: RefactorChangeSet) => void | Promise<void>;
   onClose?: () => void;
 }
 
@@ -110,20 +113,10 @@ function DiffFileView({ filePath, changeCount, diff }: DiffFileViewProps) {
 
 // ─── Main Panel ────────────────────────────────────────────────────────────────
 
-export default function RefactorPanel({ onClose }: RefactorPanelProps) {
-  // Editor state
-  const activeTabId = useEditorStore((s) => s.activeTabId);
-  const tabs = useEditorStore((s) => s.tabs);
-  const cursorPosition = useEditorStore((s) => s.cursorPosition);
-  const selectedText = useEditorStore((s) => s.selectedText);
-
-  const activeTab = useMemo(
-    () => tabs.find((t) => t.id === activeTabId),
-    [tabs, activeTabId]
-  );
+export default function RefactorPanel({ activeFile, cursorPosition, selection, initialMode = "rename", onApplied, onClose }: RefactorPanelProps) {
 
   // Panel state
-  const [mode, setMode] = useState<RefactorMode>("rename");
+  const [mode, setMode] = useState<RefactorMode>(initialMode);
   const [phase, setPhase] = useState<PanelPhase>("input");
 
   // Input state
@@ -162,8 +155,12 @@ export default function RefactorPanel({ onClose }: RefactorPanelProps) {
     setErrorSnapshotId(null);
   }, []);
 
+  useEffect(() => {
+    handleModeChange(initialMode);
+  }, [handleModeChange, initialMode]);
+
   const handlePreview = useCallback(async () => {
-    if (!activeTab) {
+    if (!activeFile) {
       setValidationError("No active file. Open a file first.");
       return;
     }
@@ -175,7 +172,7 @@ export default function RefactorPanel({ onClose }: RefactorPanelProps) {
     // Validate based on mode
     if (mode === "rename") {
       const params: RenameParams = {
-        filePath: activeTab.path,
+        filePath: activeFile.path,
         line: cursorPosition.line - 1, // Convert 1-based to 0-based
         character: cursorPosition.column - 1,
         newName: newName.trim(),
@@ -201,7 +198,7 @@ export default function RefactorPanel({ onClose }: RefactorPanelProps) {
       }
     } else if (mode === "extract") {
       // Validate selection
-      const validation: ValidationResult = service.validateExtractSelection(selectedText);
+      const validation: ValidationResult = service.validateExtractSelection(selection?.text || "");
       if (!validation.ok) {
         setValidationError(validation.message || "Invalid selection for extraction.");
         return;
@@ -212,11 +209,10 @@ export default function RefactorPanel({ onClose }: RefactorPanelProps) {
       }
 
       // Get selection positions from cursor
-      const selLines = selectedText.split("\n");
       const params: ExtractParams = {
-        filePath: activeTab.path,
-        selectionStart: { line: cursorPosition.line - 1, character: 0 },
-        selectionEnd: { line: cursorPosition.line - 1 + selLines.length - 1, character: selLines[selLines.length - 1].length },
+        filePath: activeFile.path,
+        selectionStart: { line: (selection?.startLine || 1) - 1, character: (selection?.startColumn || 1) - 1 },
+        selectionEnd: { line: (selection?.endLine || 1) - 1, character: (selection?.endColumn || 1) - 1 },
         functionName: functionName.trim(),
       };
 
@@ -239,7 +235,7 @@ export default function RefactorPanel({ onClose }: RefactorPanelProps) {
       }
 
       const params: MoveParams = {
-        sourcePath: activeTab.path,
+        sourcePath: activeFile.path,
         destinationPath: destinationPath.trim(),
       };
 
@@ -256,7 +252,7 @@ export default function RefactorPanel({ onClose }: RefactorPanelProps) {
         setPhase("input");
       }
     }
-  }, [activeTab, mode, newName, functionName, destinationPath, cursorPosition, selectedText, getService]);
+  }, [activeFile, mode, newName, functionName, destinationPath, cursorPosition, selection, getService]);
 
   const handleConfirm = useCallback(async () => {
     if (!changeSet) return;
@@ -266,63 +262,13 @@ export default function RefactorPanel({ onClose }: RefactorPanelProps) {
     setErrorMessage(null);
 
     const onConflict = (conflicts: MergeConflict[]) => {
-      // Wire conflicts to the existing 3-way merge panel.
-      // For each conflict, build conflict-marked content and open the file in the editor.
-      // The MergeConflictPanel (rendered in App.tsx) auto-displays when tab content has conflict markers.
-      const { tabs, openTab, updateTabContent, setActiveTab } = useEditorStore.getState();
-
-      for (const conflict of conflicts) {
-        const markedContent = buildConflictMarkedContent(
-          conflict.actualContent,
-          conflict.intendedContent,
-          "Current (on disk)",
-          "Refactoring"
-        );
-
-        // Check if the file is already open in a tab
-        const existingTab = tabs.find((t) => t.path === conflict.filePath);
-        if (existingTab) {
-          // Update the tab content with conflict markers
-          updateTabContent(existingTab.id, markedContent);
-        } else {
-          // Open a new tab with the conflict-marked content
-          const fileName = conflict.filePath.replace(/\\/g, "/").split("/").pop() || conflict.filePath;
-          const ext = fileName.split(".").pop() || "";
-          const langMap: Record<string, string> = {
-            ts: "typescript", tsx: "typescriptreact", js: "javascript", jsx: "javascriptreact",
-            py: "python", rs: "rust", css: "css", html: "html", json: "json", md: "markdown",
-          };
-          openTab({
-            id: `conflict-${conflict.filePath}-${Date.now()}`,
-            path: conflict.filePath,
-            name: fileName,
-            content: markedContent,
-            originalContent: conflict.actualContent,
-            modified: true,
-            language: langMap[ext] || "plaintext",
-          });
-        }
-      }
-
-      // Activate the first conflicted file's tab so the merge panel is visible
-      if (conflicts.length > 0) {
-        const firstConflict = conflicts[0];
-        const updatedTabs = useEditorStore.getState().tabs;
-        const targetTab = updatedTabs.find((t) => t.path === firstConflict.filePath);
-        if (targetTab) {
-          setActiveTab(targetTab.id);
-        }
-      }
-
-      showToast(
-        `Merge conflict in ${conflicts.length} file(s). Resolve in the editor merge panel.`,
-        "warning"
-      );
+      showToast(`Refactoring stopped: ${conflicts.length} file(s) changed after preview. Review and try again.`, "warning");
     };
 
     try {
       const result = await service.apply(changeSet, onConflict);
       setSnapshotId(result.snapshotId);
+      await onApplied?.(changeSet);
       setPhase("done");
     } catch (err) {
       if (err instanceof RefactorError) {
@@ -334,7 +280,7 @@ export default function RefactorPanel({ onClose }: RefactorPanelProps) {
       }
       setPhase("error");
     }
-  }, [changeSet, getService]);
+  }, [changeSet, getService, onApplied]);
 
   const handleCancel = useCallback(() => {
     setPhase("input");
@@ -371,22 +317,31 @@ export default function RefactorPanel({ onClose }: RefactorPanelProps) {
   }, [onClose]);
 
   const modeButtons: { key: RefactorMode; label: string; icon: typeof PenLine }[] = [
-    { key: "rename", label: "Rename", icon: PenLine },
-    { key: "extract", label: "Extract Function", icon: FunctionSquare },
-    { key: "move", label: "Move File", icon: FolderInput },
+    { key: "rename", label: "Rename symbol", icon: PenLine },
+    { key: "extract", label: "Extract function", icon: FunctionSquare },
+    { key: "move", label: "Move file", icon: FolderInput },
   ];
+
+  const modeHelp: Record<RefactorMode, string> = {
+    rename: "Use the language server to safely rename references in your workspace.",
+    extract: "Turn the selected statements into a reusable function with a reviewed diff.",
+    move: "Relocate this file, update imports, and remove the original only after approval.",
+  };
 
   return (
     <div
-      className="flex flex-col h-full bg-[#1e1e2e] text-gray-200 overflow-hidden"
+      className="refactor-panel flex flex-col h-full bg-[#1e1e2e] text-gray-200 overflow-hidden"
       role="region"
       aria-label="Refactoring panel"
     >
       {/* Header */}
-      <div className="flex items-center justify-between px-3 py-2 border-b border-gray-700/50">
-        <div className="flex items-center gap-2">
-          <PenLine size={16} className="text-purple-400" />
-          <span className="text-xs font-medium text-gray-200">Refactor</span>
+      <div className="flex items-center justify-between px-5 py-4 border-b border-gray-700/70 bg-[#242438]">
+        <div className="flex items-center gap-3">
+          <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-purple-500/15 ring-1 ring-purple-400/25"><PenLine size={16} className="text-purple-300" /></div>
+          <div>
+            <h2 className="text-base font-semibold text-gray-100">Refactor</h2>
+            <p className="mt-0.5 text-xs text-gray-400">Preview every change before writing files.</p>
+          </div>
         </div>
         {onClose && (
           <button
@@ -401,11 +356,11 @@ export default function RefactorPanel({ onClose }: RefactorPanelProps) {
       </div>
 
       {/* Mode tabs */}
-      <div className="flex border-b border-gray-700/50" role="tablist" aria-label="Refactoring operation">
+      <div className="grid grid-cols-3 gap-2 px-4 py-3 border-b border-gray-700/50 bg-[#202033]" role="tablist" aria-label="Refactoring operation">
         {modeButtons.map(({ key, label, icon: Icon }) => (
           <button
             key={key} role="tab" aria-selected={mode === key} aria-controls={`panel-${key}`}
-            className={`flex-1 flex items-center justify-center gap-1.5 px-2 py-1.5 text-[11px] transition-colors ${mode === key ? "border-b-2 border-purple-400 text-purple-300 bg-purple-900/10" : "text-gray-400 hover:text-gray-200 hover:bg-gray-800/40"}`}
+            className={`flex items-center justify-center gap-2 rounded-lg px-3 py-2.5 text-xs font-semibold transition-colors ${mode === key ? "bg-purple-500/20 text-purple-200 ring-1 ring-inset ring-purple-400/35" : "text-gray-400 hover:text-gray-200 hover:bg-gray-800/70"}`}
             onClick={() => handleModeChange(key)}
             disabled={phase === "computing" || phase === "applying"}
           >
@@ -415,15 +370,21 @@ export default function RefactorPanel({ onClose }: RefactorPanelProps) {
         ))}
       </div>
 
+      <div className="flex items-center gap-2 border-b border-gray-700/40 bg-[#1c1c2b] px-5 py-3 text-xs text-gray-400">
+        <span className="rounded bg-purple-500/15 px-1.5 py-0.5 font-medium text-purple-200">{modeButtons.find((button) => button.key === mode)?.label}</span>
+        <span>{modeHelp[mode]}</span>
+      </div>
+
       {/* Body */}
-      <div className="flex-1 overflow-y-auto p-3 space-y-3">
+      <div className="flex-1 overflow-y-auto p-5 space-y-5">
         {/* Input Phase */}
         {(phase === "input" || phase === "computing") && (
           <div id={`panel-${mode}`} role="tabpanel" className="space-y-3">
             {/* Active file indicator */}
-            {activeTab && (
-              <div className="text-[10px] text-gray-500 truncate">
-                Active: {activeTab.path}
+            {activeFile && (
+              <div className="rounded-lg border border-gray-700/70 bg-[#181825]/65 px-3 py-2.5">
+                <div className="text-[11px] font-medium uppercase tracking-wide text-gray-500">Target file</div>
+                <div className="mt-1 truncate font-mono text-sm text-gray-300">{activeFile.path}</div>
               </div>
             )}
 
@@ -431,19 +392,19 @@ export default function RefactorPanel({ onClose }: RefactorPanelProps) {
             {mode === "rename" && (
               <div className="space-y-2">
                 <label className="block">
-                  <span className="text-[11px] text-gray-400 mb-1 block">New Name</span>
+                  <span className="text-xs font-medium text-gray-300 mb-1.5 block">New Name</span>
                   <input
                     type="text" value={newName}
                     onChange={(e) => { setNewName(e.target.value); setValidationError(null); }}
                     placeholder="Enter new symbol name…"
-                    className="w-full px-2 py-1.5 text-xs bg-gray-900/60 border border-gray-700/50 rounded text-gray-200 placeholder-gray-500 focus:outline-none focus:border-purple-500/60 transition-colors"
+                    className="w-full px-3 py-2.5 text-sm bg-gray-900/60 border border-gray-700/50 rounded-lg text-gray-200 placeholder-gray-500 focus:outline-none focus:border-purple-500/60 transition-colors"
                     aria-label="New symbol name" aria-invalid={!!validationError}
                     aria-describedby={validationError ? "rename-error" : undefined}
                     disabled={phase === "computing"}
                     onKeyDown={(e) => { if (e.key === "Enter") handlePreview(); }}
                   />
                 </label>
-                <div className="text-[10px] text-gray-500">Cursor at line {cursorPosition.line}, col {cursorPosition.column}</div>
+                <div className="text-xs text-gray-500">Rename the symbol at line {cursorPosition.line}, column {cursorPosition.column}.</div>
               </div>
             )}
 
@@ -451,22 +412,22 @@ export default function RefactorPanel({ onClose }: RefactorPanelProps) {
             {mode === "extract" && (
               <div className="space-y-2">
                 <label className="block">
-                  <span className="text-[11px] text-gray-400 mb-1 block">Function Name</span>
+                  <span className="text-xs font-medium text-gray-300 mb-1.5 block">Function Name</span>
                   <input
                     type="text" value={functionName}
                     onChange={(e) => { setFunctionName(e.target.value); setValidationError(null); }}
                     placeholder="Enter function name…"
-                    className="w-full px-2 py-1.5 text-xs bg-gray-900/60 border border-gray-700/50 rounded text-gray-200 placeholder-gray-500 focus:outline-none focus:border-purple-500/60 transition-colors"
+                    className="w-full px-3 py-2.5 text-sm bg-gray-900/60 border border-gray-700/50 rounded-lg text-gray-200 placeholder-gray-500 focus:outline-none focus:border-purple-500/60 transition-colors"
                     aria-label="Extracted function name" aria-invalid={!!validationError}
                     aria-describedby={validationError ? "extract-error" : undefined}
                     disabled={phase === "computing"}
                     onKeyDown={(e) => { if (e.key === "Enter") handlePreview(); }}
                   />
                 </label>
-                {selectedText ? (
-                  <div className="text-[10px] text-gray-500">Selection: {selectedText.split("\n").length} line(s) selected</div>
+                {selection?.text ? (
+                  <div className="rounded-md bg-blue-500/10 px-2.5 py-2 text-[11px] text-blue-200">Selected lines {selection.startLine}–{selection.endLine} will become a new function.</div>
                 ) : (
-                  <div className="text-[10px] text-yellow-500/80">No code selected. Select code to extract.</div>
+                  <div className="rounded-md bg-amber-500/10 px-2.5 py-2 text-[11px] text-amber-200">Select complete code in the editor before extracting it.</div>
                 )}
               </div>
             )}
@@ -474,14 +435,14 @@ export default function RefactorPanel({ onClose }: RefactorPanelProps) {
             {/* Move inputs */}
             {mode === "move" && (
               <div className="space-y-2">
-                <div className="text-[10px] text-gray-500">Source: {activeTab?.path || "No file open"}</div>
+                <div className="text-xs text-gray-500">Source: {activeFile?.path || "No file open"}</div>
                 <label className="block">
-                  <span className="text-[11px] text-gray-400 mb-1 block">Destination Path</span>
+                  <span className="text-xs font-medium text-gray-300 mb-1.5 block">Destination Path</span>
                   <input
                     type="text" value={destinationPath}
                     onChange={(e) => { setDestinationPath(e.target.value); setValidationError(null); }}
                     placeholder="Enter destination file path…"
-                    className="w-full px-2 py-1.5 text-xs bg-gray-900/60 border border-gray-700/50 rounded text-gray-200 placeholder-gray-500 focus:outline-none focus:border-purple-500/60 transition-colors"
+                    className="w-full px-3 py-2.5 text-sm bg-gray-900/60 border border-gray-700/50 rounded-lg text-gray-200 placeholder-gray-500 focus:outline-none focus:border-purple-500/60 transition-colors"
                     aria-label="Destination file path" aria-invalid={!!validationError}
                     aria-describedby={validationError ? "move-error" : undefined}
                     disabled={phase === "computing"}
@@ -505,9 +466,9 @@ export default function RefactorPanel({ onClose }: RefactorPanelProps) {
 
             {/* Preview button */}
             <button
-              className="w-full flex items-center justify-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded bg-purple-600/80 hover:bg-purple-600 text-white transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+              className="w-full flex items-center justify-center gap-2 px-3 py-2.5 text-xs font-semibold rounded-lg bg-purple-600 hover:bg-purple-500 text-white shadow-lg shadow-purple-950/30 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
               onClick={handlePreview}
-              disabled={phase === "computing" || !activeTab}
+              disabled={phase === "computing" || !activeFile}
               aria-label="Preview refactoring changes"
             >
               {phase === "computing" ? (
@@ -518,7 +479,7 @@ export default function RefactorPanel({ onClose }: RefactorPanelProps) {
               ) : (
                 <>
                   <Eye size={12} />
-                  Preview
+                  Review changes
                 </>
               )}
             </button>

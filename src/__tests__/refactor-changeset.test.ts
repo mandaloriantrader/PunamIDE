@@ -299,8 +299,12 @@ describe("RefactorService — Change-Set Computation", () => {
         destinationPath: "src/lib/helper.ts",
       });
 
-      // Should have edit for the moved file + the importing file
-      expect(changeSet.edits.length).toBe(2);
+      // Destination, source removal, and the importing file are all part of a move.
+      expect(changeSet.edits.length).toBe(3);
+      expect(changeSet.edits).toContainEqual(expect.objectContaining({
+        filePath: "src/utils/helper.ts",
+        delete: true,
+      }));
 
       const importingEdit = changeSet.edits.find((e) => e.filePath === "src/index.ts");
       expect(importingEdit).toBeDefined();
@@ -329,9 +333,10 @@ describe("RefactorService — Change-Set Computation", () => {
         destinationPath: "src/lib/foo.ts",
       });
 
-      // Only the moved file edit, no changes to unrelated file
-      expect(changeSet.edits).toHaveLength(1);
+      // Destination and source removal only; unrelated files remain untouched.
+      expect(changeSet.edits).toHaveLength(2);
       expect(changeSet.edits[0].filePath).toBe("src/lib/foo.ts");
+      expect(changeSet.edits[1]).toMatchObject({ filePath: "src/utils/foo.ts", delete: true });
     });
   });
 

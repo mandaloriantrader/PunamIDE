@@ -50,8 +50,10 @@ interface Props {
   onEditorReady?: (editorInstance: editor.IStandaloneCodeEditor) => void;
   /** Called to open the TestGenPanel with the selected function code */
   onOpenTestGenPanel?: (functionCode: string) => void;
+  /** Called with the exact Monaco selection range for refactoring operations. */
+  onSelectionRangeChange?: (selection: { startLine: number; startColumn: number; endLine: number; endColumn: number; text: string } | null) => void;
   /** Called when the user triggers a refactoring operation from the context menu */
-  onOpenRefactorPanel?: () => void;
+  onOpenRefactorPanel?: (mode?: "rename" | "extract" | "move") => void;
 }
 
 const EXT_TO_LANG: Record<string, string> = {
@@ -239,7 +241,7 @@ export default function CodeEditor({
   currentDebugSource,
   blameEnabled = false,
   onEditorReady,
-  onOpenTestGenPanel,
+  onOpenTestGenPanel, onSelectionRangeChange,
   onOpenRefactorPanel,
 }: Props) {
   // ── Inline edit state ──────────────────────────────────────────────────────
@@ -559,8 +561,15 @@ export default function CodeEditor({
     if (onSelectionChange) {
       editorInstance.onDidChangeCursorSelection(() => {
         const sel = editorInstance.getSelection();
-        if (sel && !sel.isEmpty()) onSelectionChange(editorInstance.getModel()?.getValueInRange(sel) || "");
-        else onSelectionChange("");
+        const text = sel && !sel.isEmpty() ? editorInstance.getModel()?.getValueInRange(sel) || "" : "";
+        onSelectionChange(text);
+        onSelectionRangeChange?.(sel && !sel.isEmpty() ? {
+          startLine: sel.startLineNumber,
+          startColumn: sel.startColumn,
+          endLine: sel.endLineNumber,
+          endColumn: sel.endColumn,
+          text,
+        } : null);
       });
     }
     if (onCursorChange) {
@@ -588,9 +597,9 @@ export default function CodeEditor({
 
     // Refactor context menu actions (open RefactorPanel)
     if (onOpenRefactorPanel) {
-      editorInstance.addAction({ id: "punam-refactor-rename", label: "Refactor: Rename Symbol", contextMenuGroupId: "refactor", contextMenuOrder: 0, keybindings: [monaco.KeyMod.CtrlCmd | monaco.KeyMod.Shift | monaco.KeyCode.KeyR], run: () => { onOpenRefactorPanel(); } });
-      editorInstance.addAction({ id: "punam-refactor-extract", label: "Refactor: Extract Function", contextMenuGroupId: "refactor", contextMenuOrder: 1, run: () => { onOpenRefactorPanel(); } });
-      editorInstance.addAction({ id: "punam-refactor-move", label: "Refactor: Move File", contextMenuGroupId: "refactor", contextMenuOrder: 2, run: () => { onOpenRefactorPanel(); } });
+      editorInstance.addAction({ id: "punam-refactor-rename", label: "Refactor: Rename Symbol", contextMenuGroupId: "refactor", contextMenuOrder: 0, keybindings: [monaco.KeyMod.CtrlCmd | monaco.KeyMod.Shift | monaco.KeyCode.KeyR], run: () => { onOpenRefactorPanel("rename"); } });
+      editorInstance.addAction({ id: "punam-refactor-extract", label: "Refactor: Extract Function", contextMenuGroupId: "refactor", contextMenuOrder: 1, run: () => { onOpenRefactorPanel("extract"); } });
+      editorInstance.addAction({ id: "punam-refactor-move", label: "Refactor: Move File", contextMenuGroupId: "refactor", contextMenuOrder: 2, run: () => { onOpenRefactorPanel("move"); } });
     }
 
     // Register inline completion provider (new modular autocomplete engine)

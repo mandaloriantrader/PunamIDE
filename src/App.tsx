@@ -185,6 +185,7 @@ import { DocGenerator } from "./services/docs/DocGenerator";
 import type { DocTarget } from "./services/docs/DocGenerator";
 import { useEditorStore } from "./store/editorStore";
 import type { TestGenSource } from "./components/TestGenPanel";
+import type { RefactorMode } from "./components/RefactorPanel";
 
 const isAbsolutePath = (path: string) => /^[A-Za-z]:[\\/]/.test(path) || path.startsWith("/");
 const normalizeFsPath = (path: string) => path.replace(/\\/g, "/").replace(/\/+/g, "/").toLowerCase();
@@ -314,6 +315,35 @@ export default function App() {
   const [showTestGenerator, setShowTestGenerator] = useState(false);
   const [testGenPanelSource, setTestGenPanelSource] = useState<TestGenSource | null>(null);
   const [showRefactorPanel, setShowRefactorPanel] = useState(false);
+  const [refactorPanelWidth, setRefactorPanelWidth] = useState(520);
+  const [refactorMode, setRefactorMode] = useState<RefactorMode>("rename");
+  const [refactorSelection, setRefactorSelection] = useState<{ startLine: number; startColumn: number; endLine: number; endColumn: number; text: string } | null>(null);
+
+  // These panels share the same workspace.  Keep only one mounted so a newly
+  // opened tool is immediately usable instead of being hidden behind older ones.
+  type WorkspaceTool = "codeReview" | "livePreview" | "testGenerator" | "refactor" | "notes" | null;
+  const openWorkspaceTool = useCallback((tool: WorkspaceTool) => {
+    setShowCodeReview(tool === "codeReview");
+    setShowLivePreview(tool === "livePreview");
+    setShowTestGenerator(tool === "testGenerator");
+    setShowRefactorPanel(tool === "refactor");
+    setShowNotes(tool === "notes");
+    setTestGenPanelSource(null);
+  }, []);
+
+  const toggleWorkspaceTool = useCallback((tool: Exclude<WorkspaceTool, null>, isOpen: boolean) => {
+    openWorkspaceTool(isOpen ? null : tool);
+  }, [openWorkspaceTool]);
+
+  const openTestGenPanel = useCallback((source: TestGenSource) => {
+    openWorkspaceTool(null);
+    setTestGenPanelSource(source);
+  }, [openWorkspaceTool]);
+
+  const openRefactorPanel = useCallback((mode: RefactorMode = "rename") => {
+    setRefactorMode(mode);
+    openWorkspaceTool("refactor");
+  }, [openWorkspaceTool]);
   // Font size control (Ctrl+= / Ctrl+-)
   const [editorFontSize, setEditorFontSize] = useState(14);
   // Recent projects
@@ -2027,7 +2057,7 @@ export default function App() {
       // Ctrl+Shift+R = Open Refactor Panel
       if (ctrl && e.shiftKey && e.key.toLowerCase() === "r") {
         e.preventDefault();
-        setShowRefactorPanel(true);
+        openRefactorPanel("rename");
         return;
       }
 
@@ -2042,7 +2072,7 @@ export default function App() {
         const selText = editorState.selectedText;
         const functionCode = selText?.trim() ? selText : tab.content;
         if (functionCode.trim()) {
-          setTestGenPanelSource({ filePath: tab.path, functionCode });
+          openTestGenPanel({ filePath: tab.path, functionCode });
         }
         return;
       }
@@ -2586,7 +2616,7 @@ export default function App() {
       title: "Code Review",
       detail: currentTab ? `Review ${currentTab.name}` : "Open a file first",
       disabled: !currentTab,
-      run: () => setShowCodeReview(true),
+      run: () => openWorkspaceTool("codeReview"),
     },
     {
       id: "save-file",
@@ -2748,28 +2778,28 @@ export default function App() {
       detail: "Open the refactoring panel (Rename / Extract / Move)",
       shortcut: "Ctrl+Shift+R",
       disabled: !currentTab,
-      run: () => setShowRefactorPanel(true),
+      run: () => openRefactorPanel("rename"),
     },
     {
       id: "refactor-rename",
       title: "Refactor: Rename Symbol",
       detail: currentTab ? "Rename symbol at cursor" : "Open a file first",
       disabled: !currentTab,
-      run: () => setShowRefactorPanel(true),
+      run: () => openRefactorPanel("rename"),
     },
     {
       id: "refactor-extract-function",
       title: "Refactor: Extract Function",
       detail: currentTab ? "Extract selection into a new function" : "Open a file first",
       disabled: !currentTab || !selectedText,
-      run: () => setShowRefactorPanel(true),
+      run: () => openRefactorPanel("extract"),
     },
     {
       id: "refactor-move-file",
       title: "Refactor: Move File",
       detail: currentTab ? `Move ${currentTab.name}` : "Open a file first",
       disabled: !currentTab,
-      run: () => setShowRefactorPanel(true),
+      run: () => openRefactorPanel("move"),
     },
     {
       id: "generate-tests",
@@ -2781,7 +2811,7 @@ export default function App() {
         if (!currentTab) return;
         const functionCode = selectedText?.trim() ? selectedText : currentTab.content;
         if (functionCode.trim()) {
-          setTestGenPanelSource({ filePath: currentTab.path, functionCode });
+          openTestGenPanel({ filePath: currentTab.path, functionCode });
         }
       },
     },
@@ -2863,11 +2893,11 @@ export default function App() {
         </div>
         <div className="titlebar-right">
           {/* Tool buttons moved here — the ones not in activity bar */}
-          <button className={`toolbar-btn ${showCodeReview ? "active" : ""}`} onClick={() => { if (currentTab) setShowCodeReview(prev => !prev); }} title="Code Review" disabled={!currentTab}><ShieldCheck size={15} /></button>
-          <button className={`toolbar-btn ${showLivePreview ? "active" : ""}`} onClick={() => { if (currentTab) setShowLivePreview(prev => !prev); }} title="Live Preview" disabled={!currentTab}><Monitor size={15} /></button>
-          <button className={`toolbar-btn ${showTestGenerator ? "active" : ""}`} onClick={() => { if (currentTab) setShowTestGenerator(prev => !prev); }} title="Generate Tests" disabled={!currentTab}><FlaskConical size={15} /></button>
-          <button className={`toolbar-btn ${showRefactorPanel ? "active" : ""}`} onClick={() => { if (currentTab) setShowRefactorPanel(prev => !prev); }} title="Refactor (Ctrl+Shift+R)" disabled={!currentTab}><Wrench size={15} /></button>
-          <button className={`toolbar-btn ${showNotes ? "active" : ""}`} onClick={() => setShowNotes(prev => !prev)} title="Project Notes" disabled={!projectPath}><StickyNote size={15} /></button>
+          <button className={`toolbar-btn ${showCodeReview ? "active" : ""}`} onClick={() => { if (currentTab) toggleWorkspaceTool("codeReview", showCodeReview); }} title="Code Review" disabled={!currentTab}><ShieldCheck size={15} /></button>
+          <button className={`toolbar-btn ${showLivePreview ? "active" : ""}`} onClick={() => { if (currentTab) toggleWorkspaceTool("livePreview", showLivePreview); }} title="Live Preview" disabled={!currentTab}><Monitor size={15} /></button>
+          <button className={`toolbar-btn ${showTestGenerator ? "active" : ""}`} onClick={() => { if (currentTab) toggleWorkspaceTool("testGenerator", showTestGenerator); }} title="Generate Tests" disabled={!currentTab}><FlaskConical size={15} /></button>
+          <button className={`toolbar-btn ${showRefactorPanel ? "active" : ""}`} onClick={() => { if (currentTab) showRefactorPanel ? openWorkspaceTool(null) : openRefactorPanel(); }} title="Refactor (Ctrl+Shift+R)" disabled={!currentTab}><Wrench size={15} /></button>
+          <button className={`toolbar-btn ${showNotes ? "active" : ""}`} onClick={() => toggleWorkspaceTool("notes", showNotes)} title="Project Notes" disabled={!projectPath}><StickyNote size={15} /></button>
           <span className="titlebar-sep" />
           <button className={`toolbar-btn ${showTerminal ? "active" : ""}`} onClick={() => { setShowTerminal(prev => !prev); setBottomPanelActive("terminal"); }} title="Terminal (Ctrl+`)"><TerminalSquare size={15} /></button>
           <button className={`toolbar-btn ${showProblems ? "active" : ""}`} onClick={() => { setShowProblems(prev => !prev); setBottomPanelActive("problems"); }} title="Problems">
@@ -3183,10 +3213,11 @@ export default function App() {
               currentDebugSource={currentSource}
               blameEnabled={blameEnabled}
               onEditorReady={inlineDiff.setEditorInstance}
-              onOpenRefactorPanel={() => setShowRefactorPanel(true)}
+              onOpenRefactorPanel={openRefactorPanel}
+              onSelectionRangeChange={setRefactorSelection}
               onOpenTestGenPanel={(functionCode) => {
                 if (currentTab && functionCode.trim()) {
-                  setTestGenPanelSource({ filePath: currentTab.path, functionCode });
+                  openTestGenPanel({ filePath: currentTab.path, functionCode });
                 }
               }}
             />
@@ -3473,9 +3504,46 @@ export default function App() {
 
       {/* Refactor Panel */}
       {showRefactorPanel && currentTab && (
-        <div className="test-gen-overlay">
+        <div className="refactor-overlay" style={{ width: refactorPanelWidth }}>
+          <div
+            className="refactor-resize-handle"
+            onMouseDown={(event) => {
+              event.preventDefault();
+              const onMove = (moveEvent: MouseEvent) => {
+                const maxWidth = Math.min(860, window.innerWidth - 280);
+                setRefactorPanelWidth(Math.max(380, Math.min(maxWidth, window.innerWidth - moveEvent.clientX)));
+              };
+              const onUp = () => {
+                document.removeEventListener("mousemove", onMove);
+                document.removeEventListener("mouseup", onUp);
+              };
+              document.addEventListener("mousemove", onMove);
+              document.addEventListener("mouseup", onUp);
+            }}
+            role="separator"
+            aria-label="Resize refactor panel"
+            aria-orientation="vertical"
+          />
           <Suspense fallback={null}>
             <RefactorPanel
+              activeFile={currentTab ? { path: currentTab.path, name: currentTab.name } : null}
+              cursorPosition={editorCursorPosition}
+              selection={refactorSelection}
+              initialMode={refactorMode}
+              onApplied={async (changeSet) => {
+                setTabs((previousTabs) => previousTabs.map((tab) => {
+                  const edit = changeSet.edits.find((candidate) => candidate.filePath === tab.path);
+                  if (edit && !edit.delete) return { ...tab, content: edit.newContent, modified: false };
+                  if (edit?.delete) {
+                    const destination = changeSet.edits.find((candidate) => !candidate.delete && candidate.newContent === changeSet.originalContent[tab.path]);
+                    if (destination) {
+                      return { ...tab, path: destination.filePath, name: destination.filePath.split(/[\\/]/).pop() || tab.name, content: destination.newContent, modified: false };
+                    }
+                  }
+                  return tab;
+                }));
+                await refreshFiles();
+              }}
               onClose={() => setShowRefactorPanel(false)}
             />
           </Suspense>

@@ -893,6 +893,60 @@
   animation: cr-slide-in 0.16s ease;
 }
 
+/* Refactor is a focused review workflow, not a generic utility drawer. */
+.refactor-overlay {
+  position: fixed;
+  top: 40px;
+  right: 0;
+  bottom: 22px;
+  z-index: 300;
+  min-width: 380px;
+  max-width: calc(100vw - 280px);
+  background: #1e1e2e;
+  border-left: 1px solid var(--border);
+  box-shadow: -6px 0 28px rgba(0, 0, 0, 0.32);
+  display: flex;
+  flex-direction: column;
+  animation: cr-slide-in 0.16s ease;
+}
+
+.refactor-panel {
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+}
+
+.refactor-resize-handle {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: -5px;
+  width: 9px;
+  cursor: ew-resize;
+  z-index: 2;
+}
+
+.refactor-resize-handle::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 3px;
+  width: 2px;
+  background: transparent;
+  transition: background 0.15s ease;
+}
+
+.refactor-resize-handle:hover::after,
+.refactor-resize-handle:active::after {
+  background: var(--accent);
+}
+
+@media (max-width: 700px) {
+  .refactor-overlay { left: 0; width: auto !important; max-width: none; min-width: 0; }
+  .refactor-resize-handle { display: none; }
+}
+
 .test-gen-panel {
   display: flex;
   flex-direction: column;
