@@ -1,6 +1,7 @@
 /**
  * AI Provider abstraction for PunamIDE.
- * Supports Gemini (native) and OpenAI-compatible (OpenAI, OpenRouter, Ollama).
+ * Supports Gemini (native), Anthropic (native), and OpenAI-compatible
+ * (OpenAI, OpenRouter, DeepSeek, Groq, Mistral, Ollama, Z.AI/GLM).
  */
 
 // --- Types ---
@@ -74,6 +75,13 @@ const MODEL_PRICING: Array<{ match: RegExp; pricing: ModelPricing }> = [
   { match: /deepseek-v4-pro/i, pricing: { inputPerMillionUsd: 2.19, outputPerMillionUsd: 8.87 } },
   { match: /deepseek-v3/i, pricing: { inputPerMillionUsd: 0.27, outputPerMillionUsd: 1.10 } },
   { match: /deepseek-r1/i, pricing: { inputPerMillionUsd: 0.55, outputPerMillionUsd: 2.19 } },
+  // Z.AI / GLM models
+  { match: /glm-4\.5-air/i,  pricing: { inputPerMillionUsd: 0.14, outputPerMillionUsd: 0.28 } },
+  { match: /glm-4\.5/i,      pricing: { inputPerMillionUsd: 1.00, outputPerMillionUsd: 3.00 } },
+  { match: /glm-4\.7/i,      pricing: { inputPerMillionUsd: 0.50, outputPerMillionUsd: 1.50 } },
+  { match: /glm-4\.6/i,      pricing: { inputPerMillionUsd: 0.30, outputPerMillionUsd: 1.00 } },
+  { match: /glm-5\.2/i,      pricing: { inputPerMillionUsd: 2.00, outputPerMillionUsd: 8.00 } },
+  { match: /glm-5/i,         pricing: { inputPerMillionUsd: 2.50, outputPerMillionUsd: 10.00 } },
 ];
 
 function getPricing(model: string): ModelPricing | null {
@@ -519,5 +527,13 @@ export const PROVIDER_PRESETS: Array<{ type: AIProviderConfig["type"]; name: str
     defaultModel: "qwen2.5:7b",
     keyLabel: "No key needed",
     getKeyUrl: "",
+  },
+  {
+    type: "openai-compatible",
+    name: "Z.AI (GLM)",
+    baseUrl: "https://api.z.ai/api/paas/v4",
+    defaultModel: "glm-4.5-air",
+    keyLabel: "Z.AI API Key",
+    getKeyUrl: "https://www.z.ai/",
   },
 ];

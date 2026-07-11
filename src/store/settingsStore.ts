@@ -9,7 +9,7 @@ import { DEFAULT_CONTEXT_INJECTOR_CONFIG } from "../services/intelligence/Contex
 import type { CompressionConfig } from "../services/intelligence/ContextCompressor";
 import { DEFAULT_COMPRESSION_CONFIG } from "../services/intelligence/ContextCompressor";
 
-export type AIProvider = "openai" | "anthropic" | "gemini" | "openrouter" | "ollama" | "groq" | "mistral";
+export type AIProvider = "openai" | "anthropic" | "gemini" | "openrouter" | "ollama" | "groq" | "mistral" | "zai";
 
 export interface ReasoningDisplayConfig {
   /** Whether to show the reasoning panel (default: true) */
