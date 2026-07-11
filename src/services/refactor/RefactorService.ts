@@ -17,9 +17,8 @@
 import { invoke } from "@tauri-apps/api/core";
 import type { DiffHunk } from "../agent/differ";
 import { diffStrings } from "../agent/differ";
-import { lspManager } from "../lsp/lspManager";
-import { filePathToUri, uriToFilePath } from "../lsp/monacoLspBridge";
-import { readFile, writeFile, getProjectIndex } from "../../utils/tauri";
+import { uriToFilePath } from "../lsp/monacoLspBridge";
+import { readFile, writeFile, deletePath, pathExists, getProjectIndex } from "../../utils/tauri";
 import { useFileStore } from "../../store/fileStore";
 
 // ---------------------------------------------------------------------------
@@ -36,6 +35,8 @@ export interface FileEdit {
   newContent: string;
   /** Number of discrete changes (hunks) within this file. */
   changeCount: number;
+  /** Removes the file after the preview is confirmed (used by Move File). */
+  delete?: boolean;
 }
 
 /** The complete set of edits produced by one refactoring operation. */
@@ -345,14 +346,9 @@ export class RefactorService {
    */
   async computeRename(params: RenameParams): Promise<RefactorChangeSet> {
     const { filePath, line, character, newName } = params;
-    const fileUri = filePathToUri(filePath);
-    const languageId = lspManager.getLanguageForFile(filePath) || "typescript";
-
     // Send the textDocument/rename LSP request via Tauri
     const workspaceEdit = await invoke<WorkspaceEdit | null>("lsp_rename", {
       filePath,
-      fileUri,
-      languageId,
       line,
       character: character,
       newName,
@@ -475,6 +471,13 @@ export class RefactorService {
       filePath: destinationPath,
       newContent: sourceContent,
       changeCount: 1,
+    });
+    // A move must remove its source — otherwise it is merely a copy.
+    edits.push({
+      filePath: sourcePath,
+      newContent: "",
+      changeCount: 1,
+      delete: true,
     });
 
     // Get all workspace files to scan for import references
@@ -629,10 +632,16 @@ export class RefactorService {
           }
         }
 
-        // Write the file
-        await writeFile(edit.filePath, edit.newContent);
+        if (edit.delete) {
+          await deletePath(edit.filePath);
+          if (await pathExists(edit.filePath)) {
+            throw new Error(`Could not remove ${edit.filePath}`);
+          }
+          continue;
+        }
 
-        // Verify the write by reading back
+        // Write the file and verify it was persisted.
+        await writeFile(edit.filePath, edit.newContent);
         const written = await readFile(edit.filePath);
         if (written !== edit.newContent) {
           conflicts.push({

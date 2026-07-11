@@ -985,6 +985,30 @@ pub async fn lsp_references(
     Ok(results)
 }
 
+/// Rename the symbol at a position and return the language server's WorkspaceEdit.
+/// The frontend applies the edit only after showing the user a diff preview.
+#[tauri::command]
+pub async fn lsp_rename(
+    file_path: String,
+    line: u32,
+    character: u32,
+    new_name: String,
+    state: State<'_, LspState>,
+) -> Result<serde_json::Value, String> {
+    let language_id = detect_language_id(&file_path)
+        .ok_or_else(|| format!("Cannot detect language for file: {}", file_path))?;
+    let params = serde_json::json!({
+        "textDocument": { "uri": path_to_uri(&file_path) },
+        "position": { "line": line, "character": character },
+        "newName": new_name,
+    });
+    let result_str = send_lsp_request_await(
+        &state, &language_id, "textDocument/rename", params, 10
+    ).await?;
+    serde_json::from_str(&result_str)
+        .map_err(|e| format!("Failed to parse LSP rename response: {}", e))
+}
+
 /// Search workspace symbols by name (case-insensitive substring match).
 /// Uses LSP workspace/symbol request.
 /// max_results valid range: 1–200, default 50.

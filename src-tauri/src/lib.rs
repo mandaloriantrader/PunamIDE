@@ -2666,6 +2666,7 @@ pub fn run() {
             lsp_manager::lsp_shutdown,
             lsp_manager::lsp_did_close,
             lsp_manager::lsp_references,
+            lsp_manager::lsp_rename,
             lsp_manager::lsp_workspace_symbol,
             // GitHub Phase 0: Git Core Check
             github::github_check_repo,

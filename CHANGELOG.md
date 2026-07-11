@@ -4,6 +4,17 @@ All notable changes to PunamIDE are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).  
 Versioning follows [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Fixed
+- **Refactor workflow** — connected the panel to the live editor cursor and exact selection, added the missing Rust LSP rename command, and made Move File remove its source after updating imports.
+- **Refactor safety** — refreshes open editor content and the file tree after confirmed changes; updated move tests to cover source removal.
+- **Tool panel behavior** — opening a top-bar workspace tool now replaces the previous tool instead of leaving overlapping panels mounted.
+
+### Changed
+- **Refactor panel** — expanded form controls and operation labels, added contextual guidance and an internal scroll area, and made the right-side panel resizable from its left border.
+- **Development launcher** — `autorun.bat` validates the Rust backend with `cargo check` before starting Tauri development mode.
+
 ---
 
 ## [2.1.2] — 2026-07-10
