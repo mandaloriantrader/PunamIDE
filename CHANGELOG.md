@@ -6,6 +6,16 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [2.1.3] — 2026-07-17
+
+### Changed
+- **Version bump to 2.1.3** — same code as v2.1.2 with refreshed Windows installer packages.
+- **Dual installer release** — both NSIS (EXE) and MSI packages available for download.
+- **SHA-256 checksums** published for both installers on the download page.
+- **Windows installer filenames** standardized with version tag on GitHub releases.
+
+## [2.1.2] — 2026-06-28
+
 ### Fixed
 - **File Explorer render optimization (H-2)** — the `FileExplorer` component re-rendered on every App state change (cursor moves, toasts, breakpoint toggles) even when its props hadn't changed. Wrapped in `React.memo` and added stable callback wrappers (ref-delegation pattern) for `onFileSelect`, `onPathDeleted`, `onPathRenamed`, and `onBeforePathAction` so `memo`'s shallow comparison can skip renders. Also moved `appEventStateRef` assignment from render body to `useEffect` to avoid stale ref values in concurrent mode.
 - **Batch IPC for file index updates (H-3)** — the file watcher handler was calling `updateFileIndex` in a per-file loop, causing N serialized IPC roundtrips + N `RwLock` acquisitions for each `fs-changed` event (e.g., 100 files = 200 serialize/deserialize passes). Added Rust `update_file_index_batch(Vec<String>)` command that locks the `ProjectIndexCache` once and processes all paths. Frontend now calls a single `updateFileIndexBatch` per event.
