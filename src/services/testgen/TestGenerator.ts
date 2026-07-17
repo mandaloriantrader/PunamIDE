@@ -596,7 +596,7 @@ export class TestGenerator {
     // If refinement succeeded, re-run to confirm
     let finalPassed = refinementResult.success;
     let finalOutput = output;
-    let refinementPasses = refinementResult.passesUsed;
+    const refinementPasses = refinementResult.passesUsed;
 
     if (refinementResult.success && refinementResult.passesUsed > 0) {
       // Re-run the test to confirm the fix

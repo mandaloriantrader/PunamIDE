@@ -759,6 +759,9 @@ export const refreshProjectIndex = () =>
 export const updateFileIndex = (path: string) =>
   invoke<void>("update_file_index", { path });
 
+export const updateFileIndexBatch = (paths: string[]) =>
+  invoke<void>("update_file_index_batch", { paths });
+
 // ─── Rust Git Engine (libgit2) ────────────────────────────────────────────────
 
 export interface GitStatusEntry {

@@ -14,7 +14,7 @@ import {
   AlertCircle,
   GitFork,
 } from "lucide-react";
-import { callLlm, readFile, searchProject } from "../utils/tauri";
+import { callLlm, readFile, searchProject, getProjectIndex } from "../utils/tauri";
 import type { AppConfig, FileEntry } from "../utils/tauri";
 import { checkTcpPort, runTerminalCommand } from "../utils/tauri";
 import type { MCPServerConfig } from "../utils/mcp";
@@ -809,18 +809,32 @@ export default function AiChat({
 
   // getIdentityResponse imported from ./chat/context/identityResponses
 
-    const collectExistingFiles = () => {
-    const existingFiles = new Set<string>();
-    const collectPaths = (entries: FileEntry[], prefix = "") => {
-      for (const e of entries) {
-        const p = prefix ? `${prefix}/${e.name}` : e.name;
-        if (e.is_dir && e.children) collectPaths(e.children, p);
-        else existingFiles.add(p);
+  // ── Project file list — loaded once from Rust project index ───────────────
+  const allProjectFilesRef = useRef<Set<string>>(new Set());
+
+  // Load all project file paths from the Rust index on mount / project change
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const entries = await getProjectIndex();
+        if (cancelled) return;
+        const prefix = projectPath.replace(/\\/g, "/").replace(/\/+$/, "") + "/";
+        const paths = new Set<string>();
+        for (const e of entries) {
+          const absPath = e.path.replace(/\\/g, "/");
+          paths.add(absPath.startsWith(prefix) ? absPath.slice(prefix.length) : absPath);
+        }
+        allProjectFilesRef.current = paths;
+      } catch {
+        // Index not available — keep empty set
       }
-    };
-    collectPaths(files);
-    return existingFiles;
-  };
+    })();
+    return () => { cancelled = true; };
+  }, [projectPath]);
+
+  /** Synchronous getter for all existing project file paths (used at 13 call sites) */
+  const collectExistingFiles = () => allProjectFilesRef.current;
 
   /**
    * Resolve edit operations with optional preview in chat mode.

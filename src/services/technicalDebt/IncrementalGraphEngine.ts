@@ -29,7 +29,7 @@
  * receive the same DependencyGraph type — zero changes needed there.
  */
 
-import { DependencyGraphEngine, getDependencyGraphEngine } from './DependencyGraphEngine'
+import { type DependencyGraphEngine, getDependencyGraphEngine } from './DependencyGraphEngine'
 import type { DependencyGraph, GraphNode } from './DependencyGraphEngine'
 import type { FileImportExportMap } from './ImportExtractor'
 

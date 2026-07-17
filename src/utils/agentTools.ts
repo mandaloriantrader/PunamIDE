@@ -313,7 +313,7 @@ export function buildInternalToolInventoryPrompt(): string {
 export interface ToolCall {
   id: string;
   name: AgentToolName;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+   
   input: Record<string, any>;
 }
 
@@ -470,7 +470,7 @@ Rules:
 
 export interface ParsedJsonToolCall {
   tool: AgentToolName;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+   
   input: Record<string, any>;
 }
 

@@ -1447,7 +1447,7 @@ fn watch_project(
 
     let app_clone = app.clone();
     let mut debouncer = new_debouncer(
-        Duration::from_millis(500),
+        Duration::from_millis(150),
         move |result: Result<Vec<notify_debouncer_mini::DebouncedEvent>, notify::Error>| {
             if let Ok(events) = result {
                 let mut paths: Vec<String> = Vec::new();
@@ -2601,6 +2601,7 @@ pub fn run() {
             index_commands::get_project_index,
             index_commands::refresh_project_index,
             index_commands::update_file_index,
+            index_commands::update_file_index_batch,
             git_commands::git_status,
             git_commands::git_diff_file,
             git_commands::git_log,

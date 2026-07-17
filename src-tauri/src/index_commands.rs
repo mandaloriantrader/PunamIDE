@@ -43,11 +43,82 @@ pub fn get_project_index(state: State<ProjectRoot>, cache: State<ProjectIndexCac
 pub fn refresh_project_index(state: State<ProjectRoot>, cache: State<ProjectIndexCache>) -> Result<Vec<FileIndexEntry>, String> {
     let root = get_project_root(&state)?;
     let root_path = Path::new(&root);
+
+    // Snapshot the existing cache so we can reuse entries for unchanged files.
+    let old_cache = cache.0.read().map_err(|_| "Lock error".to_string())?;
+    let old_map: HashMap<String, FileIndexEntry> = if old_cache.is_empty() {
+        HashMap::new()
+    } else {
+        old_cache.iter().map(|e| (e.path.clone(), e.clone())).collect()
+    };
+    drop(old_cache);
+
     let mut entries = Vec::new();
-    index_directory(root_path, root_path, &mut entries, 0);
+    index_directory_incremental(root_path, root_path, &mut entries, 0, &old_map);
+
     let mut cached = cache.0.write().map_err(|_| "Lock error".to_string())?;
     *cached = entries.clone();
     Ok(entries)
+}
+
+/// Like index_directory, but skips re-reading files whose modified timestamp
+/// hasn't changed since the last scan. Reuses the cached entry directly.
+fn index_directory_incremental(
+    dir: &Path,
+    root: &Path,
+    entries: &mut Vec<FileIndexEntry>,
+    depth: usize,
+    old_map: &HashMap<String, FileIndexEntry>,
+) {
+    if depth > 8 || entries.len() > 5000 { return; }
+
+    let items = match fs::read_dir(dir) {
+        Ok(items) => items,
+        Err(_) => return,
+    };
+
+    for item in items.filter_map(|e| e.ok()) {
+        let name = item.file_name().to_string_lossy().to_string();
+        let path = item.path();
+        let is_dir = item.file_type().map(|t| t.is_dir()).unwrap_or(false);
+
+        if name.starts_with('.') { continue; }
+        if is_dir && SKIP_DIRS.contains(&name.as_str()) { continue; }
+        if !is_dir && SKIP_FILES.contains(&name.as_str()) { continue; }
+
+        if is_dir {
+            index_directory_incremental(&path, root, entries, depth + 1, old_map);
+        } else {
+            let relative = path.strip_prefix(root)
+                .unwrap_or(&path)
+                .to_string_lossy()
+                .replace('\\', "/");
+
+            // Check if we can reuse the cached entry
+            if let Some(old_entry) = old_map.get(&relative) {
+                if let Ok(metadata) = fs::metadata(&path) {
+                    let current_modified = metadata.modified().ok()
+                        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                        .map(|d| d.as_secs())
+                        .unwrap_or(0);
+
+                    let size_ok = old_entry.size == metadata.len();
+                    let modified_ok = old_entry.modified == current_modified;
+
+                    if size_ok && modified_ok {
+                        // File hasn't changed — reuse cached entry (no file read needed)
+                        entries.push(old_entry.clone());
+                        continue;
+                    }
+                }
+            }
+
+            // File is new or modified — build fresh entry
+            if let Some(entry) = build_index_entry(&path, root) {
+                entries.push(entry);
+            }
+        }
+    }
 }
 
 #[tauri::command]
@@ -71,6 +142,51 @@ pub fn update_file_index(path: String, state: State<ProjectRoot>, cache: State<P
     if file_path.is_file() {
         if let Some(entry) = build_index_entry(file_path, root_path) {
             cached.push(entry);
+        }
+    }
+
+    Ok(())
+}
+
+/// Batch variant of update_file_index — accepts multiple paths and locks the
+/// cache only once.  Avoids the N+1 IPC overhead when the file watcher fires
+/// a batch of changed files (e.g. during git checkout).
+#[tauri::command]
+pub fn update_file_index_batch(
+    paths: Vec<String>,
+    state: State<ProjectRoot>,
+    cache: State<ProjectIndexCache>,
+) -> Result<(), String> {
+    if paths.is_empty() {
+        return Ok(());
+    }
+
+    let root = get_project_root(&state)?;
+    let root_path = Path::new(&root);
+
+    let mut cached = cache.0.write().map_err(|_| "Lock error".to_string())?;
+
+    for path in &paths {
+        let safe_path = match validate_path_within_project(path, &root) {
+            Ok(p) => p,
+            Err(_) => continue,
+        };
+        let file_path = Path::new(&safe_path);
+
+        let relative = file_path
+            .strip_prefix(root_path)
+            .unwrap_or(file_path)
+            .to_string_lossy()
+            .replace('\\', "/");
+
+        // Remove old entry for this path
+        cached.retain(|e| e.path != relative);
+
+        // Add updated entry if file still exists
+        if file_path.is_file() {
+            if let Some(entry) = build_index_entry(file_path, root_path) {
+                cached.push(entry);
+            }
         }
     }
 

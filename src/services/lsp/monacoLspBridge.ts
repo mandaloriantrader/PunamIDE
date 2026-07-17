@@ -4,7 +4,7 @@
  */
 
 import type { IDisposable } from "monaco-editor";
-import { LspClient } from "./lspClient";
+import { type LspClient } from "./lspClient";
 
 // Map LSP completion kinds to Monaco completion kinds
 const LSP_TO_MONACO_KIND: Record<number, number> = {

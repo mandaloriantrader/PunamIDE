@@ -109,10 +109,10 @@ function summarizeChatMessages(messages: ChatMessage[]): string {
   const parts: string[] = [];
   parts.push("=== CONVERSATION HISTORY (compacted) ===");
 
-  let fileChanges: string[] = [];
-  let commandsRun: string[] = [];
-  let userRequests: string[] = [];
-  let decisions: string[] = [];
+  const fileChanges: string[] = [];
+  const commandsRun: string[] = [];
+  const userRequests: string[] = [];
+  const decisions: string[] = [];
 
   for (const msg of messages) {
     if (msg.role === "user") {

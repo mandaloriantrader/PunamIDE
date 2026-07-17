@@ -112,7 +112,7 @@ import {
   loadCustomThemes,
   loadRecentProjects,
   addRecentProject,
-  updateFileIndex,
+  updateFileIndexBatch,
   dapStart,
   dapStartTcp,
   dapSendRequest,
@@ -927,16 +927,20 @@ export default function App() {
     breakpoints,
     projectPath,
   });
-  appEventStateRef.current = {
-    refreshFiles,
-    getProjectFilePath,
-    showToast,
-    fetchStackFrames,
-    fetchScopes,
-    fetchVariables,
-    breakpoints,
-    projectPath,
-  };
+  // Sync latest callback references after commit so event listeners always
+  // read up-to-date values without causing re-renders via the ref itself.
+  useEffect(() => {
+    appEventStateRef.current = {
+      refreshFiles,
+      getProjectFilePath,
+      showToast,
+      fetchStackFrames,
+      fetchScopes,
+      fetchVariables,
+      breakpoints,
+      projectPath,
+    };
+  });
 
   useEffect(() => {
     if (!projectPath) return;
@@ -981,12 +985,12 @@ export default function App() {
       fsRefreshTimer = setTimeout(() => {
         fsRefreshTimer = null;
         refreshFiles();
-      }, 500);
+      }, 150);
 
-      // Update Rust project index cache for changed files
+      // Update Rust project index cache for changed files (single batch IPC)
       const changedPaths = event.payload.paths;
-      for (const p of changedPaths) {
-        updateFileIndex(p).catch(() => {});
+      if (changedPaths.length > 0) {
+        updateFileIndexBatch(changedPaths).catch(() => {});
       }
 
       // Reload open tabs whose files changed externally
@@ -1471,6 +1475,26 @@ export default function App() {
 
   // Keep ref in sync for callbacks defined before handleFileSelect
   handleFileSelectRef.current = handleFileSelect;
+
+  // ── Stable callback identities for React.memo'd children ──────────────────
+  // These refs allow FileExplorer (wrapped in React.memo) to skip re-renders
+  // when callbacks change, since the wrapper identity stays stable and always
+  // delegates to the latest real implementation.
+  const handleFileSelectStableRef = useRef<(path: string) => Promise<void>>(async () => {});
+  useEffect(() => { handleFileSelectStableRef.current = handleFileSelect; });
+  const stableHandleFileSelect = useCallback((path: string) => handleFileSelectStableRef.current(path), []);
+
+  const handlePathDeletedStableRef = useRef<(_path: string) => void>(() => {});
+  useEffect(() => { handlePathDeletedStableRef.current = handlePathDeleted; });
+  const stableHandlePathDeleted = useCallback((path: string) => handlePathDeletedStableRef.current(path), []);
+
+  const handlePathRenamedStableRef = useRef((_old: string, _new: string) => {});
+  useEffect(() => { handlePathRenamedStableRef.current = handlePathRenamed; });
+  const stableHandlePathRenamed = useCallback((oldPath: string, newPath: string) => handlePathRenamedStableRef.current(oldPath, newPath), []);
+
+  const confirmPathOperationStableRef = useRef((_path: string, _action: string) => Promise.resolve(true));
+  useEffect(() => { confirmPathOperationStableRef.current = confirmPathOperation; });
+  const stableConfirmPathOperation = useCallback((path: string, action: string) => confirmPathOperationStableRef.current(path, action), []);
 
   const handleGitFileOpen = async (relativePath: string) => {
     await handleFileSelect(getProjectFilePath(relativePath));
@@ -1991,7 +2015,7 @@ export default function App() {
         const targetLine = selection ? selection.startLine : cursorPos.line;
         if (targetLine > 1) {
           // Look for a doc comment block ending just above the target line
-          let docEnd = targetLine - 1;
+          const docEnd = targetLine - 1;
           const lineAbove = lines[docEnd - 1]?.trim() || "";
           if (lineAbove === "*/" || lineAbove.startsWith("///") || lineAbove === '"""') {
             let docStart = docEnd;
@@ -3061,11 +3085,11 @@ export default function App() {
                 files={files}
                 projectPath={projectPath}
                 loading={filesLoading}
-                onFileSelect={handleFileSelect}
+                onFileSelect={stableHandleFileSelect}
                 onRefresh={refreshFiles}
-                onPathDeleted={handlePathDeleted}
-                onPathRenamed={handlePathRenamed}
-                onBeforePathAction={confirmPathOperation}
+                onPathDeleted={stableHandlePathDeleted}
+                onPathRenamed={stableHandlePathRenamed}
+                onBeforePathAction={stableConfirmPathOperation}
                 selectedFile={currentTab?.path}
               />
             )}
@@ -3582,7 +3606,7 @@ export default function App() {
       {/* Fuzzy File Picker (Ctrl+P) */}
       {showFuzzyPicker && (
         <FuzzyFilePicker
-          files={files}
+          projectPath={projectPath}
           recentPaths={recentPaths}
           onSelect={(relativePath) => {
             setShowFuzzyPicker(false);

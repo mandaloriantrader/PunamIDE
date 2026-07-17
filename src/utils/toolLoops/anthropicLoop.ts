@@ -28,13 +28,13 @@ import { buildPatchProposalFromToolArgs, isPatchTool, buildRejectionContext, bui
 
 interface AnthropicMessage {
   role: "user" | "assistant";
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+   
   content: any;
 }
 
 interface AnthropicResponse {
   stop_reason: "end_turn" | "tool_use" | "max_tokens" | string;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+   
   content: any[];
 }
 

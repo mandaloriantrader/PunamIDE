@@ -2,10 +2,54 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::fs;
 use std::path::Path;
+use std::sync::OnceLock;
 use tauri::State;
 use walkdir::WalkDir;
 
 use crate::{get_project_root, ProjectRoot, SKIP_DIRS, SKIP_FILES};
+
+// ── Static regex cache — compiled once, reused across all calls ────────────────
+use regex_lite::Regex;
+
+fn es6_side_effect_regex() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| Regex::new(r#"import\s+['"]([^'"]+)['"]"#).unwrap())
+}
+
+fn es6_from_regex() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| Regex::new(r#"import\s+(?:type\s+)?(?:\{[^}]*\}|[^*\s{][^{]*?)\s+from\s+['"]([^'"]+)['"]"#).unwrap())
+}
+
+fn commonjs_regex() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| Regex::new(r#"require\s*\(\s*['"]([^'"]+)['"]\s*\)"#).unwrap())
+}
+
+fn dynamic_import_regex() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| Regex::new(r#"import\s*\(\s*['"`]([^'"`]+)['"`]\s*\)"#).unwrap())
+}
+
+fn python_from_regex() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| Regex::new(r#"from\s+([\.\w]+)\s+import\s"#).unwrap())
+}
+
+fn python_import_regex() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| Regex::new(r#"^import\s+([\.\w]+(?:\s*,\s*[\.\w]+)*)"#).unwrap())
+}
+
+fn rust_use_regex() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| Regex::new(r#"use\s+((?:crate|self|super|[\w]+)(?:::[^{]*?)?)"#).unwrap())
+}
+
+fn rust_extern_regex() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| Regex::new(r#"extern\s+crate\s+(\w+)"#).unwrap())
+}
 
 // ── Data Types ─────────────────────────────────────────────────────────────────
 
@@ -44,10 +88,7 @@ fn parse_es6_imports(content: &str, file_path: &str) -> Vec<DependencyEdge> {
     let mut edges = Vec::new();
 
     // Regex 1: side-effect imports — import 'module' (no "from" keyword)
-    let re_side_effect = regex_lite::Regex::new(
-        r#"import\s+['"]([^'"]+)['"]"#
-    )
-    .unwrap();
+    let re_side_effect = es6_side_effect_regex();
 
     for cap in re_side_effect.captures_iter(content) {
         let import_path = cap.get(1).unwrap().as_str().to_string();
@@ -61,10 +102,7 @@ fn parse_es6_imports(content: &str, file_path: &str) -> Vec<DependencyEdge> {
     }
 
     // Regex 2: all "from" imports — import X from 'module', import {X} from 'module', import type {X} from 'module'
-    let re_from = regex_lite::Regex::new(
-        r#"import\s+(?:type\s+)?(?:\{[^}]*\}|[^*\s{][^{]*?)\s+from\s+['"]([^'"]+)['"]"#
-    )
-    .unwrap();
+    let re_from = es6_from_regex();
     for cap in re_from.captures_iter(content) {
         let import_path = cap.get(1).unwrap().as_str().to_string();
         let is_external = is_external_import(&import_path);
@@ -87,7 +125,7 @@ fn parse_es6_imports(content: &str, file_path: &str) -> Vec<DependencyEdge> {
 /// Handles: const x = require('foo'), require('foo'), etc.
 fn parse_commonjs_requires(content: &str, file_path: &str) -> Vec<DependencyEdge> {
     let mut edges = Vec::new();
-    let re = regex_lite::Regex::new(r#"require\s*\(\s*['"]([^'"]+)['"]\s*\)"#).unwrap();
+    let re = commonjs_regex();
 
     for cap in re.captures_iter(content) {
         let import_path = cap.get(1).unwrap().as_str().to_string();
@@ -108,7 +146,7 @@ fn parse_commonjs_requires(content: &str, file_path: &str) -> Vec<DependencyEdge
 /// Handles: import('./foo'), import(`./foo`), etc.
 fn parse_dynamic_imports(content: &str, file_path: &str) -> Vec<DependencyEdge> {
     let mut edges = Vec::new();
-    let re = regex_lite::Regex::new(r#"import\s*\(\s*['"`]([^'"`]+)['"`]\s*\)"#).unwrap();
+    let re = dynamic_import_regex();
 
     for cap in re.captures_iter(content) {
         let import_path = cap.get(1).unwrap().as_str().to_string();
@@ -135,7 +173,7 @@ fn parse_python_imports(content: &str, file_path: &str) -> Vec<DependencyEdge> {
     let mut edges = Vec::new();
 
     // from X import Y
-    let re_from = regex_lite::Regex::new(r#"from\s+([\.\w]+)\s+import\s"#).unwrap();
+    let re_from = python_from_regex();
     for cap in re_from.captures_iter(content) {
         let module = cap.get(1).unwrap().as_str().to_string();
         let is_external = is_external_python_import(&module);
@@ -148,7 +186,7 @@ fn parse_python_imports(content: &str, file_path: &str) -> Vec<DependencyEdge> {
     }
 
     // import X or import X as Y
-    let re_import = regex_lite::Regex::new(r#"^import\s+([\.\w]+(?:\s*,\s*[\.\w]+)*)"#).unwrap();
+    let re_import = python_import_regex();
     for line in content.lines() {
         let trimmed = line.trim();
         if let Some(cap) = re_import.captures(trimmed) {
@@ -185,7 +223,7 @@ fn parse_rust_imports(content: &str, file_path: &str) -> Vec<DependencyEdge> {
 
     // use statements — extract the module path (first identifier segment before ::)
     // Simplified: capture the first crate/self/super segment
-    let re_use = regex_lite::Regex::new(r#"use\s+((?:crate|self|super|[\w]+)(?:::[^{]*?)?)"#).unwrap();
+    let re_use = rust_use_regex();
     for cap in re_use.captures_iter(content) {
         let use_path = cap.get(1).unwrap().as_str().trim().to_string();
         // Extract top-level module/crate name
@@ -201,7 +239,7 @@ fn parse_rust_imports(content: &str, file_path: &str) -> Vec<DependencyEdge> {
     }
 
     // extern crate
-    let re_extern = regex_lite::Regex::new(r#"extern\s+crate\s+(\w+)"#).unwrap();
+    let re_extern = rust_extern_regex();
     for cap in re_extern.captures_iter(content) {
         let crate_name = cap.get(1).unwrap().as_str().to_string();
         edges.push(DependencyEdge {

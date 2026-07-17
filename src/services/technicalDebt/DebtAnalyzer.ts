@@ -53,15 +53,15 @@ export type ComplexityBand = "good" | "moderate" | "high" | "critical";
 export type NestingBand    = "good" | "warning"  | "refactor";
 
 export function classifyComplexity(cc: number): ComplexityBand {
-  if (cc <= 10) return "good";
-  if (cc <= 20) return "moderate";
-  if (cc <= 30) return "high";
+  if (cc < THRESHOLDS.CC_MODERATE) return "good";
+  if (cc < THRESHOLDS.CC_HIGH)     return "moderate";
+  if (cc < THRESHOLDS.CC_CRITICAL) return "high";
   return "critical";
 }
 
 export function classifyNesting(depth: number): NestingBand {
-  if (depth <= 3) return "good";
-  if (depth <= 5) return "warning";
+  if (depth < THRESHOLDS.NESTING_WARNING)  return "good";
+  if (depth < THRESHOLDS.NESTING_REFACTOR) return "warning";
   return "refactor";
 }
 
@@ -210,11 +210,22 @@ function getStore() {
 }
 
 export async function sha256(content: string): Promise<string> {
-  const data = new TextEncoder().encode(content);
-  const buf  = await crypto.subtle.digest("SHA-256", data);
-  return Array.from(new Uint8Array(buf))
-    .map((b) => b.toString(16).padStart(2, "0"))
-    .join("");
+  try {
+    const data = new TextEncoder().encode(content);
+    const buf  = await crypto.subtle.digest("SHA-256", data);
+    return Array.from(new Uint8Array(buf))
+      .map((b) => b.toString(16).padStart(2, "0"))
+      .join("");
+  } catch {
+    // Non-crypto fallback for environments without crypto.subtle
+    let hash = 0;
+    for (let i = 0; i < content.length; i++) {
+      const chr = content.charCodeAt(i);
+      hash = ((hash << 5) - hash) + chr;
+      hash |= 0; // Convert to 32bit integer
+    }
+    return Math.abs(hash).toString(16).padStart(8, "0");
+  }
 }
 
 async function getCached(filePath: string, hash: string): Promise<FileDebtMetrics | null> {

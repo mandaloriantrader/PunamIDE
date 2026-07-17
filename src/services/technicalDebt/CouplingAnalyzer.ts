@@ -254,15 +254,16 @@ export class CouplingAnalyzer {
  * Martin's instability metric: I = Ce / (Ca + Ce)
  * Ca = fan-in (afferent), Ce = fan-out (efferent)
  * Returns 0 if both are 0 (isolated file).
+ * Rounds to 2 decimal places.
  */
-function computeInstability(fanIn: number, fanOut: number): number {
+export function computeInstability(fanIn: number, fanOut: number): number {
   const total = fanIn + fanOut
   if (total === 0) return 0
   return Math.round((fanOut / total) * 100) / 100
 }
 
 /** Compute the Nth percentile of a sorted array. */
-function percentile(sorted: number[], n: number): number {
+export function percentile(sorted: number[], n: number): number {
   if (sorted.length === 0) return 0
   const idx = Math.floor((n / 100) * (sorted.length - 1))
   return sorted[Math.min(idx, sorted.length - 1)]

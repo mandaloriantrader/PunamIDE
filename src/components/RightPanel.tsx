@@ -10,6 +10,8 @@ import { PanelErrorBoundary } from "./ErrorBoundary";
 import AiChat from "./AiChat";
 import NotepadsPanel from "./NotepadsPanel";
 import type { ParsedResponse } from "../utils/prompts";
+import { createFixLlmProvider } from "../services/refactor/FixWithAiProvider";
+import type { FixLlmProvider } from "../services/refactor/AiFixHandler";
 
 // Lazy-loaded panels (Phase 3-9)
 import { lazy, Suspense } from "react";
@@ -80,6 +82,12 @@ export default function RightPanel(props: RightPanelProps) {
   const moreButtonRef = useRef<HTMLButtonElement>(null);
   const tabWidthsRef = useRef<number[]>([]);
   const rafRef = useRef<number>(0);
+  const [fixProvider, setFixProvider] = useState<FixLlmProvider | null>(null);
+
+  // Load Fix with AI provider on mount
+  useEffect(() => {
+    createFixLlmProvider().then(setFixProvider);
+  }, []);
 
   // Measure how many tabs fit in the available width
   const measureTabs = useCallback(() => {
@@ -315,7 +323,7 @@ export default function RightPanel(props: RightPanelProps) {
         {activeTab === "debt" && (
           <PanelErrorBoundary fallbackLabel="Technical Debt">
             <Suspense fallback={null}>
-              <TechnicalDebtDashboard projectPath={props.projectPath} files={props.files} />
+              <TechnicalDebtDashboard projectPath={props.projectPath} files={props.files} fixWithAiProvider={fixProvider ?? undefined} />
             </Suspense>
           </PanelErrorBoundary>
         )}

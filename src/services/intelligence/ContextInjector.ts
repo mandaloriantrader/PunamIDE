@@ -171,7 +171,7 @@ export class ContextInjector {
     // Calculate available budget for auto-context after user mentions
     const maxAutoTokens = Math.floor(tokenBudget * this.config.maxBudgetPercent / 100);
     const mentionTokens = userMentions.reduce((sum, m) => sum + m.tokenCount, 0);
-    let remainingBudget = Math.max(0, maxAutoTokens - mentionTokens);
+    const remainingBudget = Math.max(0, maxAutoTokens - mentionTokens);
 
     let callers: CallEdge[] = [];
     let callees: CallEdge[] = [];
@@ -494,7 +494,7 @@ export class ContextInjector {
     }
 
     // Clone arrays so we can mutate
-    let { callers, callees, typeDefinitions, embeddingSnippets } = {
+    const { callers, callees, typeDefinitions, embeddingSnippets } = {
       callers: [...context.callers],
       callees: [...context.callees],
       typeDefinitions: [...context.typeDefinitions],

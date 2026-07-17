@@ -2,14 +2,14 @@
 
 <img src="media/logo.png" alt="PunamIDE Logo" width="120" />
 
-# PunamIDE v2.1.2
+# PunamIDE v2.2.0
 
 **A native AI-powered code editor built with Tauri 2, React 19, and Monaco Editor.**  
 Multi-provider AI, agentic tool-calling, technical debt analysis, and a full IDE experience — all running locally on your machine.
 
 <br/>
 
-[![Version](https://img.shields.io/badge/version-2.1.2-blue?style=flat-square)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-2.2.0-blue?style=flat-square)](CHANGELOG.md)
 [![License](https://img.shields.io/badge/license-MIT-green?style=flat-square)](LICENSE)
 [![Tauri](https://img.shields.io/badge/Tauri-2.11-purple?style=flat-square&logo=tauri)](https://tauri.app)
 [![React](https://img.shields.io/badge/React-19-61DAFB?style=flat-square&logo=react)](https://react.dev)
@@ -20,7 +20,7 @@ Multi-provider AI, agentic tool-calling, technical debt analysis, and a full IDE
 
 <br/>
 
-[![Download](https://img.shields.io/badge/Download-v2.1.2-brightgreen?style=flat-square&logo=windows)](https://github.com/punamide/punamide-downloads/releases/tag/v2.1.2)
+[![Download](https://img.shields.io/badge/Download-v2.2.0-brightgreen?style=flat-square&logo=windows)](https://github.com/punamide/punamide-downloads/releases/tag/v2.2.0)
 [![Website](https://img.shields.io/badge/Website-punamide.com-blue?style=flat-square&logo=googlechrome)](https://punamide.com)
 [![Discord](https://img.shields.io/badge/Discord-Join_Community-5865F2?style=flat-square&logo=discord)](https://discord.gg/PFp9KWY3eY)
 [![X](https://img.shields.io/badge/X-@PunamIDE-000000?style=flat-square&logo=x)](https://x.com/PunamIDE)
@@ -360,20 +360,41 @@ Ghost-text inline completion powered by AI with zero external services required.
 
 ![Debt Metrics](media/screenshots/photos-of-features/tech-debt-3.png)
 
-AST-powered analysis that runs entirely in a **Web Worker** — no blocking the UI.
+AST-powered multi-layer analysis with a unified findings engine. Runs in **Web Workers** — no blocking the UI.
 
 | Analyzer | Description |
 |---|---|
 | **AST Engine** | Tree-sitter parsing for JS, TS, Python, Rust |
-| **Debt Scorer** | Quantified debt score per file and project |
+| **Debt Scorer** | Quantified 0–100 debt score per file and project |
 | **Dependency Graph** | Full import/dependency graph builder |
-| **Dead Code Analyzer** | Detects unreachable code |
-| **Circular Dependency Detector** | Finds import cycles |
-| **Coupling Analyzer** | Measures inter-module coupling |
+| **Dead Code Analyzer** | AST-based detection of unused exports, imports, declarations |
+| **Circular Dependency Detector** | Finds import cycles with severity classification |
+| **Coupling Analyzer** | Measures inter-module coupling with hub detection |
 | **Incremental Engine** | Updates graph on file change without full re-scan |
-| **Diff Engine** | Tracks debt changes between commits |
-| **Graph Exporter** | Export as JSON or SVG |
-| **Refactor Planner** | AI-assisted refactor suggestion generation |
+| **Diff Engine** | Tracks debt changes between scans with before/after delta |
+| **Graph Exporter** | Export as DOT, JSON, or Mermaid |
+| **Refactor Planner** | Prioritized queue: quick wins, major refactors, architectural issues |
+
+**New in v2.2.0 — Unified Code Intelligence Engine (`services/review/`)**
+
+| Layer | Phase | Description |
+|---|---|---|
+| **Unified Findings Panel** | P1 | All findings (debt, security, type, architecture, taint, git, multi-lang) merge into a single sortable dashboard panel — no tab switching |
+| **Type-Aware Semantic Analysis** | P4 | Real TypeScript Compiler API (`ts-morph`) detects type errors, null access, and logic issues Tree-sitter cannot catch |
+| **Taint Tracking** | P5 | Cross-file data flow analysis — traces untrusted input from source patterns through the dependency graph to dangerous sinks |
+| **Git Signals** | P2 | Per-file churn analysis: commit frequency, author count, lines added/deleted, hot file detection |
+| **Multi-Language Support** | P7 | 9 languages (TS, JS, TSX, JSX, Python, Go, Rust, Java, C#) with per-language calibrated complexity thresholds |
+| **Accuracy Benchmarking** | P8 | Recall, false-positive rate, and F1 score per analysis layer against curated datasets |
+
+**New in v2.2.0 — Fix with AI**
+
+| Feature | Description |
+|---|---|
+| **One-Click AI Refactoring** | Click "Fix with AI" on any refactor queue item — AI generates a surgical fix with 4 automated guard layers before apply |
+| **Scope Isolation** | AI sees ONLY the problem code block (function/class/nesting block), never the full file or codebase |
+| **Diff Preview** | Side-by-side before/after comparison with security scan results and estimated score delta |
+| **Snapshot/Rollback** | Every AI fix snapshots the original file before writing — one-click undo |
+| **Provider Agnostic** | Works with any LLM API (OpenAI, Anthropic, Ollama, Azure, AWS, Mistral, Google) via a single `FixLlmProvider` interface |
 
 ---
 
@@ -447,7 +468,7 @@ AST-powered analysis that runs entirely in a **Web Worker** — no blocking the 
 ## Project Structure
 
 ```
-PunamIDE v2.1.2/
+PunamIDE v2.2.0/
 |-- src/
 |   |-- components/          # 70+ UI components
 |   |   |-- chat/            # Message bubbles, tool cards, context bar
@@ -455,6 +476,7 @@ PunamIDE v2.1.2/
 |   |   +-- settings/        # Settings UI
 |   |-- services/            # Business logic (no direct UI)
 |   |   |-- agent/           # Orchestration, budget, loop guard, approval
+|   |   |-- agents/          # Multi-agent P6 review coordinator
 |   |   |-- architecture/    # Rule engine, impact analysis
 |   |   |-- autocomplete/    # Ghost-text completion engine
 |   |   |-- ci/              # CI/CD integration
@@ -463,7 +485,8 @@ PunamIDE v2.1.2/
 |   |   |-- lsp/             # LSP client and Monaco bridge
 |   |   |-- mcp/             # MCP server management
 |   |   |-- memory/          # Session memory, decision store
-|   |   |-- refactor/        # Changeset-based refactoring
+|   |   |-- refactor/        # Changeset-based refactoring + AiFixHandler (v2.2.0)
+|   |   |-- review/          # Unified Code Intelligence Engine (v2.2.0) — P1-P8 layers
 |   |   |-- security/        # Security scanning
 |   |   |-- technicalDebt/   # AST engine, debt scoring, graph
 |   |   +-- testgen/         # AI test generation
