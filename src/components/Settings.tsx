@@ -16,12 +16,15 @@ import { open as openExternal } from "@tauri-apps/plugin-shell";
 import {
   PUNAM_BUILD_NUMBER,
   PUNAM_CHANGELOG,
-  PUNAM_DISCORD_URL,
-  PUNAM_GITHUB_URL,
+  PUNAM_DOCS_URL,
+  PUNAM_RELEASE_NOTES_URL,
+  PUNAM_ISSUES_URL,
+  PUNAM_LICENSE_URL,
   PUNAM_LICENSE,
   PUNAM_RELEASE_CHANNEL,
   PUNAM_RELEASE_DATE,
   PUNAM_VERSION,
+  PUNAM_ARCHITECTURE,
   PUNAM_WEBSITE_URL,
 } from "../config/alpha";
 
@@ -638,30 +641,65 @@ export default function Settings({ config, onConfigChange, onClose, onProvidersC
 
         {activeSection === "about" && (
           <div className="settings-section">
-            <h3>PunamIDE {PUNAM_VERSION}</h3>
+            {/* Identity */}
+            <div style={{ textAlign: "center", marginBottom: 20 }}>
+              <img src="/logo_transparent.png" alt="PunamIDE" style={{ width: 48, height: 48, marginBottom: 8 }} />
+              <h3 style={{ margin: "4px 0" }}>PunamIDE</h3>
+              <p style={{ fontSize: 12, color: "var(--text-secondary)", margin: "2px 0" }}>AI-native development environment</p>
+              <p style={{ fontSize: 13, fontWeight: 600, margin: "8px 0 4px" }}>Version {PUNAM_VERSION}</p>
+              <p style={{ fontSize: 11, color: "#34d399", margin: 0 }}>✓ You're up to date</p>
+            </div>
+
+            {/* About This Installation */}
+            <h4 style={{ fontSize: 11, textTransform: "uppercase", letterSpacing: 1, color: "var(--text-secondary)", marginBottom: 8 }}>About This Installation</h4>
             <div className="settings-about-grid">
+              <div><span>Version</span><strong>{PUNAM_VERSION}</strong></div>
               <div><span>Build</span><strong>{PUNAM_BUILD_NUMBER}</strong></div>
-              <div><span>Release date</span><strong>{PUNAM_RELEASE_DATE}</strong></div>
-              <div><span>Channel</span><strong>{PUNAM_RELEASE_CHANNEL}</strong></div>
-              <div><span>License</span><strong>{PUNAM_LICENSE}</strong></div>
+              <div><span>Update Channel</span><strong>{PUNAM_RELEASE_CHANNEL}</strong></div>
+              <div><span>Architecture</span><strong>{PUNAM_ARCHITECTURE}</strong></div>
             </div>
-            <h3>Changelog</h3>
-            <div className="settings-about-list">
-              {PUNAM_CHANGELOG.map((line, index) => (
-                <div key={`${line}-${index}`} className={index === 0 ? "settings-about-version" : ""}>{line}</div>
-              ))}
-            </div>
-            <div className="settings-provider-actions">
-              <button className="btn-secondary compact" onClick={() => openExternal(PUNAM_WEBSITE_URL).catch((err) => showToast(`Failed to open website: ${err}`, "error"))}>
-                Website
-              </button>
-              <button className="btn-secondary compact" onClick={() => openExternal(PUNAM_DISCORD_URL).catch((err) => showToast(`Failed to open Discord: ${err}`, "error"))}>
-                Discord
-              </button>
-              <button className="btn-secondary compact" onClick={() => openExternal(PUNAM_GITHUB_URL).catch((err) => showToast(`Failed to open GitHub: ${err}`, "error"))}>
-                GitHub
+            <div style={{ marginTop: 8 }}>
+              <button
+                className="btn-secondary compact"
+                onClick={() => {
+                  const info = `PunamIDE ${PUNAM_VERSION}\nBuild: ${PUNAM_BUILD_NUMBER}\nChannel: ${PUNAM_RELEASE_CHANNEL}\nArch: ${PUNAM_ARCHITECTURE}\nOS: ${navigator.platform}\nDate: ${PUNAM_RELEASE_DATE}`;
+                  navigator.clipboard.writeText(info);
+                  showToast("System information copied", "success");
+                }}
+              >
+                Copy System Information
               </button>
             </div>
+
+            {/* Resources */}
+            <h4 style={{ fontSize: 11, textTransform: "uppercase", letterSpacing: 1, color: "var(--text-secondary)", marginTop: 20, marginBottom: 8 }}>Resources</h4>
+            <div className="settings-provider-actions" style={{ flexDirection: "column", alignItems: "stretch", gap: 4 }}>
+              <button className="btn-secondary compact" style={{ justifyContent: "space-between" }} onClick={() => openExternal(PUNAM_WEBSITE_URL).catch((err) => showToast(`Failed: ${err}`, "error"))}>
+                <span>Website</span><span style={{ opacity: 0.5 }}>↗</span>
+              </button>
+              <button className="btn-secondary compact" style={{ justifyContent: "space-between" }} onClick={() => openExternal(PUNAM_DOCS_URL).catch((err) => showToast(`Failed: ${err}`, "error"))}>
+                <span>Documentation</span><span style={{ opacity: 0.5 }}>↗</span>
+              </button>
+              <button className="btn-secondary compact" style={{ justifyContent: "space-between" }} onClick={() => openExternal(PUNAM_RELEASE_NOTES_URL).catch((err) => showToast(`Failed: ${err}`, "error"))}>
+                <span>Release Notes</span><span style={{ opacity: 0.5 }}>↗</span>
+              </button>
+              <button className="btn-secondary compact" style={{ justifyContent: "space-between" }} onClick={() => openExternal(PUNAM_ISSUES_URL).catch((err) => showToast(`Failed: ${err}`, "error"))}>
+                <span>Report an Issue</span><span style={{ opacity: 0.5 }}>↗</span>
+              </button>
+            </div>
+
+            {/* Legal */}
+            <h4 style={{ fontSize: 11, textTransform: "uppercase", letterSpacing: 1, color: "var(--text-secondary)", marginTop: 20, marginBottom: 8 }}>Legal</h4>
+            <div className="settings-provider-actions" style={{ flexDirection: "column", alignItems: "stretch", gap: 4 }}>
+              <button className="btn-secondary compact" style={{ justifyContent: "space-between" }} onClick={() => openExternal(PUNAM_LICENSE_URL).catch((err) => showToast(`Failed: ${err}`, "error"))}>
+                <span>Open-Source Licenses ({PUNAM_LICENSE})</span><span style={{ opacity: 0.5 }}>↗</span>
+              </button>
+            </div>
+
+            {/* Footer */}
+            <p style={{ textAlign: "center", fontSize: 11, color: "var(--text-secondary)", marginTop: 24, marginBottom: 0 }}>
+              © 2026 PunamIDE. All rights reserved.
+            </p>
           </div>
         )}
 

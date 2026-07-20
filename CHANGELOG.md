@@ -4,26 +4,37 @@ All notable changes to PunamIDE are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).  
 Versioning follows [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
-
-## [2.1.3] — 2026-07-17
-
-### Changed
-- **Version bump to 2.1.3** — same code as v2.1.2 with refreshed Windows installer packages.
-- **Dual installer release** — both NSIS (EXE) and MSI packages available for download.
-- **SHA-256 checksums** published for both installers on the download page.
-- **Windows installer filenames** standardized with version tag on GitHub releases.
-
-## [2.1.2] — 2026-06-28
+## [2.1.5] — 2026-07-20
 
 ### Fixed
-- **File Explorer render optimization (H-2)** — the `FileExplorer` component re-rendered on every App state change (cursor moves, toasts, breakpoint toggles) even when its props hadn't changed. Wrapped in `React.memo` and added stable callback wrappers (ref-delegation pattern) for `onFileSelect`, `onPathDeleted`, `onPathRenamed`, and `onBeforePathAction` so `memo`'s shallow comparison can skip renders. Also moved `appEventStateRef` assignment from render body to `useEffect` to avoid stale ref values in concurrent mode.
-- **Batch IPC for file index updates (H-3)** — the file watcher handler was calling `updateFileIndex` in a per-file loop, causing N serialized IPC roundtrips + N `RwLock` acquisitions for each `fs-changed` event (e.g., 100 files = 200 serialize/deserialize passes). Added Rust `update_file_index_batch(Vec<String>)` command that locks the `ProjectIndexCache` once and processes all paths. Frontend now calls a single `updateFileIndexBatch` per event.
-- **Architecture dependency analyzer regex caching (M-1)** — every call to `parse_es6_imports`, `parse_commonjs_requires`, `parse_dynamic_imports`, `parse_python_imports`, and `parse_rust_imports` was compiling 2-3 regex patterns from scratch. For a 500-file project, that's 1,000-1,500 regex compilations. Replaced inline `Regex::new()` calls with 8 `OnceLock<Regex>` static caches (zero new dependencies — `OnceLock` is stable since Rust 1.70, project MSRV is 1.77). All 13 existing unit tests pass unmodified.
-- **File watcher double debounce (M-3)** — the Rust debouncer was set to 500ms and the frontend applied its own 500ms debounce on top, resulting in up to 1 second delay between a file save and the tree refreshing. Reduced both to 150ms (combined worst-case ~300ms). Bulk operations like `git checkout` are still coalesced by the OS-level notify debouncer.
-- **Incremental project index (M-6)** — `refresh_project_index` was rebuilding the entire file index from scratch on every call, re-reading ~500 chars of preview content from every file even when nothing had changed. Added `index_directory_incremental` that reuses cached `FileIndexEntry` values when both `size` and `modified` timestamp match the previous scan. For a 500-file project with no changes, this drops from ~500 `fs::read_to_string` calls to ~500 `fs::metadata` calls (10-50x faster).
-- **Environment scan freezes IDE** — the Env dashboard's `scan_tools` command was a synchronous Tauri command using `std::process::Command::output()` to check 20 tools sequentially on the main thread. Each subprocess spawn blocked the UI thread, causing Windows to report "Not Responding" for the duration of the scan (~10 seconds). Fixed by making `scan_tools` async (offloaded to Tauri's tokio runtime), replacing `std::process::Command` with `tokio::process::Command` for non-blocking subprocess I/O, and running all 20 tool checks in parallel via `futures_util::future::join_all`. Scan now completes in ~1-2 seconds without blocking the UI.
-- **File explorer freezes IDE on project open** — the `read_directory` Rust command was a synchronous Tauri command that recursively scanned 4 levels deep on the main thread, blocking the UI for 2-5 seconds on large projects. Fixed by making `read_directory` async (offloaded to Tauri's tokio runtime) and removing recursive tree-building — it now returns only immediate directory children. The frontend FileExplorer was refactored to lazy-load directory contents on expand, caching results in a `childrenCache` Map to avoid redundant IPC calls. Project root loads instantly (~20ms for 50 entries) and subdirectories load on demand when the user clicks the chevron.
+- **File explorer depth limit** — folders nested beyond 4 levels (e.g., `src/renderer/src/subfolder/`) were showing as expandable but rendering empty. Root cause: Rust `read_directory` had a hard `max_depth=4`. Replaced with true lazy loading architecture.
+- **React useMemo warning** — fixed `The final argument passed to useMemo changed size between renders` caused by spreading tab paths into a dependency array. Changed to stable `.join(",")` key.
+
+### Changed
+- **File explorer — lazy loading architecture** — complete rewrite of directory loading strategy:
+  - Initial project open now loads depth=2 only (root + first level) — fast for any project size
+  - Expanding a folder lazy-loads its immediate children via new `read_directory_shallow` Rust command
+  - No artificial depth limit — any nesting depth works on demand
+  - `node_modules`, `dist`, `build` etc. are never loaded until user explicitly expands them
+  - Eliminates UI freeze on large projects regardless of directory structure
+  - New Rust command: `read_directory_shallow` (single-level, no recursion)
+  - Frontend: `FileExplorer.tsx` manages local enriched tree with `mergeChildrenIntoTree`
+
+### Added
+- **TDA deep audit report** — comprehensive technical debt analysis audit documented at `docs/TDA-AUDIT-2026-07-20.md`. Covers wiring status (14 working features, 5 bugs found, 4 performance issues, 6 enhancement opportunities).
+
+---
+
+## [2.1.4] — 2026-07-18
+
+### Fixed
+- **File explorer "not responding" on large projects** — 5 targeted performance fixes:
+  - `refresh_project_index` converted to async with `spawn_blocking` (no longer blocks Tauri command thread during indexing)
+  - Preview generation threshold reduced from 500KB to 50KB (lazy previews — avoids reading large files during bulk indexing)
+  - New `update_file_index_batch` command (single write-lock acquisition for batches, async with `spawn_blocking`)
+  - File watcher event coalescing (accumulates paths across 500ms debounce window, flushes as single batched index update + tree refresh)
+  - React tree optimization — `flattenVisibleTree` result cached to avoid full O(n) traversal on expand/collapse
+- **TypeScript build error** — fixed `onClick={handleScan}` type mismatch in `EnvironmentDashboard.tsx` (pre-existing bug blocking production builds)
 - **Refactor workflow** — connected the panel to the live editor cursor and exact selection, added the missing Rust LSP rename command, and made Move File remove its source after updating imports.
 - **Refactor safety** — refreshes open editor content and the file tree after confirmed changes; updated move tests to cover source removal.
 - **Tool panel behavior** — opening a top-bar workspace tool now replaces the previous tool instead of leaving overlapping panels mounted.

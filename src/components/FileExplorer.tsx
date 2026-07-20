@@ -1,15 +1,15 @@
-import { useState, useCallback, useMemo, useRef, useEffect, memo } from "react";
+import { useState, useCallback, useMemo, useRef, useEffect } from "react";
 import {
   createDirectory,
   createFile,
   deletePath,
   renamePath,
   revealPath,
-  readDirectory,
+  readDirectoryShallow,
   type FileEntry,
 } from "../utils/tauri";
 import { showToast } from "../utils/toast";
-import { ChevronRight, Loader2 } from "lucide-react";
+import { ChevronRight } from "lucide-react";
 import { FileIcon, FolderIcon } from "./FileIcon";
 
 interface Props {
@@ -60,26 +60,55 @@ const getWorkspaceName = (path: string) => {
   return normalized.split(/[\\/]/).pop() || "No workspace";
 };
 
-// ── Flatten visible tree (lazy: uses childrenCache instead of entry.children) ─
+const countEntries = (entries: FileEntry[]): number =>
+  entries.reduce((total, entry) => total + 1 + (entry.children ? countEntries(entry.children) : 0), 0);
+
+// ── Flatten visible tree ─────────────────────────────────────────────────────
 
 function flattenVisibleTree(
-  rootEntries: FileEntry[],
+  entries: FileEntry[],
   expandedSet: Set<string>,
-  childrenCache: Map<string, FileEntry[]>,
 ): FlatNode[] {
   const result: FlatNode[] = [];
-  function walk(entries: FileEntry[], depth: number) {
-    for (const entry of entries) {
+  function walk(items: FileEntry[], depth: number) {
+    for (const entry of items) {
       result.push({ entry, depth, index: result.length });
-      if (entry.is_dir && expandedSet.has(entry.path)) {
-        const cached = childrenCache.get(entry.path);
-        if (cached && cached.length > 0) {
-          walk(cached, depth + 1);
-        }
+      if (entry.is_dir && entry.children && expandedSet.has(entry.path)) {
+        walk(entry.children, depth + 1);
       }
     }
   }
-  walk(rootEntries, 0);
+  walk(entries, 0);
+  return result;
+}
+
+// ── Memoization helpers ──────────────────────────────────────────────────────
+
+/** Stable version string for expanded set — avoids JSON.stringify on every render */
+function expandedSetKey(set: Set<string>): string {
+  // Sort to produce a stable string regardless of insertion order
+  return [...set].sort().join(",");
+}
+
+/** Cached flatten result — avoids full tree traversal on expand/collapse */
+interface FlattenCache {
+  filesRef: FileEntry[];
+  expandedKey: string;
+  result: FlatNode[];
+}
+
+let flattenCache: FlattenCache = { filesRef: [], expandedKey: "", result: [] };
+
+function flattenVisibleTreeCached(
+  entries: FileEntry[],
+  expandedSet: Set<string>,
+): FlatNode[] {
+  const key = expandedSetKey(expandedSet);
+  if (flattenCache.filesRef === entries && flattenCache.expandedKey === key) {
+    return flattenCache.result;
+  }
+  const result = flattenVisibleTree(entries, expandedSet);
+  flattenCache = { filesRef: entries, expandedKey: key, result };
   return result;
 }
 
@@ -89,7 +118,6 @@ function VirtualTreeList({
   flatNodes,
   selectedFile,
   expandedSet,
-  loadingPaths,
   onToggleExpand,
   onFileSelect,
   onContextMenu,
@@ -97,7 +125,6 @@ function VirtualTreeList({
   flatNodes: FlatNode[];
   selectedFile?: string;
   expandedSet: Set<string>;
-  loadingPaths: Set<string>;
   onToggleExpand: (path: string) => void;
   onFileSelect: (path: string) => void;
   onContextMenu: (event: React.MouseEvent, entry: FileEntry) => void;
@@ -149,7 +176,6 @@ function VirtualTreeList({
           const { entry, depth, index } = node;
           const isSelected = selectedFile === entry.path;
           const isExpanded = entry.is_dir && expandedSet.has(entry.path);
-          const isLoading = loadingPaths.has(entry.path);
           const top = index * ROW_HEIGHT;
 
           return (
@@ -176,15 +202,9 @@ function VirtualTreeList({
             >
               {/* Chevron for directories */}
               {entry.is_dir ? (
-                isLoading ? (
-                  <span className="tree-icon chevron-icon" style={{ display: "flex", alignItems: "center" }}>
-                    <Loader2 size={12} style={{ animation: "spin 1s linear infinite" }} />
-                  </span>
-                ) : (
-                  <span className={`tree-icon chevron-icon ${isExpanded ? "expanded" : ""}`}>
-                    <ChevronRight size={14} />
-                  </span>
-                )
+                <span className={`tree-icon chevron-icon ${isExpanded ? "expanded" : ""}`}>
+                  <ChevronRight size={14} />
+                </span>
               ) : (
                 <span className="tree-icon" style={{ width: 14 }} />
               )}
@@ -208,7 +228,7 @@ function VirtualTreeList({
 
 // ── Main export ───────────────────────────────────────────────────────────────
 
-const FileExplorer = memo(function FileExplorer({
+export default function FileExplorer({
   files,
   projectPath,
   loading,
@@ -220,89 +240,95 @@ const FileExplorer = memo(function FileExplorer({
   selectedFile,
 }: Props) {
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
+  const [localFiles, setLocalFiles] = useState<FileEntry[]>(files);
   const [expandedSet, setExpandedSet] = useState<Set<string>>(() => {
-    // Auto-expand root-level directories on first load
     const initial = new Set<string>();
     for (const f of files) {
       if (f.is_dir) initial.add(f.path);
     }
     return initial;
   });
+  const [loadingDirs, setLoadingDirs] = useState<Set<string>>(new Set());
 
-  // ── Lazy directory cache — maps directory path → its immediate children ─────
-  const [childrenCache, setChildrenCache] = useState<Map<string, FileEntry[]>>(() => new Map());
-  const [loadingPaths, setLoadingPaths] = useState<Set<string>>(() => new Set());
+  // Ref always holds the latest localFiles — safe to read in async callbacks
+  const localFilesRef = useRef(localFiles);
+  localFilesRef.current = localFiles;
 
-  // When files (root entries) change, pre-populate the cache for root and re-expand.
-  // Also pre-load children for all auto-expanded directories.
+  // Sync localFiles when parent refreshes (file watcher, create/delete)
   useEffect(() => {
-    if (files.length === 0) return;
-    // Populate root-level cache
-    setChildrenCache((prev) => {
-      const next = new Map(prev);
-      next.set(projectPath, files);
-      return next;
-    });
-    setExpandedSet((prev) => {
-      const next = new Set<string>();
-      for (const f of files) {
-        if (f.is_dir && (prev.size === 0 || prev.has(f.path))) {
-          next.add(f.path);
-        }
+    setLocalFiles(files);
+  }, [files]);
+
+  /** Recursively find an entry by path in the tree. */
+  const findEntry = (entries: FileEntry[], target: string): FileEntry | null => {
+    for (const e of entries) {
+      if (e.path === target) return e;
+      if (e.is_dir && e.children) {
+        const found = findEntry(e.children, target);
+        if (found) return found;
       }
-      return next;
+    }
+    return null;
+  };
+
+  /** Recursively merge fetched children into the file tree at the target path. */
+  const mergeChildrenIntoTree = useCallback((tree: FileEntry[], targetPath: string, children: FileEntry[]): FileEntry[] => {
+    return tree.map((entry) => {
+      if (entry.path === targetPath) {
+        return { ...entry, children };
+      }
+      if (entry.is_dir && entry.children) {
+        return { ...entry, children: mergeChildrenIntoTree(entry.children, targetPath, children) };
+      }
+      return entry;
     });
-  }, [files, projectPath]);
-
-  // Pre-load children for all currently-expanded directories that aren't cached yet.
-  // This handles both initial load (root-level dirs auto-expanded) and user expand clicks.
-  useEffect(() => {
-    for (const dirPath of expandedSet) {
-      if (childrenCache.has(dirPath) || loadingPaths.has(dirPath)) continue;
-      // Load this directory's children
-      loadDirectory(dirPath);
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [expandedSet]);
-
-  const loadDirectory = useCallback(async (dirPath: string) => {
-    setLoadingPaths((prev) => new Set(prev).add(dirPath));
-    try {
-      const children = await readDirectory(dirPath);
-      setChildrenCache((prev) => {
-        const next = new Map(prev);
-        next.set(dirPath, children);
-        return next;
-      });
-    } catch (err) {
-      console.error(`Failed to load directory ${dirPath}:`, err);
-    } finally {
-      setLoadingPaths((prev) => {
-        const next = new Set(prev);
-        next.delete(dirPath);
-        return next;
-      });
-    }
   }, []);
 
-  const handleToggleExpand = useCallback((path: string) => {
+  const handleToggleExpand = useCallback(async (path: string) => {
+    // Collapse if already expanded
+    if (expandedSet.has(path)) {
+      setExpandedSet((prev) => {
+        const next = new Set(prev);
+        next.delete(path);
+        return next;
+      });
+      return;
+    }
+
+    // Read latest tree from ref (never stale)
+    const entry = findEntry(localFilesRef.current, path);
+    const needsLoad = entry && entry.is_dir && (!entry.children || entry.children.length === 0);
+
+    if (needsLoad) {
+      setLoadingDirs((prev) => new Set(prev).add(path));
+      try {
+        const children = await readDirectoryShallow(path);
+        setLocalFiles((prev) => mergeChildrenIntoTree(prev, path, children));
+      } catch {
+        // Load failed — expand anyway (shows empty)
+      } finally {
+        setLoadingDirs((prev) => {
+          const next = new Set(prev);
+          next.delete(path);
+          return next;
+        });
+      }
+    }
+
+    // Expand
     setExpandedSet((prev) => {
       const next = new Set(prev);
-      if (next.has(path)) {
-        next.delete(path);
-      } else {
-        next.add(path);
-      }
+      next.add(path);
       return next;
     });
-  }, []);
+  }, [expandedSet, mergeChildrenIntoTree]);
 
-  // Flatten only visible nodes using the cache
+  // Flatten only visible nodes — cached to avoid full tree traversal on every expand/collapse
   const flatNodes = useMemo(
-    () => flattenVisibleTree(files, expandedSet, childrenCache),
-    [files, expandedSet, childrenCache],
+    () => flattenVisibleTreeCached(localFiles, expandedSet),
+    [localFiles, expandedSet],
   );
-
+  const visibleEntryCount = useMemo(() => countEntries(localFiles), [localFiles]);
   const workspaceName = getWorkspaceName(projectPath);
   const hasWorkspace = Boolean(projectPath && projectPath.trim());
 
@@ -320,34 +346,13 @@ const FileExplorer = memo(function FileExplorer({
     return entry.is_dir ? entry.path : getParentPath(entry.path);
   };
 
-  // ── Invalidate cache for a path and its children ─────────────────────────────
-  const invalidateCacheForPath = useCallback((path: string) => {
-    setChildrenCache((prev) => {
-      const next = new Map(prev);
-      // Remove the directory itself
-      next.delete(path);
-      // Remove parent directory cache so it reloads next time
-      const parent = getParentPath(path);
-      next.delete(parent);
-      return next;
-    });
-    // Re-load the parent directory
-    const parent = getParentPath(path);
-    if (parent && parent !== path) {
-      loadDirectory(parent);
-    } else {
-      // Root-level — trigger a full refresh
-      onRefresh();
-    }
-  }, [loadDirectory, onRefresh]);
-
   const handleCreateFile = async () => {
     const name = window.prompt("New file name");
     if (!name) return closeContextMenu();
     try {
       const path = joinPath(getActionBasePath(), name);
       await createFile(path);
-      invalidateCacheForPath(path);
+      onRefresh();
       onFileSelect(path);
     } catch (err) {
       showToast(`Failed to create file: ${err}`, "error");
@@ -360,9 +365,8 @@ const FileExplorer = memo(function FileExplorer({
     const name = window.prompt("New folder name");
     if (!name) return closeContextMenu();
     try {
-      const path = joinPath(getActionBasePath(), name);
-      await createDirectory(path);
-      invalidateCacheForPath(path);
+      await createDirectory(joinPath(getActionBasePath(), name));
+      onRefresh();
     } catch (err) {
       showToast(`Failed to create folder: ${err}`, "error");
     } finally {
@@ -380,7 +384,7 @@ const FileExplorer = memo(function FileExplorer({
       const newPath = joinPath(getParentPath(entry.path), name);
       await renamePath(entry.path, newPath);
       onPathRenamed(entry.path, newPath);
-      invalidateCacheForPath(entry.path);
+      onRefresh();
     } catch (err) {
       showToast(`Failed to rename: ${err}`, "error");
     } finally {
@@ -397,7 +401,7 @@ const FileExplorer = memo(function FileExplorer({
     try {
       await deletePath(entry.path);
       onPathDeleted(entry.path);
-      invalidateCacheForPath(entry.path);
+      onRefresh();
     } catch (err) {
       showToast(`Failed to delete: ${err}`, "error");
     } finally {
@@ -427,7 +431,7 @@ const FileExplorer = memo(function FileExplorer({
       </div>
       <div className="workspace-strip" title={projectPath || "No workspace open"}>
         <span className="workspace-strip-name">{workspaceName}</span>
-        <span className="workspace-strip-count">{flatNodes.length} visible</span>
+        <span className="workspace-strip-count">{visibleEntryCount} visible</span>
       </div>
 
       {loading && files.length === 0 && (
@@ -442,7 +446,6 @@ const FileExplorer = memo(function FileExplorer({
           flatNodes={flatNodes}
           selectedFile={selectedFile}
           expandedSet={expandedSet}
-          loadingPaths={loadingPaths}
           onToggleExpand={handleToggleExpand}
           onFileSelect={onFileSelect}
           onContextMenu={handleContextMenu}
@@ -490,6 +493,4 @@ const FileExplorer = memo(function FileExplorer({
       )}
     </div>
   );
-});
-
-export default FileExplorer;
+}

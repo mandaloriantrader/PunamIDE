@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef, useMemo, lazy, Suspense } from "react";
+﻿import { useState, useEffect, useCallback, useRef, useMemo, lazy, Suspense } from "react";
 import {
   FolderOpen,
   TerminalSquare,
@@ -63,7 +63,7 @@ import { FileIcon } from "./components/FileIcon";
 import DebuggerPanel from "./components/DebuggerPanel";
 import DebugConfigPicker from "./components/DebugConfigPicker";
 
-// ── Lazily loaded panels (only load when first opened) ─────────────────────
+// â”€â”€ Lazily loaded panels (only load when first opened) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 const BugHunt        = lazy(() => import("./components/BugHunt"));
 const CodeReview     = lazy(() => import("./components/CodeReview"));
 const SplitEditor    = lazy(() => import("./components/SplitEditor"));
@@ -76,16 +76,16 @@ const TestGenPanel   = lazy(() => import("./components/TestGenPanel"));
 const RefactorPanel  = lazy(() => import("./components/RefactorPanel"));
 const ImportPanel    = lazy(() => import("./components/ImportPanel"));
 
-// Phase 1 — Ported from Zenith IDE
+// Phase 1 â€” Ported from Zenith IDE
 const DockerPanel       = lazy(() => import("./components/DockerPanel"));
 const NotepadsPanel     = lazy(() => import("./components/NotepadsPanel"));
 const GitHubPanel       = lazy(() => import("./components/github/GitHubPanel"));
 const ContextSidebar    = lazy(() => import("./components/ContextSidebar"));
 
-// loadNotes is a small utility — import directly, not lazily
+// loadNotes is a small utility â€” import directly, not lazily
 import { loadNotes } from "./components/NotesPanel";
 
-// ── Lazy fallback ──────────────────────────────────────────────────────────
+// â”€â”€ Lazy fallback â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 // (Suspense uses null fallback for instant transitions)
 import {
   readDirectory,
@@ -112,6 +112,7 @@ import {
   loadCustomThemes,
   loadRecentProjects,
   addRecentProject,
+  updateFileIndex,
   updateFileIndexBatch,
   dapStart,
   dapStartTcp,
@@ -138,10 +139,8 @@ import Split from "react-split";
 import "./styles/index.css";
 import type { RunObservation } from "./services/run/verifiedRun";
 import {
-  ALPHA_RELEASE_NOTES,
   PUNAM_BUILD_NUMBER,
   PUNAM_CHANGELOG,
-  PUNAM_DISCORD_URL,
   PUNAM_GITHUB_URL,
   PUNAM_LICENSE,
   PUNAM_RELEASE_CHANNEL,
@@ -153,7 +152,7 @@ import {
 // LSP integration
 import { lspManager } from "./services/lsp/lspManager";
 
-// Agent safety guard — intercepts file writes and browser opens
+// Agent safety guard â€” intercepts file writes and browser opens
 import { checkFileWrite, checkBrowserOpen, registerBrowser } from "./services/agent/AgentApplyGuard";
 
 // Auto-save hook
@@ -361,7 +360,7 @@ export default function App() {
   const dapRequestSeq = useRef(1);
   const handleFileSelectRef = useRef<(path: string) => Promise<void>>(async () => {});
 
-  // ── Auto-cap debug console at 500 lines to prevent unbounded memory growth ──
+  // â”€â”€ Auto-cap debug console at 500 lines to prevent unbounded memory growth â”€â”€
   // Use a ref to avoid re-triggering when we trim (prevents infinite loop)
   const debugCapRef = useRef(false);
   useEffect(() => {
@@ -385,7 +384,7 @@ export default function App() {
   registerToastHandler(showToast);
 
   useEffect(() => {
-    const key = "punamide_alpha_welcome_seen";
+    const key = "punamide_welcome_seen";
     if (!window.localStorage.getItem(key)) {
       setShowFirstRunWelcome(true);
       window.localStorage.setItem(key, "1");
@@ -428,7 +427,7 @@ export default function App() {
     try {
       const report = forceFresh || message ? await buildDiagnosticsReport(message) : diagnosticsReport || await buildDiagnosticsReport(message);
       const path = await save({
-        defaultPath: "punamide-alpha-diagnostics.txt",
+        defaultPath: "punamide-diagnostics.txt",
         filters: [{ name: "Text", extensions: ["txt"] }],
       });
       if (!path) return;
@@ -473,15 +472,11 @@ export default function App() {
     showToast("System info copied.", "success");
   }, [aiProviders, config.provider, refreshSystemDiagnostics, showToast, systemDiagnostics]);
 
-  const handleJoinDiscord = useCallback(async () => {
-    if (PUNAM_DISCORD_URL.includes("REPLACE_ME")) {
-      showToast("Discord invite is not configured yet.", "warning");
-      return;
-    }
+  const handleOpenGitHub = useCallback(async () => {
     try {
-      await openExternal(PUNAM_DISCORD_URL);
+      await openExternal(PUNAM_GITHUB_URL);
     } catch (err) {
-      showToast(`Failed to open Discord: ${err}`, "error");
+      showToast(`Failed to open GitHub: ${err}`, "error");
     }
   }, [showToast]);
 
@@ -509,7 +504,7 @@ export default function App() {
     return `${projectPath.replace(/[\\/]+$/, "")}${separator}${relativePath.replace(/^[\\/]+/, "")}`;
   }, [projectPath]);
 
-    // ─── Debugger Actions ─────────────────────────────────────────────────────────
+    // â”€â”€â”€ Debugger Actions â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
   const sendDapRequest = useCallback(async (command: string, args: any): Promise<void> => {
     if (!debugSessionId) { showToast("No active debug session.", "error"); return; }
@@ -650,11 +645,11 @@ export default function App() {
       setDebugConsoleOutput(prev => [...prev, `[PunamIDE] Starting: ${config.name} (${config.adapterCommand}) [${config.transport || "stdio"}]`]);
       debugSequencingRef.current = { step: "initializing", config };
 
-      // Set a timeout — if we don't get 'initialized' within 10s, something is wrong
+      // Set a timeout â€” if we don't get 'initialized' within 10s, something is wrong
       const initTimeout = setTimeout(() => {
         if (debugSequencingRef.current.step === "initializing") {
           console.warn("[DEBUG] Adapter did not respond to initialize within 10s");
-          setDebugConsoleOutput(prev => [...prev, `[PunamIDE] ⚠ Adapter not responding. It may not be installed or may have crashed.`]);
+          setDebugConsoleOutput(prev => [...prev, `[PunamIDE] âš  Adapter not responding. It may not be installed or may have crashed.`]);
           showToast("Debug adapter not responding. Is it installed?", "warning");
         }
       }, 10000);
@@ -689,7 +684,7 @@ export default function App() {
       const errStr = String(err);
       if (errStr.includes("spawn") || errStr.includes("No such file") || errStr.includes("not found") || errStr.includes("ENOENT")) {
         showToast(`Debug adapter '${config.adapterCommand}' not found. Install it or check your PATH.`, "error");
-        setDebugConsoleOutput(prev => [...prev, `[PunamIDE] ✗ Adapter not found: ${config.adapterCommand}`, `[PunamIDE] Hint: Install the adapter and ensure it's on your system PATH.`]);
+        setDebugConsoleOutput(prev => [...prev, `[PunamIDE] âœ— Adapter not found: ${config.adapterCommand}`, `[PunamIDE] Hint: Install the adapter and ensure it's on your system PATH.`]);
       } else if (errStr.includes("EACCES") || errStr.includes("permission")) {
         showToast(`Permission denied running '${config.adapterCommand}'. Check file permissions.`, "error");
       } else if (errStr.includes("EADDRINUSE") || errStr.includes("address already in use")) {
@@ -713,7 +708,7 @@ export default function App() {
           arguments: { restart: false, terminateDebuggee: true },
         });
       } catch {
-        // Disconnect may fail if adapter already closed — that's fine
+        // Disconnect may fail if adapter already closed â€” that's fine
       }
 
       // Give adapter a moment to process disconnect, then force kill
@@ -767,7 +762,7 @@ export default function App() {
     setEditorLine(line);
   }, []);
 
-  // ─── Debug Config Handlers ──────────────────────────────────────────────────
+  // â”€â”€â”€ Debug Config Handlers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
   const handleAddDebugConfig = useCallback(async () => {
     if (!projectPath) return;
@@ -871,7 +866,7 @@ export default function App() {
     setFilesLoading(true);
 
     // Allow the loading indicator to paint before firing the heavy IPC call.
-    // readDirectory scans up to 4 levels deep on the Rust side — can take seconds for large projects.
+    // readDirectory scans up to 4 levels deep on the Rust side â€” can take seconds for large projects.
     await new Promise((r) => requestAnimationFrame(r));
 
     try {
@@ -927,20 +922,16 @@ export default function App() {
     breakpoints,
     projectPath,
   });
-  // Sync latest callback references after commit so event listeners always
-  // read up-to-date values without causing re-renders via the ref itself.
-  useEffect(() => {
-    appEventStateRef.current = {
-      refreshFiles,
-      getProjectFilePath,
-      showToast,
-      fetchStackFrames,
-      fetchScopes,
-      fetchVariables,
-      breakpoints,
-      projectPath,
-    };
-  });
+  appEventStateRef.current = {
+    refreshFiles,
+    getProjectFilePath,
+    showToast,
+    fetchStackFrames,
+    fetchScopes,
+    fetchVariables,
+    breakpoints,
+    projectPath,
+  };
 
   useEffect(() => {
     if (!projectPath) return;
@@ -973,27 +964,49 @@ export default function App() {
 
     startWatcher();
 
-    // Debounce file tree refresh — prevents refresh storm from git checkout / bulk operations
+    // Debounce file tree refresh + index update â€” prevents refresh storm from git checkout / bulk operations.
+    // Paths are accumulated across multiple fs-changed events within the 500ms debounce window,
+    // then flushed as a single batched index update + a single file tree refresh.
     let fsRefreshTimer: ReturnType<typeof setTimeout> | null = null;
+    let pendingChangedPaths: string[] = [];
+    const MAX_PENDING_PATHS = 200;
 
     void registerListener<{ paths: string[]; kind: string }>("fs-changed", async (event) => {
       if (cancelled) return;
       const { refreshFiles, getProjectFilePath } = appEventStateRef.current;
 
-      // Debounced refresh — coalesces rapid file change events into one tree scan
+      // Accumulate changed paths across multiple debounced events
+      const changedPaths = event.payload.paths;
+      for (const p of changedPaths) {
+        if (!pendingChangedPaths.includes(p)) {
+          pendingChangedPaths.push(p);
+        }
+      }
+
+      // Force flush if too many paths accumulated (e.g. git checkout on a large repo)
+      if (pendingChangedPaths.length >= MAX_PENDING_PATHS) {
+        if (fsRefreshTimer !== null) clearTimeout(fsRefreshTimer);
+        fsRefreshTimer = null;
+        const paths = [...pendingChangedPaths];
+        pendingChangedPaths = [];
+        updateFileIndexBatch(paths).catch(() => {});
+        refreshFiles();
+        return;
+      }
+
+      // Debounced refresh â€” coalesces rapid file change events into one tree scan + one batch index update
       if (fsRefreshTimer !== null) clearTimeout(fsRefreshTimer);
       fsRefreshTimer = setTimeout(() => {
         fsRefreshTimer = null;
+        const paths = [...pendingChangedPaths];
+        pendingChangedPaths = [];
+        if (paths.length > 0) {
+          updateFileIndexBatch(paths).catch(() => {});
+        }
         refreshFiles();
-      }, 150);
+      }, 500);
 
-      // Update Rust project index cache for changed files (single batch IPC)
-      const changedPaths = event.payload.paths;
-      if (changedPaths.length > 0) {
-        updateFileIndexBatch(changedPaths).catch(() => {});
-      }
-
-      // Reload open tabs whose files changed externally
+      // Reload open tabs whose files changed externally (immediate â€” user sees changes quickly)
       const tabsSnapshot = tabsRef.current;
       if (!tabsSnapshot) return;
 
@@ -1015,7 +1028,7 @@ export default function App() {
             );
           }
         } catch {
-          // File read error — ignore silently
+          // File read error â€” ignore silently
         }
       }
     });
@@ -1037,7 +1050,7 @@ export default function App() {
       // Check for failed responses (DAP error responses)
       if (event_type.startsWith("response_") && payload?.success === false) {
         const errMsg = payload?.message || payload?.body?.error?.format || "Unknown error";
-        console.error(`[DEBUG] DAP request failed: ${event_type} — ${errMsg}`);
+        console.error(`[DEBUG] DAP request failed: ${event_type} â€” ${errMsg}`);
         setDebugConsoleOutput(prev => [...prev, `[DAP Error] ${event_type.replace("response_", "")}: ${errMsg}`]);
 
         // Special handling for critical failures
@@ -1062,10 +1075,10 @@ export default function App() {
         }
         case "response_initialize": {
           // DAP handshake: we received the initialize response (capabilities).
-          console.log("[DEBUG] Received initialize response — proceeding with handshake");
+          console.log("[DEBUG] Received initialize response â€” proceeding with handshake");
           setDebugConsoleOutput(prev => [...prev, `[PunamIDE] Initialize response received. Proceeding...`]);
           // DAP handshake step 2: adapter is ready
-          console.log("[DEBUG] Adapter initialized — sending breakpoints + configurationDone + launch/attach");
+          console.log("[DEBUG] Adapter initialized â€” sending breakpoints + configurationDone + launch/attach");
           // Clear the init timeout
           if ((debugSequencingRef.current as any)?._initTimeout) {
             clearTimeout((debugSequencingRef.current as any)._initTimeout);
@@ -1122,7 +1135,7 @@ export default function App() {
         }
         case "initialized": {
           // DAP handshake step 2: adapter is ready
-          console.log("[DEBUG] Adapter initialized — sending breakpoints + configurationDone + launch/attach");
+          console.log("[DEBUG] Adapter initialized â€” sending breakpoints + configurationDone + launch/attach");
           // Clear the init timeout
           if ((debugSequencingRef.current as any)?._initTimeout) {
             clearTimeout((debugSequencingRef.current as any)._initTimeout);
@@ -1245,9 +1258,9 @@ export default function App() {
         case "response_evaluate": {
           const body = payload?.body;
           if (body?.result) {
-            setDebugConsoleOutput(prev => [...prev, `→ ${body.result}`]);
+            setDebugConsoleOutput(prev => [...prev, `â†’ ${body.result}`]);
           } else if (payload?.message) {
-            setDebugConsoleOutput(prev => [...prev, `⚠ ${payload.message}`]);
+            setDebugConsoleOutput(prev => [...prev, `âš  ${payload.message}`]);
           }
           break;
         }
@@ -1255,7 +1268,7 @@ export default function App() {
         case "response_attach":
           if (payload?.success !== false) {
             setDebugAdapterStatus("running");
-            setDebugConsoleOutput(prev => [...prev, `[PunamIDE] ✓ ${event_type === "response_attach" ? "Attached" : "Launched"} successfully`]);
+            setDebugConsoleOutput(prev => [...prev, `[PunamIDE] âœ“ ${event_type === "response_attach" ? "Attached" : "Launched"} successfully`]);
           }
           // Error case handled by the generic error check above
           break;
@@ -1396,7 +1409,7 @@ export default function App() {
         setShowGitPanel(false);
         setGitRefreshKey((key) => key + 1);
 
-        // Set project path first — this triggers the file tree loading indicator
+        // Set project path first â€” this triggers the file tree loading indicator
         setProjectPath(dir);
         setRecentProjects(prev => [{ path: dir, openedAt: Date.now() }, ...prev.filter(p => p.path !== dir)].slice(0, 8));
 
@@ -1408,7 +1421,7 @@ export default function App() {
         });
 
         // Note: refreshProjectIndex is already triggered inside setProjectRoot's
-        // background pipeline (symbol_rebuild → callgraph_build → index_codebase).
+        // background pipeline (symbol_rebuild â†’ callgraph_build â†’ index_codebase).
       }
     } catch (err) {
       showToast(`Failed to open folder: ${err}`, "error");
@@ -1475,26 +1488,6 @@ export default function App() {
 
   // Keep ref in sync for callbacks defined before handleFileSelect
   handleFileSelectRef.current = handleFileSelect;
-
-  // ── Stable callback identities for React.memo'd children ──────────────────
-  // These refs allow FileExplorer (wrapped in React.memo) to skip re-renders
-  // when callbacks change, since the wrapper identity stays stable and always
-  // delegates to the latest real implementation.
-  const handleFileSelectStableRef = useRef<(path: string) => Promise<void>>(async () => {});
-  useEffect(() => { handleFileSelectStableRef.current = handleFileSelect; });
-  const stableHandleFileSelect = useCallback((path: string) => handleFileSelectStableRef.current(path), []);
-
-  const handlePathDeletedStableRef = useRef<(_path: string) => void>(() => {});
-  useEffect(() => { handlePathDeletedStableRef.current = handlePathDeleted; });
-  const stableHandlePathDeleted = useCallback((path: string) => handlePathDeletedStableRef.current(path), []);
-
-  const handlePathRenamedStableRef = useRef((_old: string, _new: string) => {});
-  useEffect(() => { handlePathRenamedStableRef.current = handlePathRenamed; });
-  const stableHandlePathRenamed = useCallback((oldPath: string, newPath: string) => handlePathRenamedStableRef.current(oldPath, newPath), []);
-
-  const confirmPathOperationStableRef = useRef((_path: string, _action: string) => Promise.resolve(true));
-  useEffect(() => { confirmPathOperationStableRef.current = confirmPathOperation; });
-  const stableConfirmPathOperation = useCallback((path: string, action: string) => confirmPathOperationStableRef.current(path, action), []);
 
   const handleGitFileOpen = async (relativePath: string) => {
     await handleFileSelect(getProjectFilePath(relativePath));
@@ -1635,7 +1628,7 @@ export default function App() {
     );
   };
 
-  // Update tab content — optimized to avoid full array scan on every keystroke
+  // Update tab content â€” optimized to avoid full array scan on every keystroke
   const handleContentChange = useCallback((value: string) => {
     setTabs((prev) => {
       const idx = prev.findIndex((t) => t.id === activeTab);
@@ -1676,34 +1669,34 @@ export default function App() {
     await handleSaveTab(activeTab);
   }, [activeTab, handleSaveTab]);
 
-  // ── Auto-save: periodically save modified files ────────────────────────────
+  // â”€â”€ Auto-save: periodically save modified files â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   const handleAutoSaveTab = useCallback((tabId: string) => {
     setTabs((prev) => prev.map((t) => t.id === tabId ? { ...t, modified: false } : t));
   }, []);
 
   useAutoSave({
-    enabled: true, // Always auto-save — user's work is too important to lose
+    enabled: true, // Always auto-save â€” user's work is too important to lose
     delay: 2000,   // Save 2 seconds after last edit
     tabs,
     onTabSaved: handleAutoSaveTab,
   });
 
-  // ── Auto AST re-indexing on file save ──────────────────────────────────────
+  // â”€â”€ Auto AST re-indexing on file save â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   // Subscribes to editor save events and incrementally rebuilds the symbol index
   // and call graph for the saved file so AI context stays current.
   useAutoReindex();
 
-  // ── Proactive error detection on recent edits ──────────────────────────────
+  // â”€â”€ Proactive error detection on recent edits â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   // Captures diagnostic baselines on file open/first edit, then on each save
   // compares against baseline and notifies about newly introduced errors.
   useProactiveErrors({ tabs });
 
-  // ── Context sidebar wiring ─────────────────────────────────────────────────
+  // â”€â”€ Context sidebar wiring â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   // Subscribes to cursor-move, file-change, and lsp-diagnostics events to keep
   // the ContextSidebarModel up-to-date with callers, callees, and diagnostics.
   useContextSidebar();
 
-  // ── Agent-assisted debugging bridge ────────────────────────────────────────
+  // â”€â”€ Agent-assisted debugging bridge â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   // Initializes the DAP event listener once on startup so breakpoint hits trigger
   // AI analysis in the Debugger panel's "AI Analysis" tab. Torn down on unmount.
   useEffect(() => {
@@ -1716,10 +1709,10 @@ export default function App() {
     };
   }, []);
 
-  // ── Inline diff preview for AI edits ───────────────────────────────────────
+  // â”€â”€ Inline diff preview for AI edits â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   const inlineDiff = useInlineDiff();
 
-  // ── Save-on-exit: intercept window close and save all modified files ───────
+  // â”€â”€ Save-on-exit: intercept window close and save all modified files â”€â”€â”€â”€â”€â”€â”€
   useEffect(() => {
     let unlistenClose: (() => void) | null = null;
     let cancelled = false;
@@ -1739,7 +1732,7 @@ export default function App() {
           const modifiedTabs = tabsRef.current.filter((t) => t.modified);
           if (modifiedTabs.length > 0) {
 
-            // Save with a timeout — don't let a stuck save prevent closing
+            // Save with a timeout â€” don't let a stuck save prevent closing
             try {
               const savePromises = modifiedTabs.map((tab) => writeFile(tab.path, tab.content));
               await Promise.race([
@@ -1768,7 +1761,7 @@ export default function App() {
           unlistenClose = registeredUnlisten;
         }
       } catch {
-        // Not in Tauri environment (dev mode in browser) — use beforeunload
+        // Not in Tauri environment (dev mode in browser) â€” use beforeunload
       }
     };
 
@@ -1875,7 +1868,7 @@ export default function App() {
     closePendingReviewRef.current = closePendingReview;
   });
 
-  // Keyboard handler refs — keep volatile state in refs so the effect
+  // Keyboard handler refs â€” keep volatile state in refs so the effect
   // registers ONCE instead of on every keystroke/tab change/debug event.
   const kbActiveTabRef = useRef(activeTab);
   const kbTabsRef = useRef(tabs);
@@ -1915,7 +1908,7 @@ export default function App() {
   useEffect(() => { kbAiProvidersRef.current = aiProviders; }, [aiProviders]);
   useEffect(() => { kbConfigRef.current = config; }, [config]);
 
-  // Keyboard shortcuts — registered once, reads latest values via refs
+  // Keyboard shortcuts â€” registered once, reads latest values via refs
   useEffect(() => {
     const handleKeyDown = async (e: KeyboardEvent) => {
       const ctrl = e.ctrlKey || e.metaKey;
@@ -2067,7 +2060,7 @@ export default function App() {
           nearbyDocs,
         };
 
-        // Create DocGenerator and run generation → preview
+        // Create DocGenerator and run generation â†’ preview
         const generator = new DocGenerator(activeProvider, modelId);
         generator.generate(target).then((result) => {
           generator.previewAndApply(result, tab.path);
@@ -2281,7 +2274,7 @@ export default function App() {
   const applyParsedChanges = async (parsed: ParsedResponse) => {
     if (!projectPath) return;
 
-    // ── Auto-snapshot before AI edits (Ghost Restore safety net) ──
+    // â”€â”€ Auto-snapshot before AI edits (Ghost Restore safety net) â”€â”€
     if (parsed.fileChanges.length > 0 || parsed.deletions.length > 0) {
       try {
         const { invoke } = await import("@tauri-apps/api/core");
@@ -2291,7 +2284,7 @@ export default function App() {
           reason: "before-ai-edit",
         });
       } catch (err) {
-        // Non-blocking — don't prevent the apply if snapshot fails
+        // Non-blocking â€” don't prevent the apply if snapshot fails
         console.warn("[Snapshot] Auto-snapshot before AI edit failed:", err);
       }
     }
@@ -2369,11 +2362,11 @@ export default function App() {
           const validation = await inspectCommand(cmd, projectPath);
 
           if (validation.risk_level === "blocked") {
-            alert(`⚠️ BLOCKED: ${cmd}\n\nReason: ${validation.feedback_message}`);
+            alert(`âš ï¸ BLOCKED: ${cmd}\n\nReason: ${validation.feedback_message}`);
             continue;
           }
 
-          // needs_approval or safe — auto-approve since inspect_command validated safety
+          // needs_approval or safe â€” auto-approve since inspect_command validated safety
           // (window.confirm is not available in Tauri webview)
           const confirmed = true;
           if (confirmed) {
@@ -2404,7 +2397,7 @@ export default function App() {
       .filter((fullPath) => tabs.some((tab) => normalizeFsPath(tab.path) === normalizeFsPath(fullPath) && tab.modified));
 
     if (unsavedTargets.length > 0) {
-      // Auto-proceed — the inline diff preview will show changes for user review
+      // Auto-proceed â€” the inline diff preview will show changes for user review
       // (window.confirm is not available in Tauri webview)
       const proceed = true;
       if (!proceed) return false;
@@ -2446,7 +2439,7 @@ export default function App() {
     setPendingReview(null);
   };
 
-  // ── Agent diff preview event listener ───────────────────────────────────────
+  // â”€â”€ Agent diff preview event listener â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   // When the agent tool loop wants to write/patch a file, it emits this event.
   // We intercept it, show the MultiFileDiffBoard, and resolve the Promise
   // with the user's decision (accept/reject).
@@ -2476,18 +2469,18 @@ export default function App() {
     return () => window.removeEventListener("punam-agent-diff-preview", handleAgentDiffPreview);
   }, []);
 
-  // ── Inline diff preview event listener ──────────────────────────────────────
+  // â”€â”€ Inline diff preview event listener â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   // When the agent tool loop wants to write/patch a file, it emits this event.
   // We show the InlineDiffPreview for the user to accept/reject hunks individually.
-  // We resolve(false) because the full write_file should NOT also apply — the hunks
+  // We resolve(false) because the full write_file should NOT also apply â€” the hunks
   // handle the actual content changes one by one. The circuit breaker in the tool
   // loops ensures the agent stops after this instead of retrying endlessly.
   useEffect(() => {
     const handleInlineDiffPreview = (e: Event) => {
       const { path: filePath, original, proposed, resolve } = (e as CustomEvent).detail;
-      // Show inline diff — user will accept/reject hunks individually
+      // Show inline diff â€” user will accept/reject hunks individually
       inlineDiff.showDiff(filePath, original || "", proposed);
-      // Resolve false: the bulk write_file is not needed — hunks apply individually.
+      // Resolve false: the bulk write_file is not needed â€” hunks apply individually.
       // The tool loop circuit breaker will halt the agent so it doesn't retry.
       resolve(false);
     };
@@ -2579,9 +2572,8 @@ export default function App() {
   // Only recomputes when tab paths/names actually change (not content edits).
   const openTabsMemo = useMemo(
     () => tabs.map((tab) => ({ path: tab.path, name: tab.name, content: tab.content })),
-    // Intentionally shallow — we only care about the tab list identity, not content changes.
-    // Content is already available via the tab path if needed by AI.
-    [tabs.length, activeTab, ...tabs.map(t => t.path)]
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [tabs.length, activeTab, tabs.map(t => t.path).join(",")]
   );
   const activeBottomPanel =
     showDebug && bottomPanelActive === "debug" ? "debug" :
@@ -2691,7 +2683,7 @@ export default function App() {
     {
       id: "github-panel",
       title: "Show GitHub Panel",
-      detail: "GitHub integration — repos, PRs, issues",
+      detail: "GitHub integration â€” repos, PRs, issues",
       disabled: !projectPath,
       run: () => {
         handleActivitySelect("github");
@@ -2768,7 +2760,7 @@ export default function App() {
     {
       id: "undo-last-apply",
       title: "Undo Last AI Apply",
-      detail: checkpoints.length > 0 ? `Revert ${checkpoints[checkpoints.length - 1].files.length} file(s) — "${checkpoints[checkpoints.length - 1].label}"` : "No changes to undo",
+      detail: checkpoints.length > 0 ? `Revert ${checkpoints[checkpoints.length - 1].files.length} file(s) â€” "${checkpoints[checkpoints.length - 1].label}"` : "No changes to undo",
       disabled: checkpoints.length === 0,
       run: async () => {
         if (checkpoints.length === 0) return;
@@ -2876,7 +2868,7 @@ export default function App() {
 
   return (
     <div className={`app ${themeClass}`}>
-      {/* Title Bar — minimal, just title + run controls */}
+      {/* Title Bar â€” minimal, just title + run controls */}
       <div className="titlebar">
         <div className="titlebar-left">
           <button className="toolbar-btn" onClick={handleOpenFolder} title="Open Folder" aria-label="Open project folder">
@@ -2916,7 +2908,7 @@ export default function App() {
           </span>
         </div>
         <div className="titlebar-right">
-          {/* Tool buttons moved here — the ones not in activity bar */}
+          {/* Tool buttons moved here â€” the ones not in activity bar */}
           <button className={`toolbar-btn ${showCodeReview ? "active" : ""}`} onClick={() => { if (currentTab) toggleWorkspaceTool("codeReview", showCodeReview); }} title="Code Review" disabled={!currentTab}><ShieldCheck size={15} /></button>
           <button className={`toolbar-btn ${showLivePreview ? "active" : ""}`} onClick={() => { if (currentTab) toggleWorkspaceTool("livePreview", showLivePreview); }} title="Live Preview" disabled={!currentTab}><Monitor size={15} /></button>
           <button className={`toolbar-btn ${showTestGenerator ? "active" : ""}`} onClick={() => { if (currentTab) toggleWorkspaceTool("testGenerator", showTestGenerator); }} title="Generate Tests" disabled={!currentTab}><FlaskConical size={15} /></button>
@@ -2967,9 +2959,9 @@ export default function App() {
                     <FolderCog size={14} />
                     <span>Open Data Folder</span>
                   </button>
-                  <button onClick={() => { handleJoinDiscord(); setShowHelpMenu(false); }}>
+                  <button onClick={() => { handleOpenGitHub(); setShowHelpMenu(false); }}>
                     <ExternalLink size={14} />
-                    <span>Join Discord</span>
+                    <span>Report Issue</span>
                   </button>
                   <button onClick={() => { setShowAbout(true); setShowHelpMenu(false); }}>
                     <Info size={14} />
@@ -2983,9 +2975,9 @@ export default function App() {
         </div>
       </div>
 
-      {/* Main body — activity bar + resizable split (sidebar + editor + ai) */}
+      {/* Main body â€” activity bar + resizable split (sidebar + editor + ai) */}
       <div className="app-body">
-        {/* Activity Bar — outside Split, never resized */}
+        {/* Activity Bar â€” outside Split, never resized */}
         {!zenMode && (
           <ActivityBar
             active={activityView}
@@ -3085,11 +3077,11 @@ export default function App() {
                 files={files}
                 projectPath={projectPath}
                 loading={filesLoading}
-                onFileSelect={stableHandleFileSelect}
+                onFileSelect={handleFileSelect}
                 onRefresh={refreshFiles}
-                onPathDeleted={stableHandlePathDeleted}
-                onPathRenamed={stableHandlePathRenamed}
-                onBeforePathAction={stableConfirmPathOperation}
+                onPathDeleted={handlePathDeleted}
+                onPathRenamed={handlePathRenamed}
+                onBeforePathAction={confirmPathOperation}
                 selectedFile={currentTab?.path}
               />
             )}
@@ -3196,7 +3188,7 @@ export default function App() {
                         </Suspense>
                       ) : (
         <>
-        {/* Merge conflict resolver — shown when active file has conflict markers */}
+        {/* Merge conflict resolver â€” shown when active file has conflict markers */}
         {currentTab.content && hasConflictMarkers(currentTab.content) && (
           <MergeConflictPanel
             filePath={currentTab.path}
@@ -3245,7 +3237,7 @@ export default function App() {
                 }
               }}
             />
-        {/* Inline diff preview toolbar — shown when AI generates edits for the active file */}
+        {/* Inline diff preview toolbar â€” shown when AI generates edits for the active file */}
         {inlineDiff.state.activeFile === currentTab.path && inlineDiff.state.hunks.length > 0 && (
           <InlineDiffPreview
             hunks={inlineDiff.state.hunks}
@@ -3305,9 +3297,7 @@ export default function App() {
                   </div>
                   {!hasBottomPanel && (
                     <div className="welcome-footer">
-                      <button className="welcome-footer-link" onClick={() => handleOpenExternal(PUNAM_WEBSITE_URL)}><Globe size={12} /><span>Documentation</span></button>
-                      <span className="welcome-footer-dot">·</span>
-                      <button className="welcome-footer-link" onClick={handleJoinDiscord}><ExternalLink size={12} /><span>Discord</span><span className="welcome-badge welcome-badge--subtle">Alpha</span></button>
+                      <span style={{ fontSize: 11, color: "var(--text-secondary)" }}>PunamIDE {PUNAM_VERSION}</span>
                     </div>
                   )}
                 </div>
@@ -3373,7 +3363,7 @@ export default function App() {
           </Split>
         </div>
 
-        {/* AI Chat Panel — right side panel with tabs */}
+        {/* AI Chat Panel â€” right side panel with tabs */}
         {(showAiPanel || activityView === "ai") && (
           <div className="ai-panel" role="complementary" aria-label="AI assistant">
             <PanelErrorBoundary fallbackLabel="Right Panel">
@@ -3419,7 +3409,7 @@ export default function App() {
       </Split>
 
       </div>
-      {/* ── End of app body ── */}
+      {/* â”€â”€ End of app body â”€â”€ */}
 
       {/* Status Bar */}
       <StatusBar
@@ -3606,7 +3596,7 @@ export default function App() {
       {/* Fuzzy File Picker (Ctrl+P) */}
       {showFuzzyPicker && (
         <FuzzyFilePicker
-          projectPath={projectPath}
+          files={files}
           recentPaths={recentPaths}
           onSelect={(relativePath) => {
             setShowFuzzyPicker(false);
@@ -3668,7 +3658,7 @@ export default function App() {
                 <Download size={14} />
                 Export Report
               </button>
-              <button className="btn-primary compact" onClick={handleJoinDiscord}>
+              <button className="btn-primary compact" onClick={handleOpenGitHub}>
                 <ExternalLink size={14} />
                 Discord
               </button>
@@ -3758,8 +3748,8 @@ export default function App() {
               <div className="alpha-diagnostics-item"><span>License</span><strong>{PUNAM_LICENSE}</strong></div>
             </div>
             <div className="alpha-about-list">
-              {ALPHA_RELEASE_NOTES.map((note) => (
-                <div key={note}>{note}</div>
+              {PUNAM_CHANGELOG.slice(0, 5).map((note, index) => (
+                <div key={`note-${index}`}>{note}</div>
               ))}
             </div>
             <div className="alpha-changelog">
@@ -3784,7 +3774,7 @@ export default function App() {
                 <RefreshCw size={14} />
                 Check for Updates
               </button>
-              <button className="btn-primary compact" onClick={handleJoinDiscord}>
+              <button className="btn-primary compact" onClick={handleOpenGitHub}>
                 <ExternalLink size={14} />
                 Discord
               </button>
@@ -3977,7 +3967,7 @@ export default function App() {
               </div>
               <div className="shortcuts-section">
                 <h3>Terminal</h3>
-                <div className="shortcut-row"><kbd>↑ / ↓</kbd><span>Command history</span></div>
+                <div className="shortcut-row"><kbd>â†‘ / â†“</kbd><span>Command history</span></div>
                 <div className="shortcut-row"><kbd>Ctrl+C</kbd><span>Stop running process</span></div>
                 <div className="shortcut-row"><kbd>clear</kbd><span>Clear terminal output</span></div>
               </div>
@@ -4011,7 +4001,7 @@ export default function App() {
         </Suspense>
       )}
 
-      {/* Zen mode exit button — only rendered when in zen mode */}
+      {/* Zen mode exit button â€” only rendered when in zen mode */}
       {zenMode && (
         <button
           className="zen-mode-exit-btn"
@@ -4027,12 +4017,12 @@ export default function App() {
       {/* Toast Notifications */}
       <div className="toast-container">
         {toasts.map((toast) => {
-          const icons: Record<string, string> = { success: "✓", error: "✕", warning: "⚠", info: "ℹ" };
+          const icons: Record<string, string> = { success: "âœ“", error: "âœ•", warning: "âš ", info: "â„¹" };
           return (
             <div key={toast.id} className={`toast toast-${toast.type}`} role="alert">
               <span className="toast-icon">{icons[toast.type]}</span>
               <span className="toast-message">{toast.message}</span>
-              <button className="toast-close" onClick={() => setToasts((prev) => prev.filter((t) => t.id !== toast.id))} aria-label="Dismiss">×</button>
+              <button className="toast-close" onClick={() => setToasts((prev) => prev.filter((t) => t.id !== toast.id))} aria-label="Dismiss">Ã—</button>
               <div className="toast-progress" />
             </div>
           );

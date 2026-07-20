@@ -18,7 +18,7 @@ export function initObservability() {
     Sentry.init({
       dsn: SENTRY_DSN,
       environment: import.meta.env.MODE,
-      release: "punamide@2.0.0-alpha.1",
+      release: "punamide@2.1.4",
       sendDefaultPii: false,
       tracesSampleRate: 0,
     });

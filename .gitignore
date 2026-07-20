@@ -78,3 +78,12 @@ Thumbs.db
 new.punam
 kilo.json
 *.kilo.json
+
+# ── Internal dev notes (not for public repo) ─────────────────
+tda-polishness-plan.md
+TDA_MIGRATION_STATUS.md
+docs/TDA-AUDIT-2026-07-20.md
+
+# ── Rust build artifacts ─────────────────────────────────────
+src-tauri/.cargo_check_ok
+src-tauri/.rust_src_hash

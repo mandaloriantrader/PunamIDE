@@ -106,6 +106,10 @@ export const setProjectRoot = async (path: string) => {
 export const readDirectory = (path: string) =>
   invoke<FileEntry[]>("read_directory", { path });
 
+/** Shallow read — returns immediate children of one folder (dirs have children=undefined). */
+export const readDirectoryShallow = (path: string) =>
+  invoke<FileEntry[]>("read_directory_shallow", { path });
+
 export const readFile = (path: string) =>
   invoke<string>("read_file", { path });
 

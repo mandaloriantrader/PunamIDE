@@ -111,8 +111,8 @@ Multi-provider AI, agentic tool-calling, technical debt analysis, and a full IDE
 
 | Installer | Link |
 |---|---|
-| Windows Installer (recommended) | [PunamIDE v2.0_2.1.2_x64-setup.exe](https://github.com/punamide/punamide-downloads/releases/download/v2.1.2/PunamIDE.v2.0_2.1.2_x64-setup.exe) |
-| Windows MSI (admin/enterprise) | [PunamIDE v2.0_2.1.2_x64_en-US.msi](https://github.com/punamide/punamide-downloads/releases/download/v2.1.2/PunamIDE.v2.0_2.1.2_x64_en-US.msi) |
+| Windows Installer (recommended) | [PunamIDE v2.0_2.1.4_x64-setup.exe](https://github.com/punamide/punamide-downloads/releases/download/v2.1.4/PunamIDE.v2.0_2.1.4_x64-setup.exe) |
+| Windows MSI (admin/enterprise) | [PunamIDE v2.0_2.1.4_x64_en-US.msi](https://github.com/punamide/punamide-downloads/releases/download/v2.1.4/PunamIDE.v2.0_2.1.4_x64_en-US.msi) |
 
 All releases → [github.com/punamide/punamide-downloads/releases](https://github.com/punamide/punamide-downloads/releases)
 

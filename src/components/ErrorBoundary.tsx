@@ -2,7 +2,7 @@ import { Component } from "react";
 import type { ReactNode, ErrorInfo } from "react";
 import { logger } from "./Logger";
 import { APP_NAME, DEFAULT_PANEL_ERROR_MESSAGE, UNKNOWN_PANEL_ERROR_MESSAGE, FULL_APP_ERROR_MESSAGE, DEFAULT_ERROR_DESCRIPTION, RELOAD_BUTTON_TEXT } from "../lib/constants";
-import { PUNAM_DISCORD_URL } from "../config/alpha";
+import { PUNAM_GITHUB_URL } from "../config/alpha";
 
 interface Props {
   children: ReactNode;
@@ -114,9 +114,9 @@ export default class ErrorBoundary extends Component<Props, State> {
     }
   };
 
-  private openDiscord = async () => {
+  private openSupport = async () => {
     const { open } = await import("@tauri-apps/plugin-shell");
-    await open(PUNAM_DISCORD_URL);
+    await open(PUNAM_GITHUB_URL);
   };
 
   render() {
@@ -155,7 +155,7 @@ export default class ErrorBoundary extends Component<Props, State> {
           <div style={{ display: "flex", gap: 10, flexWrap: "wrap", justifyContent: "center" }}>
             <button onClick={this.copyError} style={errorButtonStyle}>Copy Error</button>
             <button onClick={this.exportLogs} style={errorButtonStyle}>Export Logs</button>
-            <button onClick={this.openDiscord} style={errorButtonStyle}>Open Discord</button>
+            <button onClick={this.openSupport} style={errorButtonStyle}>Report Issue</button>
             <button
               onClick={() => window.location.reload()}
               style={{

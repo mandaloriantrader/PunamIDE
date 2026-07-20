@@ -1,5 +1,6 @@
+use std::collections::HashSet;
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 use tauri::State;
 
@@ -31,16 +32,13 @@ pub fn set_project_root(
     Ok(())
 }
 
-/// Read ONLY the immediate children of the requested directory.
-/// No recursion — returns a flat list with `children: None`.
-/// The frontend calls this lazily when expanding a folder.
 #[tauri::command]
 pub async fn read_directory(path: String, state: State<'_, ProjectRoot>) -> Result<Vec<FileEntry>, String> {
     let root = Path::new(&path);
     if !root.is_dir() {
         return Err(format!("Not a directory: {}", path));
     }
-    // If project root is set, validate; otherwise allow (initial open)
+    // Validate path is within project root
     if let Ok(Some(proj)) = state.0.lock().map(|g| g.clone()) {
         let canonical = fs::canonicalize(root).map_err(|e| e.to_string())?;
         let proj_canonical = fs::canonicalize(&proj).map_err(|e| e.to_string())?;
@@ -48,15 +46,48 @@ pub async fn read_directory(path: String, state: State<'_, ProjectRoot>) -> Resu
             return Err("Access denied: path outside project".to_string());
         }
     }
-    read_dir_flat(root)
+    // Move the recursive tree build off the async worker thread so the UI
+    // stays responsive during large project opens.
+    let path_owned = path.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let mut visited = HashSet::new();
+        build_tree(Path::new(&path_owned), 0, 2, &mut visited)
+    })
+    .await
+    .map_err(|e| format!("read_directory task failed: {e}"))?
 }
 
-/// Read the immediate contents of a single directory — no recursion.
-fn read_dir_flat(dir: &Path) -> Result<Vec<FileEntry>, String> {
+/// Shallow directory read — returns immediate children of a single folder.
+/// Directories have children=None (signals "not yet loaded" to the frontend).
+/// Used by the file explorer for lazy-loading on expand.
+#[tauri::command]
+pub async fn read_directory_shallow(path: String, state: State<'_, ProjectRoot>) -> Result<Vec<FileEntry>, String> {
+    let dir = Path::new(&path);
+    if !dir.is_dir() {
+        return Err(format!("Not a directory: {}", path));
+    }
+    // Validate path is within project root
+    if let Ok(Some(proj)) = state.0.lock().map(|g| g.clone()) {
+        let canonical = fs::canonicalize(dir).map_err(|e| e.to_string())?;
+        let proj_canonical = fs::canonicalize(&proj).map_err(|e| e.to_string())?;
+        if !canonical.starts_with(&proj_canonical) {
+            return Err("Access denied: path outside project".to_string());
+        }
+    }
+    let path_owned = path.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        read_single_level(Path::new(&path_owned))
+    })
+    .await
+    .map_err(|e| format!("read_directory_shallow task failed: {e}"))?
+}
+
+/// Reads one level of a directory — no recursion.
+/// Dirs get children=None, files get children=None (as before).
+fn read_single_level(dir: &Path) -> Result<Vec<FileEntry>, String> {
     let read_dir = fs::read_dir(dir).map_err(|e| e.to_string())?;
 
     let mut items: Vec<_> = read_dir.filter_map(|e| e.ok()).collect();
-    // Directories first, then alphabetical
     items.sort_by(|a, b| {
         let a_is_dir = a.file_type().map(|t| t.is_dir()).unwrap_or(false);
         let b_is_dir = b.file_type().map(|t| t.is_dir()).unwrap_or(false);
@@ -69,13 +100,11 @@ fn read_dir_flat(dir: &Path) -> Result<Vec<FileEntry>, String> {
     });
 
     let mut entries: Vec<FileEntry> = Vec::new();
-
     for item in items {
         let name = item.file_name().to_string_lossy().to_string();
         let file_path = item.path();
         let is_dir = item.file_type().map(|t| t.is_dir()).unwrap_or(false);
 
-        // Skip hidden files/folders (except .env.example)
         if name.starts_with('.') && name != ".env.example" {
             continue;
         }
@@ -90,7 +119,65 @@ fn read_dir_flat(dir: &Path) -> Result<Vec<FileEntry>, String> {
             name,
             path: file_path.to_string_lossy().to_string(),
             is_dir,
-            children: None, // No pre-loaded children — loaded lazily by frontend
+            children: None, // Not loaded yet — frontend will fetch on expand
+        });
+    }
+
+    Ok(entries)
+}
+
+pub(crate) fn build_tree(dir: &Path, depth: usize, max_depth: usize, visited: &mut HashSet<PathBuf>) -> Result<Vec<FileEntry>, String> {
+    if depth >= max_depth {
+        return Ok(vec![]);
+    }
+
+    // Symlink cycle detection: canonicalize and check if already visited
+    let canonical = fs::canonicalize(dir).unwrap_or_else(|_| dir.to_path_buf());
+    if !visited.insert(canonical) {
+        return Ok(vec![]); // Already visited — skip to prevent infinite recursion
+    }
+
+    let mut entries: Vec<FileEntry> = Vec::new();
+    let read_dir = fs::read_dir(dir).map_err(|e| e.to_string())?;
+
+    let mut items: Vec<_> = read_dir.filter_map(|e| e.ok()).collect();
+    items.sort_by(|a, b| {
+        let a_is_dir = a.file_type().map(|t| t.is_dir()).unwrap_or(false);
+        let b_is_dir = b.file_type().map(|t| t.is_dir()).unwrap_or(false);
+        b_is_dir.cmp(&a_is_dir).then(
+            a.file_name()
+                .to_string_lossy()
+                .to_lowercase()
+                .cmp(&b.file_name().to_string_lossy().to_lowercase()),
+        )
+    });
+
+    for item in items {
+        let name = item.file_name().to_string_lossy().to_string();
+        let file_path = item.path();
+        let is_dir = item.file_type().map(|t| t.is_dir()).unwrap_or(false);
+
+        if name.starts_with('.') && name != ".env.example" {
+            continue;
+        }
+        if is_dir && SKIP_DIRS.contains(&name.as_str()) {
+            continue;
+        }
+        if !is_dir && SKIP_FILES.contains(&name.as_str()) {
+            continue;
+        }
+
+        let children = if is_dir {
+            Some(build_tree(&file_path, depth + 1, max_depth, visited).unwrap_or_default())
+        } else {
+            None
+        };
+
+        entries.push(FileEntry {
+            name,
+            path: file_path.to_string_lossy().to_string(),
+            is_dir,
+            children,
         });
     }
 
@@ -98,18 +185,22 @@ fn read_dir_flat(dir: &Path) -> Result<Vec<FileEntry>, String> {
 }
 
 #[tauri::command]
-pub fn read_file(path: String, state: State<ProjectRoot>) -> Result<String, String> {
+pub async fn read_file(path: String, state: State<'_, ProjectRoot>) -> Result<String, String> {
     let root = get_project_root(&state)?;
     let safe_path = validate_path_within_project(&path, &root)?;
-    let p = Path::new(&safe_path);
+    let p = std::path::PathBuf::from(&safe_path);
     if !p.is_file() {
         return Err(format!("Not a file: {}", path));
     }
-    let size = fs::metadata(p).map_err(|e| e.to_string())?.len();
+    let size = fs::metadata(&p).map_err(|e| e.to_string())?.len();
     if size > 2_000_000 {
         return Err("File too large (>2MB)".to_string());
     }
-    fs::read_to_string(p).map_err(|e| format!("Failed to read: {}", e))
+    tauri::async_runtime::spawn_blocking(move || {
+        fs::read_to_string(&p).map_err(|e| format!("Failed to read: {}", e))
+    })
+    .await
+    .map_err(|e| format!("read_file task failed: {e}"))?
 }
 
 #[tauri::command]

@@ -510,7 +510,7 @@ export default function SecurityPanel({ projectPath }: { projectPath?: string })
           </div>
           <div style={{ fontSize: "10px", marginTop: "4px", opacity: 0.7 }}>
             {hasRunScan
-              ? `Scanned ${scanStats.filesScanned} source file${scanStats.filesScanned === 1 ? "" : "s"}. This alpha scan checks known risky code patterns, not every possible vulnerability.`
+              ? `Scanned ${scanStats.filesScanned} source file${scanStats.filesScanned === 1 ? "" : "s"}. Pattern-based scan checks known risky code patterns.`
               : "Run a scan to check the project for known risky code patterns."}
           </div>
           {hasRunScan && scanStats.capped && (
@@ -529,7 +529,7 @@ export default function SecurityPanel({ projectPath }: { projectPath?: string })
         color: "var(--text-secondary, #a0a0b0)",
         marginTop: "auto",
       }}>
-        Alpha security scan: source pattern checks only. Critical findings block AI patch apply.
+        Security scan: pattern-based source code analysis. Critical findings block AI patch apply.
       </div>
     </div>
   );

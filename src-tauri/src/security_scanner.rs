@@ -11,6 +11,7 @@ use regex_lite::Regex;
 // ── Data Types ─────────────────────────────────────────────────────────────────
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
 pub struct SecurityFinding {
     pub pattern_id: String,
     pub file_path: String,
@@ -25,6 +26,7 @@ pub struct SecurityFinding {
 }
 
 #[derive(Serialize, Debug)]
+#[serde(rename_all = "camelCase")]
 pub struct SecurityScanResult {
     pub file_path: String,
     pub findings: Vec<SecurityFinding>,
@@ -35,6 +37,7 @@ pub struct SecurityScanResult {
 }
 
 #[derive(Serialize, Debug)]
+#[serde(rename_all = "camelCase")]
 pub struct PatchSecurityResult {
     pub allowed: bool,
     pub blocked: bool,

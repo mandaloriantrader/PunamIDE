@@ -1447,7 +1447,7 @@ fn watch_project(
 
     let app_clone = app.clone();
     let mut debouncer = new_debouncer(
-        Duration::from_millis(150),
+        Duration::from_millis(500),
         move |result: Result<Vec<notify_debouncer_mini::DebouncedEvent>, notify::Error>| {
             if let Ok(events) = result {
                 let mut paths: Vec<String> = Vec::new();
@@ -2567,6 +2567,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             fs_commands::set_project_root,
             fs_commands::read_directory,
+            fs_commands::read_directory_shallow,
             fs_commands::read_file,
             agent_tools::read_lines,
             agent_tools::apply_patch,
