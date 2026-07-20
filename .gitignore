@@ -87,3 +87,12 @@ docs/TDA-AUDIT-2026-07-20.md
 # ── Rust build artifacts ─────────────────────────────────────
 src-tauri/.cargo_check_ok
 src-tauri/.rust_src_hash
+
+# ── Removed from repo (not needed publicly) ──────────────
+npm-shrinkwrap.json
+build_installers.bat
+.punam/
+media/screenshots/enhanced/
+media/screenshots/photos-final/
+media/screenshots/new-images-to-replace-where-see-fits/
+media/screenshots/README.md
