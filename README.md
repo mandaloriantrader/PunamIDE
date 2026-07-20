@@ -1,15 +1,15 @@
-<div align="center">
+﻿<div align="center">
 
 <img src="media/logo.png" alt="PunamIDE Logo" width="120" />
 
-# PunamIDE v2.2.0
+# PunamIDE v2.1.4
 
 **A native AI-powered code editor built with Tauri 2, React 19, and Monaco Editor.**  
-Multi-provider AI, agentic tool-calling, technical debt analysis, and a full IDE experience — all running locally on your machine.
+Multi-provider AI, agentic tool-calling, technical debt analysis, and a full IDE experience â€” all running locally on your machine.
 
 <br/>
 
-[![Version](https://img.shields.io/badge/version-2.2.0-blue?style=flat-square)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-2.1.4-blue?style=flat-square)](CHANGELOG.md)
 [![License](https://img.shields.io/badge/license-MIT-green?style=flat-square)](LICENSE)
 [![Tauri](https://img.shields.io/badge/Tauri-2.11-purple?style=flat-square&logo=tauri)](https://tauri.app)
 [![React](https://img.shields.io/badge/React-19-61DAFB?style=flat-square&logo=react)](https://react.dev)
@@ -20,7 +20,7 @@ Multi-provider AI, agentic tool-calling, technical debt analysis, and a full IDE
 
 <br/>
 
-[![Download](https://img.shields.io/badge/Download-v2.2.0-brightgreen?style=flat-square&logo=windows)](https://github.com/punamide/punamide-downloads/releases/tag/v2.2.0)
+[![Download](https://img.shields.io/badge/Download-v2.1.4-brightgreen?style=flat-square&logo=windows)](https://github.com/mandaloriantrader/PunamIDE/releases/tag/v2.1.4)
 [![Website](https://img.shields.io/badge/Website-punamide.com-blue?style=flat-square&logo=googlechrome)](https://punamide.com)
 [![Discord](https://img.shields.io/badge/Discord-Join_Community-5865F2?style=flat-square&logo=discord)](https://discord.gg/PFp9KWY3eY)
 [![X](https://img.shields.io/badge/X-@PunamIDE-000000?style=flat-square&logo=x)](https://x.com/PunamIDE)
@@ -75,15 +75,15 @@ Multi-provider AI, agentic tool-calling, technical debt analysis, and a full IDE
 ### Main Interface
 ![PunamIDE Main Interface](media/screenshots/new-images-to-replace-where-see-fits/punamIDE-homepage-with--editor.gif)
 
-### BYOK — Bring Your Own Key (Multi-Provider)
+### BYOK â€” Bring Your Own Key (Multi-Provider)
 ![AI Providers](media/screenshots/photos-of-features/BYOK_providers.png)
 
 ### Technical Debt Analysis
 ![Technical Debt Dashboard](media/screenshots/photos-of-features/tech-debt-1.png)
 
-![Technical Debt — File Details](media/screenshots/photos-of-features/tech-debt-2.png)
+![Technical Debt â€” File Details](media/screenshots/photos-of-features/tech-debt-2.png)
 
-![Technical Debt — Metrics](media/screenshots/photos-of-features/tech-debt-3.png)
+![Technical Debt â€” Metrics](media/screenshots/photos-of-features/tech-debt-3.png)
 
 ### Architecture & Dependency Graph
 ![Architectural Dependency Graph](media/screenshots/photos-of-features/architectural_dependency_graph.png)
@@ -111,16 +111,16 @@ Multi-provider AI, agentic tool-calling, technical debt analysis, and a full IDE
 
 | Installer | Link |
 |---|---|
-| Windows Installer (recommended) | [PunamIDE v2.0_2.1.4_x64-setup.exe](https://github.com/punamide/punamide-downloads/releases/download/v2.1.4/PunamIDE.v2.0_2.1.4_x64-setup.exe) |
-| Windows MSI (admin/enterprise) | [PunamIDE v2.0_2.1.4_x64_en-US.msi](https://github.com/punamide/punamide-downloads/releases/download/v2.1.4/PunamIDE.v2.0_2.1.4_x64_en-US.msi) |
+| Windows Installer (recommended) | [PunamIDE v2.0_2.1.4_x64-setup.exe](https://github.com/mandaloriantrader/PunamIDE/releases/download/v2.1.4/PunamIDE.v2.0_2.1.4_x64-setup.exe) |
+| Windows MSI (admin/enterprise) | [PunamIDE v2.0_2.1.4_x64_en-US.msi](https://github.com/mandaloriantrader/PunamIDE/releases/download/v2.1.4/PunamIDE.v2.0_2.1.4_x64_en-US.msi) |
 
-All releases → [github.com/punamide/punamide-downloads/releases](https://github.com/punamide/punamide-downloads/releases)
+All releases â†’ [github.com/mandaloriantrader/PunamIDE/releases](https://github.com/mandaloriantrader/PunamIDE/releases)
 
 **Installation:**
 1. Download the `.exe` installer
-2. Run it — upgrades in-place if v2.1.x is already installed
+2. Run it â€” upgrades in-place if v2.1.x is already installed
 3. Launch PunamIDE
-4. Open **Settings → Providers** and add your AI API key
+4. Open **Settings â†’ Providers** and add your AI API key
 5. Start coding
 
 ---
@@ -129,11 +129,11 @@ All releases → [github.com/punamide/punamide-downloads/releases](https://githu
 
 | | |
 |---|---|
-| 🌐 Website | [punamide.com](https://punamide.com) |
-| 💬 Discord | [discord.gg/PFp9KWY3eY](https://discord.gg/PFp9KWY3eY) |
-| 🐦 X / Twitter | [@PunamIDE](https://x.com/PunamIDE) |
-| 📦 Releases | [punamide/punamide-downloads](https://github.com/punamide/punamide-downloads/releases) |
-| 🐛 Issues | [GitHub Issues](https://github.com/mandaloriantrader/PunamIDE/issues) |
+| ðŸŒ Website | [punamide.com](https://punamide.com) |
+| ðŸ’¬ Discord | [discord.gg/PFp9KWY3eY](https://discord.gg/PFp9KWY3eY) |
+| ðŸ¦ X / Twitter | [@PunamIDE](https://x.com/PunamIDE) |
+| ðŸ“¦ Releases | [punamide/punamide-downloads](https://github.com/mandaloriantrader/PunamIDE/releases) |
+| ðŸ› Issues | [GitHub Issues](https://github.com/mandaloriantrader/PunamIDE/issues) |
 
 ---
 
@@ -156,7 +156,7 @@ autorun.bat
 cargo tauri dev
 ```
 
-> All AI provider API keys are configured inside the app via **Settings → Providers**. No `.env` file needed.
+> All AI provider API keys are configured inside the app via **Settings â†’ Providers**. No `.env` file needed.
 
 ---
 
@@ -204,7 +204,7 @@ PunamIDE supports **7 AI providers** with independent API key management, per-mo
 
 ![AI Chat](media/screenshots/new-images-to-replace-where-see-fits/punamide-Aiagent.png)
 
-The AI panel is a full agentic loop — the model can autonomously use tools, read and write files, run commands, and iterate until the task is complete.
+The AI panel is a full agentic loop â€” the model can autonomously use tools, read and write files, run commands, and iterate until the task is complete.
 
 **Chat:**
 - Multi-turn conversation with full project context awareness
@@ -213,7 +213,7 @@ The AI panel is a full agentic loop — the model can autonomously use tools, re
 - Vision support (image input) for supported models
 - Streaming responses with real-time token display
 
-**Agent Tools — callable by AI:**
+**Agent Tools â€” callable by AI:**
 
 | Tool | Description |
 |---|---|
@@ -237,30 +237,30 @@ Spawn multiple specialized agents running in parallel:
 |---|---|
 | `implementation` | Write to `src/`, `src-tauri/src/` |
 | `test` | Write only to `*.test.ts` / `*.spec.ts` |
-| `architecture` | Read-only observer — can veto patches |
-| `security` | Read-only scanner — can block critical patches |
+| `architecture` | Read-only observer â€” can veto patches |
+| `security` | Read-only scanner â€” can block critical patches |
 | `refactor` | Same as implementation + architecture re-validation |
 
 **Safety & Control:**
-- **Autopilot mode** — auto-approves safe reads/writes; dangerous commands still require approval
-- **Supervised mode** — every write and command requires explicit per-action approval
-- **Agent Approval Gate** — accept/reject individual tool calls
-- **Budget enforcement** — set per-task token and cost limits with warning dialogs
-- **Loop Guard** — prevents infinite tool-calling loops
-- **Ambiguity detection** — AI asks clarifying questions before proceeding on unclear tasks
-- **Architecture guardrail** — all AI-proposed writes validated against your defined rules before apply
+- **Autopilot mode** â€” auto-approves safe reads/writes; dangerous commands still require approval
+- **Supervised mode** â€” every write and command requires explicit per-action approval
+- **Agent Approval Gate** â€” accept/reject individual tool calls
+- **Budget enforcement** â€” set per-task token and cost limits with warning dialogs
+- **Loop Guard** â€” prevents infinite tool-calling loops
+- **Ambiguity detection** â€” AI asks clarifying questions before proceeding on unclear tasks
+- **Architecture guardrail** â€” all AI-proposed writes validated against your defined rules before apply
 
 **Context Intelligence:**
-- **Context assembler** — pulls open files, symbols, git diff, errors into AI context
-- **Context compressor** — smart truncation keeping the most relevant content
-- **Context sidebar** — visual breakdown of what's in the AI context window
-- **Context window bar** — live token usage indicator in chat
+- **Context assembler** â€” pulls open files, symbols, git diff, errors into AI context
+- **Context compressor** â€” smart truncation keeping the most relevant content
+- **Context sidebar** â€” visual breakdown of what's in the AI context window
+- **Context window bar** â€” live token usage indicator in chat
 
 **Planning & Reasoning:**
-- **Task Planner** — AI generates a step-by-step plan before executing
-- **Reasoning Panel** — shows chain-of-thought in compact or expanded mode
-- **Refinement loop** — post-response quality check and auto-retry
-- **Session memory** — persists decisions and summaries across turns
+- **Task Planner** â€” AI generates a step-by-step plan before executing
+- **Reasoning Panel** â€” shows chain-of-thought in compact or expanded mode
+- **Refinement loop** â€” post-response quality check and auto-retry
+- **Session memory** â€” persists decisions and summaries across turns
 
 ---
 
@@ -268,14 +268,14 @@ Spawn multiple specialized agents running in parallel:
 
 ![Code Editor](media/screenshots/new-images-to-replace-where-see-fits/punamide-code-editor.png)
 
-- **Monaco Editor** — identical to VS Code's editing engine
-- **Split editor** — side-by-side file comparison
-- **Inline AI Edit** (`Ctrl+K`) — edit selected code with a natural language instruction
-- **Inline Diff Preview** — proposed changes shown in editor gutter before applying
-- **Edit Preview Panel** — accept/reject AI edits per hunk
-- **Breakpoint glyphs** — visual breakpoint markers
-- **Find & Replace** — in-file search with regex
-- **File templates** — new file creation with language-specific boilerplate
+- **Monaco Editor** â€” identical to VS Code's editing engine
+- **Split editor** â€” side-by-side file comparison
+- **Inline AI Edit** (`Ctrl+K`) â€” edit selected code with a natural language instruction
+- **Inline Diff Preview** â€” proposed changes shown in editor gutter before applying
+- **Edit Preview Panel** â€” accept/reject AI edits per hunk
+- **Breakpoint glyphs** â€” visual breakpoint markers
+- **Find & Replace** â€” in-file search with regex
+- **File templates** â€” new file creation with language-specific boilerplate
 - **Auto-save** with configurable delay
 - **Multi-tab editor** with tab management
 - **Breadcrumbs** navigation bar
@@ -289,10 +289,10 @@ Ghost-text inline completion powered by AI with zero external services required.
 
 - **FIM (Fill-in-Middle)** mode for models that support it (Codestral, DeepSeek Coder, etc.)
 - **Chat fallback** mode for all other models
-- **Auto-detect** — picks the best strategy per provider automatically
-- **Completion cache** — avoids redundant API requests
-- **Smart suppression** — no completions inside comments or string literals when not useful
-- **Configurable:** debounce delay (150ms+), max tokens (16–512), enable/disable per project
+- **Auto-detect** â€” picks the best strategy per provider automatically
+- **Completion cache** â€” avoids redundant API requests
+- **Smart suppression** â€” no completions inside comments or string literals when not useful
+- **Configurable:** debounce delay (150ms+), max tokens (16â€“512), enable/disable per project
 
 ---
 
@@ -300,11 +300,11 @@ Ghost-text inline completion powered by AI with zero external services required.
 
 ![Terminal](media/screenshots/new-images-to-replace-where-see-fits/punamide-code-editor.png)
 
-- **Real PTY terminal** via `portable-pty` (Rust) — not a fake shell simulation
+- **Real PTY terminal** via `portable-pty` (Rust) â€” not a fake shell simulation
 - **xterm.js** rendering with full ANSI color, fit, and web links
 - **Multiple terminal sessions**
-- **Terminal error parser** — auto-surfaces actionable quick-fix suggestions from errors
-- **Proactive error detection** — watches output and notifies when build/test errors appear
+- **Terminal error parser** â€” auto-surfaces actionable quick-fix suggestions from errors
+- **Proactive error detection** â€” watches output and notifies when build/test errors appear
 
 ---
 
@@ -312,7 +312,7 @@ Ghost-text inline completion powered by AI with zero external services required.
 
 ![Git Panel](media/screenshots/photos-of-features/git.png)
 
-**Local Git** (native via `git2` Rust library — no `git` CLI required):
+**Local Git** (native via `git2` Rust library â€” no `git` CLI required):
 - Stage / unstage / commit
 - Branch management
 - Syntax-highlighted diff viewer
@@ -339,16 +339,16 @@ Ghost-text inline completion powered by AI with zero external services required.
 
 ![Debugger](media/screenshots/new-images-to-replace-where-see-fits/punamIDE-debug-1.png)
 
-![Debugger � Variables](media/screenshots/new-images-to-replace-where-see-fits/punamIDe-debug-2.png)
+![Debugger ï¿½ Variables](media/screenshots/new-images-to-replace-where-see-fits/punamIDe-debug-2.png)
 
-![Debugger � Full Report](media/screenshots/new-images-to-replace-where-see-fits/punamIDE-debug-fullreport.png)
+![Debugger ï¿½ Full Report](media/screenshots/new-images-to-replace-where-see-fits/punamIDE-debug-fullreport.png)
 
-- **DAP (Debug Adapter Protocol)** — industry-standard debug protocol via Rust backend
-- **DAPBridge** — frontend ↔ Rust communication layer
-- **Debug configuration picker** — select and manage launch configs
-- **Breakpoint management** — set, remove, toggle breakpoints
+- **DAP (Debug Adapter Protocol)** â€” industry-standard debug protocol via Rust backend
+- **DAPBridge** â€” frontend â†” Rust communication layer
+- **Debug configuration picker** â€” select and manage launch configs
+- **Breakpoint management** â€” set, remove, toggle breakpoints
 - **Variables, call stack, watch** panels
-- **Run profiles** — configurable launch configurations
+- **Run profiles** â€” configurable launch configurations
 
 ---
 
@@ -360,12 +360,12 @@ Ghost-text inline completion powered by AI with zero external services required.
 
 ![Debt Metrics](media/screenshots/photos-of-features/tech-debt-3.png)
 
-AST-powered multi-layer analysis with a unified findings engine. Runs in **Web Workers** — no blocking the UI.
+AST-powered multi-layer analysis with a unified findings engine. Runs in **Web Workers** â€” no blocking the UI.
 
 | Analyzer | Description |
 |---|---|
 | **AST Engine** | Tree-sitter parsing for JS, TS, Python, Rust |
-| **Debt Scorer** | Quantified 0–100 debt score per file and project |
+| **Debt Scorer** | Quantified 0â€“100 debt score per file and project |
 | **Dependency Graph** | Full import/dependency graph builder |
 | **Dead Code Analyzer** | AST-based detection of unused exports, imports, declarations |
 | **Circular Dependency Detector** | Finds import cycles with severity classification |
@@ -375,25 +375,25 @@ AST-powered multi-layer analysis with a unified findings engine. Runs in **Web W
 | **Graph Exporter** | Export as DOT, JSON, or Mermaid |
 | **Refactor Planner** | Prioritized queue: quick wins, major refactors, architectural issues |
 
-**New in v2.2.0 — Unified Code Intelligence Engine (`services/review/`)**
+**New in v2.1.4 â€” Unified Code Intelligence Engine (`services/review/`)**
 
 | Layer | Phase | Description |
 |---|---|---|
-| **Unified Findings Panel** | P1 | All findings (debt, security, type, architecture, taint, git, multi-lang) merge into a single sortable dashboard panel — no tab switching |
+| **Unified Findings Panel** | P1 | All findings (debt, security, type, architecture, taint, git, multi-lang) merge into a single sortable dashboard panel â€” no tab switching |
 | **Type-Aware Semantic Analysis** | P4 | Real TypeScript Compiler API (`ts-morph`) detects type errors, null access, and logic issues Tree-sitter cannot catch |
-| **Taint Tracking** | P5 | Cross-file data flow analysis — traces untrusted input from source patterns through the dependency graph to dangerous sinks |
+| **Taint Tracking** | P5 | Cross-file data flow analysis â€” traces untrusted input from source patterns through the dependency graph to dangerous sinks |
 | **Git Signals** | P2 | Per-file churn analysis: commit frequency, author count, lines added/deleted, hot file detection |
 | **Multi-Language Support** | P7 | 9 languages (TS, JS, TSX, JSX, Python, Go, Rust, Java, C#) with per-language calibrated complexity thresholds |
 | **Accuracy Benchmarking** | P8 | Recall, false-positive rate, and F1 score per analysis layer against curated datasets |
 
-**New in v2.2.0 — Fix with AI**
+**New in v2.1.4 â€” Fix with AI**
 
 | Feature | Description |
 |---|---|
-| **One-Click AI Refactoring** | Click "Fix with AI" on any refactor queue item — AI generates a surgical fix with 4 automated guard layers before apply |
+| **One-Click AI Refactoring** | Click "Fix with AI" on any refactor queue item â€” AI generates a surgical fix with 4 automated guard layers before apply |
 | **Scope Isolation** | AI sees ONLY the problem code block (function/class/nesting block), never the full file or codebase |
 | **Diff Preview** | Side-by-side before/after comparison with security scan results and estimated score delta |
-| **Snapshot/Rollback** | Every AI fix snapshots the original file before writing — one-click undo |
+| **Snapshot/Rollback** | Every AI fix snapshots the original file before writing â€” one-click undo |
 | **Provider Agnostic** | Works with any LLM API (OpenAI, Anthropic, Ollama, Azure, AWS, Mistral, Google) via a single `FixLlmProvider` interface |
 
 ---
@@ -404,71 +404,71 @@ AST-powered multi-layer analysis with a unified findings engine. Runs in **Web W
 
 ![Architecture Graph](media/screenshots/photos-of-features/architectural_grapk.png)
 
-- **Dependency Graph View** — interactive visual graph (`@xyflow/react`)
-- **Architecture Engine** — validates AI patches against your defined rules before apply
-- **Rule Engine** — define custom architectural constraints
-- **Impact Analyzer** — predicts blast radius of a proposed change
-- **Change Predictor** — identifies what else might break
-- **Violation Reporter** — surfaces rule violations with file and line context
+- **Dependency Graph View** â€” interactive visual graph (`@xyflow/react`)
+- **Architecture Engine** â€” validates AI patches against your defined rules before apply
+- **Rule Engine** â€” define custom architectural constraints
+- **Impact Analyzer** â€” predicts blast radius of a proposed change
+- **Change Predictor** â€” identifies what else might break
+- **Violation Reporter** â€” surfaces rule violations with file and line context
 
 ---
 
 ### Security Scanner
 
-- **Rust-native scanner** — fast, no external tools needed
-- **Vulnerability patterns** — configurable rule set
-- **Threat analyzer** — contextual severity assessment
-- **Security Panel** — findings with severity levels and file context
-- **Integration** with agent pipeline — security agent can block patches with critical findings
+- **Rust-native scanner** â€” fast, no external tools needed
+- **Vulnerability patterns** â€” configurable rule set
+- **Threat analyzer** â€” contextual severity assessment
+- **Security Panel** â€” findings with severity levels and file context
+- **Integration** with agent pipeline â€” security agent can block patches with critical findings
 
 ---
 
 ### Embeddings & RAG
 
-- **100% local embeddings** via `@xenova/transformers` — runs in-browser, no API key needed
-- **Embedding generator worker** — off-thread generation, no UI blocking
-- **Vector store** — in-memory semantic search over your codebase
-- **Embedding pipeline** (Rust) — batch processing for large projects
-- **RAG Workbench** — test and tune retrieval quality
-- **Chunk Inspector** — inspect how code is split and embedded
-- **Hallucination Detector** — cross-checks AI responses against actual codebase content
-- **Retriever Debugger** — debug why certain chunks are or aren't returned
-- **Memory Engine** (Rust) — persistent embedding store with fast retrieval
+- **100% local embeddings** via `@xenova/transformers` â€” runs in-browser, no API key needed
+- **Embedding generator worker** â€” off-thread generation, no UI blocking
+- **Vector store** â€” in-memory semantic search over your codebase
+- **Embedding pipeline** (Rust) â€” batch processing for large projects
+- **RAG Workbench** â€” test and tune retrieval quality
+- **Chunk Inspector** â€” inspect how code is split and embedded
+- **Hallucination Detector** â€” cross-checks AI responses against actual codebase content
+- **Retriever Debugger** â€” debug why certain chunks are or aren't returned
+- **Memory Engine** (Rust) â€” persistent embedding store with fast retrieval
 
 ---
 
 ### CI/CD Integration
 
-- **CI Monitor** — watches GitHub Actions workflow runs in real time
-- **Log Analyzer** — parses CI logs and extracts errors with context
-- **Patch Generator** — generates fix suggestions from CI failure logs
-- **Verification Runner** — runs local test/build checks before pushing
-- **CI Dashboard** — visual pipeline status panel
+- **CI Monitor** â€” watches GitHub Actions workflow runs in real time
+- **Log Analyzer** â€” parses CI logs and extracts errors with context
+- **Patch Generator** â€” generates fix suggestions from CI failure logs
+- **Verification Runner** â€” runs local test/build checks before pushing
+- **CI Dashboard** â€” visual pipeline status panel
 
 ---
 
 ### Docker
 
-- **Docker Controller** (Rust) — manages container lifecycle natively
-- **Docker Panel** — list, start, stop, inspect containers from inside the IDE
+- **Docker Controller** (Rust) â€” manages container lifecycle natively
+- **Docker Panel** â€” list, start, stop, inspect containers from inside the IDE
 
 ---
 
 ### MCP Support
 
-[Model Context Protocol](https://modelcontextprotocol.io) — connect PunamIDE to external tools and data sources.
+[Model Context Protocol](https://modelcontextprotocol.io) â€” connect PunamIDE to external tools and data sources.
 
-- **MCP Manager** — connect and manage MCP servers
-- **MCP Settings** — configure server connections from the UI
-- **Curated server list** — pre-configured popular MCP servers ready to enable
-- **Tool routing** — MCP tool calls flow through the agent loop seamlessly
+- **MCP Manager** â€” connect and manage MCP servers
+- **MCP Settings** â€” configure server connections from the UI
+- **Curated server list** â€” pre-configured popular MCP servers ready to enable
+- **Tool routing** â€” MCP tool calls flow through the agent loop seamlessly
 
 ---
 
 ## Project Structure
 
 ```
-PunamIDE v2.2.0/
+PunamIDE v2.1.4/
 |-- src/
 |   |-- components/          # 70+ UI components
 |   |   |-- chat/            # Message bubbles, tool cards, context bar
@@ -485,8 +485,8 @@ PunamIDE v2.2.0/
 |   |   |-- lsp/             # LSP client and Monaco bridge
 |   |   |-- mcp/             # MCP server management
 |   |   |-- memory/          # Session memory, decision store
-|   |   |-- refactor/        # Changeset-based refactoring + AiFixHandler (v2.2.0)
-|   |   |-- review/          # Unified Code Intelligence Engine (v2.2.0) — P1-P8 layers
+|   |   |-- refactor/        # Changeset-based refactoring + AiFixHandler (v2.1.4)
+|   |   |-- review/          # Unified Code Intelligence Engine (v2.1.4) â€” P1-P8 layers
 |   |   |-- security/        # Security scanning
 |   |   |-- technicalDebt/   # AST engine, debt scoring, graph
 |   |   +-- testgen/         # AI test generation
@@ -560,13 +560,13 @@ PunamIDE v2.2.0/
 | `Ctrl+N` | New file |
 | `Ctrl+F` | Find in file |
 
-All shortcuts are fully customizable via **Settings → Keybindings**.
+All shortcuts are fully customizable via **Settings â†’ Keybindings**.
 
 ---
 
 ## Configuration
 
-All settings persist via `tauri-plugin-store` in your OS app data directory. Configure via **Settings panel** (gear icon) — no config files to edit manually.
+All settings persist via `tauri-plugin-store` in your OS app data directory. Configure via **Settings panel** (gear icon) â€” no config files to edit manually.
 
 | Setting | Options |
 |---|---|
@@ -626,8 +626,8 @@ npm run build
 ```
 
 Output:
-- Frontend → `dist/`
-- Installer → `src-tauri/target/release/bundle/`
+- Frontend â†’ `dist/`
+- Installer â†’ `src-tauri/target/release/bundle/`
 
 ---
 
@@ -651,16 +651,16 @@ See [CHANGELOG.md](CHANGELOG.md) for the full version history.
 
 ## License
 
-MIT © 2025 Amritanshu Amar — see [LICENSE](LICENSE) for details.
+MIT Â© 2025 Amritanshu Amar â€” see [LICENSE](LICENSE) for details.
 
 ---
 
 <div align="center">
 
-**[Website](https://punamide.com) · [Download](https://github.com/punamide/punamide-downloads/releases) · [Discord](https://discord.gg/PFp9KWY3eY) · [X](https://x.com/PunamIDE)**
+**[Website](https://punamide.com) Â· [Download](https://github.com/mandaloriantrader/PunamIDE/releases) Â· Â· [X](https://x.com/PunamIDE)**
 
 <br/>
 
-Built with ❤️ using Tauri, React, and Rust.
+Built with â¤ï¸ using Tauri, React, and Rust.
 
 </div>
