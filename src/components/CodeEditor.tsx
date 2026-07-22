@@ -8,6 +8,7 @@ import { gitBlameFile, type BlameLine } from "../utils/tauri";
 import InlineEditWidget from "./InlineEditWidget";
 import type { InlineEditPosition } from "./InlineEditWidget";
 import BreakpointGlyphs from "./BreakpointGlyphs";
+import EditorBackground from "./EditorBackground";
 
 // LSP integration
 import { lspManager } from "../services/lsp/lspManager";
@@ -54,6 +55,10 @@ interface Props {
   onSelectionRangeChange?: (selection: { startLine: number; startColumn: number; endLine: number; endColumn: number; text: string } | null) => void;
   /** Called when the user triggers a refactoring operation from the context menu */
   onOpenRefactorPanel?: (mode?: "rename" | "extract" | "move") => void;
+  /** Whether to show the animated node-network background */
+  editorBgAnimation?: boolean;
+  /** Opacity of the editor background animation (0–1) */
+  editorBgOpacity?: number;
 }
 
 const EXT_TO_LANG: Record<string, string> = {
@@ -243,6 +248,8 @@ export default function CodeEditor({
   onEditorReady,
   onOpenTestGenPanel, onSelectionRangeChange,
   onOpenRefactorPanel,
+  editorBgAnimation = true,
+  editorBgOpacity = 0.12,
 }: Props) {
   // ── Inline edit state ──────────────────────────────────────────────────────
   const [inlineEditOpen, setInlineEditOpen] = useState(false);
@@ -611,6 +618,7 @@ export default function CodeEditor({
 
   return (
     <div className="code-editor" style={{ position: "relative" }}>
+      <EditorBackground opacity={editorBgOpacity} nodeCount={50} connectionDistance={140} active={editorBgAnimation} />
       <Editor
         height="100%" path={path} line={line} language={language} value={content}
         beforeMount={handleBeforeMount} onMount={handleMount} theme="punam-runtime"

@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use tauri::State;
 
 use crate::FileIndexEntry;
@@ -29,96 +29,70 @@ use crate::ASTSearchResult;
 // --- Project Context Cache ---
 
 #[tauri::command]
-pub fn get_project_index(state: State<ProjectRoot>, cache: State<ProjectIndexCache>) -> Result<Vec<FileIndexEntry>, String> {
-    let cached = cache.0.read().map_err(|_| "Lock error".to_string())?;
-    if !cached.is_empty() {
-        return Ok(cached.clone());
-    }
-    // If cache is empty, build it now
-    drop(cached);
-    refresh_project_index(state, cache)
+pub async fn get_project_index(state: State<'_, ProjectRoot>, cache: State<'_, ProjectIndexCache>) -> Result<Vec<FileIndexEntry>, String> {
+    {
+        let cached = cache.0.read().map_err(|_| "Lock error".to_string())?;
+        if !cached.is_empty() {
+            return Ok(cached.clone());
+        }
+    } // RwLockReadGuard dropped here — safe to await below
+    refresh_project_index(state, cache).await
 }
 
 #[tauri::command]
-pub fn refresh_project_index(state: State<ProjectRoot>, cache: State<ProjectIndexCache>) -> Result<Vec<FileIndexEntry>, String> {
+pub async fn refresh_project_index(state: State<'_, ProjectRoot>, cache: State<'_, ProjectIndexCache>) -> Result<Vec<FileIndexEntry>, String> {
     let root = get_project_root(&state)?;
-    let root_path = Path::new(&root);
-
-    // Snapshot the existing cache so we can reuse entries for unchanged files.
-    let old_cache = cache.0.read().map_err(|_| "Lock error".to_string())?;
-    let old_map: HashMap<String, FileIndexEntry> = if old_cache.is_empty() {
-        HashMap::new()
-    } else {
-        old_cache.iter().map(|e| (e.path.clone(), e.clone())).collect()
-    };
-    drop(old_cache);
-
-    let mut entries = Vec::new();
-    index_directory_incremental(root_path, root_path, &mut entries, 0, &old_map);
-
+    let entries = tauri::async_runtime::spawn_blocking(move || {
+        let root_path = Path::new(&root);
+        let mut entries = Vec::new();
+        index_directory(root_path, root_path, &mut entries, 0);
+        entries
+    })
+    .await
+    .map_err(|e| format!("refresh_project_index panicked: {}", e))?;
     let mut cached = cache.0.write().map_err(|_| "Lock error".to_string())?;
     *cached = entries.clone();
     Ok(entries)
 }
 
-/// Like index_directory, but skips re-reading files whose modified timestamp
-/// hasn't changed since the last scan. Reuses the cached entry directly.
-fn index_directory_incremental(
-    dir: &Path,
-    root: &Path,
-    entries: &mut Vec<FileIndexEntry>,
-    depth: usize,
-    old_map: &HashMap<String, FileIndexEntry>,
-) {
-    if depth > 8 || entries.len() > 5000 { return; }
-
-    let items = match fs::read_dir(dir) {
-        Ok(items) => items,
-        Err(_) => return,
-    };
-
-    for item in items.filter_map(|e| e.ok()) {
-        let name = item.file_name().to_string_lossy().to_string();
-        let path = item.path();
-        let is_dir = item.file_type().map(|t| t.is_dir()).unwrap_or(false);
-
-        if name.starts_with('.') { continue; }
-        if is_dir && SKIP_DIRS.contains(&name.as_str()) { continue; }
-        if !is_dir && SKIP_FILES.contains(&name.as_str()) { continue; }
-
-        if is_dir {
-            index_directory_incremental(&path, root, entries, depth + 1, old_map);
-        } else {
-            let relative = path.strip_prefix(root)
-                .unwrap_or(&path)
+#[tauri::command]
+pub async fn update_file_index_batch(paths: Vec<String>, state: State<'_, ProjectRoot>, cache: State<'_, ProjectIndexCache>) -> Result<(), String> {
+    let root = get_project_root(&state)?;
+    // Build index entries on the blocking thread pool (reads file metadata, no lock)
+    let updates = tauri::async_runtime::spawn_blocking(move || {
+        let root_path = Path::new(&root);
+        let mut updates: Vec<(String, Option<FileIndexEntry>)> = Vec::new();
+        for path in &paths {
+            let safe_path = match validate_path_within_project(path, &root) {
+                Ok(p) => p,
+                Err(_) => continue,
+            };
+            let file_path = Path::new(&safe_path);
+            let relative = file_path.strip_prefix(root_path)
+                .unwrap_or(file_path)
                 .to_string_lossy()
                 .replace('\\', "/");
+            let entry = if file_path.is_file() {
+                build_index_entry(file_path, root_path)
+            } else {
+                None
+            };
+            updates.push((relative, entry));
+        }
+        updates
+    })
+    .await
+    .map_err(|e| format!("update_file_index_batch panicked: {}", e))?;
 
-            // Check if we can reuse the cached entry
-            if let Some(old_entry) = old_map.get(&relative) {
-                if let Ok(metadata) = fs::metadata(&path) {
-                    let current_modified = metadata.modified().ok()
-                        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-                        .map(|d| d.as_secs())
-                        .unwrap_or(0);
-
-                    let size_ok = old_entry.size == metadata.len();
-                    let modified_ok = old_entry.modified == current_modified;
-
-                    if size_ok && modified_ok {
-                        // File hasn't changed — reuse cached entry (no file read needed)
-                        entries.push(old_entry.clone());
-                        continue;
-                    }
-                }
-            }
-
-            // File is new or modified — build fresh entry
-            if let Some(entry) = build_index_entry(&path, root) {
-                entries.push(entry);
-            }
+    // Apply updates with a single lock (fast, no I/O)
+    let mut cached = cache.0.write().map_err(|_| "Lock error".to_string())?;
+    for (relative, entry) in updates {
+        cached.retain(|e| e.path != relative);
+        if let Some(e) = entry {
+            cached.push(e);
         }
     }
+    Ok(())
 }
 
 #[tauri::command]
@@ -142,51 +116,6 @@ pub fn update_file_index(path: String, state: State<ProjectRoot>, cache: State<P
     if file_path.is_file() {
         if let Some(entry) = build_index_entry(file_path, root_path) {
             cached.push(entry);
-        }
-    }
-
-    Ok(())
-}
-
-/// Batch variant of update_file_index — accepts multiple paths and locks the
-/// cache only once.  Avoids the N+1 IPC overhead when the file watcher fires
-/// a batch of changed files (e.g. during git checkout).
-#[tauri::command]
-pub fn update_file_index_batch(
-    paths: Vec<String>,
-    state: State<ProjectRoot>,
-    cache: State<ProjectIndexCache>,
-) -> Result<(), String> {
-    if paths.is_empty() {
-        return Ok(());
-    }
-
-    let root = get_project_root(&state)?;
-    let root_path = Path::new(&root);
-
-    let mut cached = cache.0.write().map_err(|_| "Lock error".to_string())?;
-
-    for path in &paths {
-        let safe_path = match validate_path_within_project(path, &root) {
-            Ok(p) => p,
-            Err(_) => continue,
-        };
-        let file_path = Path::new(&safe_path);
-
-        let relative = file_path
-            .strip_prefix(root_path)
-            .unwrap_or(file_path)
-            .to_string_lossy()
-            .replace('\\', "/");
-
-        // Remove old entry for this path
-        cached.retain(|e| e.path != relative);
-
-        // Add updated entry if file still exists
-        if file_path.is_file() {
-            if let Some(entry) = build_index_entry(file_path, root_path) {
-                cached.push(entry);
-            }
         }
     }
 
@@ -225,8 +154,9 @@ pub(crate) fn build_index_entry(file_path: &Path, root: &Path) -> Option<FileInd
     let metadata = fs::metadata(file_path).ok()?;
     let size = metadata.len();
 
-    // Skip files > 500KB
-    if size > 500_000 { return None; }
+    // Skip files > 5MB — raised from 500KB so large source files (App.tsx, lib.rs)
+    // are not silently excluded from the index, which caused TDA to miss major refactor candidates.
+    if size > 5_000_000 { return None; }
 
     let extension = file_path.extension()
         .unwrap_or_default()
@@ -251,10 +181,15 @@ pub(crate) fn build_index_entry(file_path: &Path, root: &Path) -> Option<FileInd
         });
     }
 
-    // Read first 500 chars as preview
-    let preview = fs::read_to_string(file_path).ok()
-        .map(|s| s.chars().take(500).collect::<String>())
-        .unwrap_or_default();
+    // For files >50KB skip the preview to avoid loading megabytes for a 500-char snippet
+    // during bulk indexing. TDA reads file content itself via read_file — preview irrelevant.
+    let preview = if size <= 50_000 {
+        fs::read_to_string(file_path).ok()
+            .map(|s| s.chars().take(500).collect::<String>())
+            .unwrap_or_default()
+    } else {
+        String::new()
+    };
 
     Some(FileIndexEntry {
         path: file_path.strip_prefix(root).unwrap_or(file_path).to_string_lossy().replace('\\', "/"),
@@ -359,29 +294,35 @@ pub(crate) fn levenshtein(a: &str, b: &str) -> usize {
 // --- Rust TF-IDF Codebase Index ---
 
 #[tauri::command]
-pub fn index_codebase(state: State<ProjectRoot>, index_state: State<CodebaseIndex>) -> Result<usize, String> {
+pub async fn index_codebase(state: State<'_, ProjectRoot>, index_state: State<'_, CodebaseIndex>) -> Result<usize, String> {
     let root = get_project_root(&state)?;
-    let root_path = Path::new(&root);
+    let root_path = std::path::PathBuf::from(&root);
 
-    let mut chunks: Vec<CodeChunk> = Vec::new();
-    collect_chunks(root_path, root_path, &mut chunks, 0);
+    let (chunks, inverted) = tauri::async_runtime::spawn_blocking(move || {
+        let root_path = Path::new(&root_path);
+        let mut chunks: Vec<CodeChunk> = Vec::new();
+        collect_chunks(root_path, root_path, &mut chunks, 0);
 
-    // Build inverted index
-    let mut inverted: HashMap<String, Vec<(usize, f64)>> = HashMap::new();
-    for idx in 0..chunks.len() {
-        let tokens = tokenize_code(&chunks[idx].content);
-        let token_count = tokens.len();
-        if token_count == 0 { continue; }
+        // Build inverted index
+        let mut inverted: HashMap<String, Vec<(usize, f64)>> = HashMap::new();
+        for idx in 0..chunks.len() {
+            let tokens = tokenize_code(&chunks[idx].content);
+            let token_count = tokens.len();
+            if token_count == 0 { continue; }
 
-        let mut freq: HashMap<&str, usize> = HashMap::new();
-        for t in &tokens {
-            *freq.entry(t.as_str()).or_insert(0) += 1;
+            let mut freq: HashMap<&str, usize> = HashMap::new();
+            for t in &tokens {
+                *freq.entry(t.as_str()).or_insert(0) += 1;
+            }
+            for (token, count) in freq {
+                let tf = count as f64 / token_count as f64;
+                inverted.entry(token.to_string()).or_default().push((idx, tf));
+            }
         }
-        for (token, count) in freq {
-            let tf = count as f64 / token_count as f64;
-            inverted.entry(token.to_string()).or_default().push((idx, tf));
-        }
-    }
+        Ok::<_, String>((chunks, inverted))
+    })
+    .await
+    .map_err(|e| format!("index_codebase panicked: {}", e))??;
 
     let chunk_count = chunks.len();
     let mut idx = index_state.0.write().map_err(|_| "Lock error".to_string())?;

@@ -47,6 +47,14 @@
   position: relative;
 }
 
+/* Node-network canvas sits on top of Monaco but is non-interactive and subtle */
+.code-editor .editor-bg-canvas {
+  position: absolute;
+  inset: 0;
+  z-index: 10;
+  pointer-events: none;
+}
+
 .code-editor .monaco-editor .current-line {
   box-shadow: inset 3px 0 0 var(--accent);
 }

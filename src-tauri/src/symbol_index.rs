@@ -316,12 +316,14 @@ pub fn symbol_list_file(
 }
 
 #[tauri::command]
-pub fn symbol_rebuild(
-    state: State<ProjectRoot>,
-    index_state: State<SymbolIndexState>,
+pub async fn symbol_rebuild(
+    state: State<'_, ProjectRoot>,
+    index_state: State<'_, SymbolIndexState>,
 ) -> Result<usize, String> {
     let root = get_project_root(&state)?;
-    let index = build_index(&root)?;
+    let index = tauri::async_runtime::spawn_blocking(move || build_index(&root))
+        .await
+        .map_err(|e| format!("Symbol rebuild panicked: {}", e))??;
     let total = index.total_symbols;
 
     let mut stored = index_state

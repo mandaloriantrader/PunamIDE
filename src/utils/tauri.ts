@@ -19,6 +19,10 @@ export interface AppConfig {
   autocompleteMode?: "auto" | "fim" | "chat" | "disabled";
   autocompleteDebounceMs?: number;
   autocompleteMaxTokens?: number;
+  /** Whether the animated node-network background is shown in the editor */
+  editorBgAnimation?: boolean;
+  /** Opacity of the editor background animation (0–1). Default: 0.12 */
+  editorBgOpacity?: number;
 }
 
 export interface LlmRequest {
@@ -283,12 +287,16 @@ export async function loadConfigFromStore(): Promise<AppConfig> {
     const autocompleteMode = (await store.get("autocompleteMode")) as AppConfig["autocompleteMode"] | undefined;
     const autocompleteDebounceMs = (await store.get("autocompleteDebounceMs")) as number | undefined;
     const autocompleteMaxTokens = (await store.get("autocompleteMaxTokens")) as number | undefined;
+    const editorBgAnimation = (await store.get("editorBgAnimation")) as boolean | undefined;
+    const editorBgOpacity = (await store.get("editorBgOpacity")) as number | undefined;
     return {
       provider, api_key, model, theme, adaptiveMode, adaptiveStrategy,
       autocompleteEnabled: autocompleteEnabled ?? true,
       autocompleteMode: autocompleteMode ?? "auto",
       autocompleteDebounceMs: autocompleteDebounceMs ?? 150,
       autocompleteMaxTokens: autocompleteMaxTokens ?? 128,
+      editorBgAnimation: editorBgAnimation ?? true,
+      editorBgOpacity: editorBgOpacity ?? 0.12,
     };
   } catch {
     return {
@@ -302,6 +310,8 @@ export async function loadConfigFromStore(): Promise<AppConfig> {
       autocompleteMode: "auto",
       autocompleteDebounceMs: 150,
       autocompleteMaxTokens: 128,
+      editorBgAnimation: true,
+      editorBgOpacity: 0.12,
     };
   }
 }
@@ -318,6 +328,8 @@ export async function saveConfigToStore(config: AppConfig): Promise<void> {
   if (config.autocompleteMode !== undefined) await store.set("autocompleteMode", config.autocompleteMode);
   if (config.autocompleteDebounceMs !== undefined) await store.set("autocompleteDebounceMs", config.autocompleteDebounceMs);
   if (config.autocompleteMaxTokens !== undefined) await store.set("autocompleteMaxTokens", config.autocompleteMaxTokens);
+  if (config.editorBgAnimation !== undefined) await store.set("editorBgAnimation", config.editorBgAnimation);
+  if (config.editorBgOpacity !== undefined) await store.set("editorBgOpacity", config.editorBgOpacity);
   await store.save();
 }
 

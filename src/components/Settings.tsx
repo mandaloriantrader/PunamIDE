@@ -571,6 +571,41 @@ export default function Settings({ config, onConfigChange, onClose, onProvidersC
               </button>
             </div>
 
+            {/* Editor Background Animation */}
+            <div className="settings-toggle-row">
+              <div className="settings-toggle-info">
+                <span className="settings-toggle-label">Background Node Animation</span>
+                <span className="settings-toggle-desc">Animated connected-nodes network behind the code editor</span>
+              </div>
+              <button
+                className={`settings-toggle-switch ${local.editorBgAnimation !== false ? "on" : "off"}`}
+                onClick={() => setLocal((prev) => ({ ...prev, editorBgAnimation: !(prev.editorBgAnimation !== false) }))}
+                role="switch"
+                aria-checked={local.editorBgAnimation !== false}
+                aria-label="Toggle editor background animation"
+              >
+                <span className="settings-toggle-knob" />
+              </button>
+            </div>
+
+            {/* Editor Background Opacity Slider */}
+            {local.editorBgAnimation !== false && (
+              <div className="provider-field" style={{ marginTop: 8 }}>
+                <label>Animation Opacity: {((local.editorBgOpacity ?? 0.12) * 100).toFixed(0)}%</label>
+                <input
+                  type="range"
+                  min="0.02"
+                  max="0.4"
+                  step="0.01"
+                  value={local.editorBgOpacity ?? 0.12}
+                  onChange={(e) => setLocal((prev) => ({ ...prev, editorBgOpacity: parseFloat(e.target.value) }))}
+                  className="settings-range-slider"
+                  aria-label="Editor background animation opacity"
+                />
+                <span className="settings-range-hint">Lower = more subtle, higher = more visible</span>
+              </div>
+            )}
+
             <h3 style={{ marginTop: 20 }}>Inline Autocomplete</h3>
 
             {/* Enable/disable toggle */}

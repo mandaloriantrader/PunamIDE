@@ -7,8 +7,9 @@
 //! (Phase 4, Step 4.6) to power the environment dashboard UI.
 
 use serde::{Deserialize, Serialize};
-use tokio::process::Command;
+use std::process::Command;
 use std::path::PathBuf;
+use std::collections::HashMap;
 
 #[cfg(target_os = "windows")]
 use std::os::windows::process::CommandExt;
@@ -109,6 +110,7 @@ fn find_executable(cmd: &str) -> Option<PathBuf> {
             for ext in &extensions {
                 let full = PathBuf::from(dir).join(format!("{}{}", cmd, ext));
                 if full.is_file() || (cfg!(windows) && full.exists()) {
+                    // On Windows, also check the actual file
                     return Some(full);
                 }
             }
@@ -118,23 +120,44 @@ fn find_executable(cmd: &str) -> Option<PathBuf> {
     None
 }
 
-/// Run --version and capture stdout asynchronously via tokio::process.
-async fn get_version_async(exe_path: &PathBuf, version_args: &[&str]) -> Result<String, String> {
+/// Run --version and capture stdout — with a hard 500ms timeout so slow
+/// tools (docker, gcloud, kubectl) never block the entire scan.
+fn get_version(exe_path: &PathBuf, version_args: &[&str]) -> Result<String, String> {
     let mut cmd = Command::new(exe_path);
     cmd.args(version_args);
 
     #[cfg(target_os = "windows")]
     cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
 
-    let output = cmd
-        .output()
-        .await
-        .map_err(|e| format!("Failed to run: {}", e))?;
+    // Spawn and wait with a timeout — prevents any single tool from blocking
+    // the entire scan (docker, gcloud, kubectl can take 1-2s on cold start)
+    let mut child = cmd
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .map_err(|e| format!("Failed to spawn: {}", e))?;
 
+    let timeout = std::time::Duration::from_millis(500);
+    let deadline = std::time::Instant::now() + timeout;
+
+    loop {
+        match child.try_wait() {
+            Ok(Some(_)) => break,
+            Ok(None) => {
+                if std::time::Instant::now() >= deadline {
+                    let _ = child.kill();
+                    return Err("Timeout".to_string());
+                }
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+            Err(e) => return Err(format!("Wait error: {}", e)),
+        }
+    }
+
+    let output = child.wait_with_output().map_err(|e| e.to_string())?;
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
 
-    // Some tools output version to stderr (e.g., python --version)
     let version_text = if stdout.trim().is_empty() {
         stderr.trim().to_string()
     } else {
@@ -144,85 +167,60 @@ async fn get_version_async(exe_path: &PathBuf, version_args: &[&str]) -> Result<
     if version_text.is_empty() {
         Err("No version output".to_string())
     } else {
-        // Take just the first line
         let first_line = version_text.lines().next().unwrap_or(&version_text);
         Ok(first_line.to_string())
     }
 }
 
-/// Scan a single tool — resolves its path and version.
-/// Returns the ToolInfo and category data for aggregation.
-async fn scan_one_tool(def: &ToolDef) -> (ToolInfo, Option<(String, String)>) {
-    let path = find_executable(def.cmd);
-
-    let (version, error) = if let Some(ref p) = path {
-        match get_version_async(p, def.version_args).await {
-            Ok(v) => (v, None),
-            Err(e) => ("unknown".to_string(), Some(e)),
-        }
-    } else {
-        ("not installed".to_string(), None)
-    };
-
-    let installed = path.is_some() && error.is_none();
-
-    // Tag installed category for aggregation
-    let category_tag = if installed {
-        Some((def.category.to_string(), def.display_name.to_string()))
-    } else {
-        None
-    };
-
-    let tool_info = ToolInfo {
-        name: def.cmd.to_string(),
-        path: path.map(|p| p.to_string_lossy().to_string()),
-        version,
-        installed,
-        category: def.category.to_string(),
-        display_name: def.display_name.to_string(),
-        error,
-    };
-
-    (tool_info, category_tag)
-}
-
-/// Scan all registered tools — runs all subprocess checks in parallel
-/// so the entire scan completes in ~1-2 seconds instead of 10+ seconds.
-pub async fn scan_environment() -> EnvironmentScanResult {
-    // Launch all 20 tool scans concurrently
-    let handles: Vec<_> = TOOLS.iter().map(|def| scan_one_tool(def)).collect();
-    let results = futures_util::future::join_all(handles).await;
-
-    let mut tools = Vec::with_capacity(results.len());
+/// Scan all registered tools and return their info.
+pub fn scan_environment() -> EnvironmentScanResult {
+    let mut tools = Vec::new();
     let mut runtimes = Vec::new();
     let mut package_managers = Vec::new();
     let mut containers = Vec::new();
     let mut missing_recommendations = Vec::new();
-    let mut installed_count = 0usize;
-    let mut missing_count = 0usize;
+    let mut installed_count = 0;
+    let mut missing_count = 0;
 
-    for (tool_info, category_tag) in results {
-        let installed = tool_info.installed;
+    for def in TOOLS {
+        let path = find_executable(def.cmd);
+
+        let (version, error) = if let Some(ref p) = path {
+            match get_version(p, def.version_args) {
+                Ok(v) => (v, None),
+                Err(e) => ("unknown".to_string(), Some(e)),
+            }
+        } else {
+            ("not installed".to_string(), None)
+        };
+
+        let installed = path.is_some() && error.is_none();
 
         if installed {
             installed_count += 1;
-            if let Some((cat, name)) = category_tag {
-                match cat.as_str() {
-                    "runtime" => runtimes.push(name),
-                    "package_manager" => package_managers.push(name),
-                    "container" => containers.push(name),
-                    _ => {}
-                }
+            match def.category {
+                "runtime" => runtimes.push(def.display_name.to_string()),
+                "package_manager" => package_managers.push(def.display_name.to_string()),
+                "container" => containers.push(def.display_name.to_string()),
+                _ => {}
             }
         } else {
             missing_count += 1;
             missing_recommendations.push(format!(
                 "{} is not installed. Run `{} --help` to install or check PATH.",
-                tool_info.display_name, tool_info.name
+                def.display_name, def.cmd
             ));
         }
 
-        tools.push(tool_info);
+        tools.push(ToolInfo {
+            name: def.cmd.to_string(),
+            path: path.map(|p| p.to_string_lossy().to_string()),
+            version,
+            installed,
+            category: def.category.to_string(),
+            display_name: def.display_name.to_string(),
+            error,
+        });
     }
 
     let summary = EnvironmentSummary {
@@ -240,37 +238,52 @@ pub async fn scan_environment() -> EnvironmentScanResult {
 
 // ── Tauri Commands ─────────────────────────────────────────────────────────────
 
-/// Scan the development environment for installed tools (async).
-///
-/// Runs on Tauri's async runtime off the main thread,
-/// and scans all 20 tools in parallel via tokio for maximum speed.
+/// Scan the development environment for installed tools.
 ///
 /// Returns structured ToolInfo for all supported tools (Node, Python, Rust,
 /// Docker, Git, etc.) along with a summary for dashboard display.
+/// Runs on a blocking thread so the UI stays responsive during the scan.
 #[tauri::command]
 pub async fn scan_tools() -> EnvironmentScanResult {
-    scan_environment().await
+    tauri::async_runtime::spawn_blocking(scan_environment)
+        .await
+        .unwrap_or_else(|_| EnvironmentScanResult {
+            tools: Vec::new(),
+            summary: EnvironmentSummary {
+                total_detected: 0,
+                total_installed: 0,
+                total_missing: 0,
+                runtimes: Vec::new(),
+                package_managers: Vec::new(),
+                containers: Vec::new(),
+                missing_recommendations: vec!["Scan failed".to_string()],
+            },
+        })
 }
 
 /// Quick check: is a specific tool available?
 #[tauri::command]
-pub fn tool_installed(tool_name: String) -> bool {
-    find_executable(&tool_name).is_some()
+pub async fn tool_installed(tool_name: String) -> bool {
+    tauri::async_runtime::spawn_blocking(move || find_executable(&tool_name).is_some())
+        .await
+        .unwrap_or(false)
 }
 
-/// Get the version of a specific tool (async).
+/// Get the version of a specific tool.
 #[tauri::command]
 pub async fn tool_version(tool_name: String) -> Result<String, String> {
-    let path = find_executable(&tool_name)
-        .ok_or_else(|| format!("Tool not found: {}", tool_name))?;
-
-    let version_args = TOOLS
-        .iter()
-        .find(|t| t.cmd == tool_name)
-        .map(|t| t.version_args)
-        .unwrap_or(&["--version"]);
-
-    get_version_async(&path, version_args).await
+    tauri::async_runtime::spawn_blocking(move || {
+        let path = find_executable(&tool_name)
+            .ok_or_else(|| format!("Tool not found: {}", tool_name))?;
+        let version_args = TOOLS
+            .iter()
+            .find(|t| t.cmd == tool_name)
+            .map(|t| t.version_args)
+            .unwrap_or(&["--version"]);
+        get_version(&path, version_args)
+    })
+    .await
+    .map_err(|e| format!("task failed: {e}"))?
 }
 
 // ── Tests ──────────────────────────────────────────────────────────────────────
@@ -290,9 +303,9 @@ mod tests {
         }
     }
 
-    #[tokio::test]
-    async fn test_scan_returns_all_tools() {
-        let result = scan_environment().await;
+    #[test]
+    fn test_scan_returns_all_tools() {
+        let result = scan_environment();
         assert_eq!(result.tools.len(), TOOLS.len());
         assert!(result.summary.total_detected > 0);
     }

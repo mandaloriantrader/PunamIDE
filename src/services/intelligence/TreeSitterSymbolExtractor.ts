@@ -307,9 +307,10 @@ export async function enhanceSymbolIndexWithTreeSitter(): Promise<{
       })
       .map((f) => f.path);
 
-    // Process in small batches (5 files) with generous yields to keep UI responsive.
-    // Tree-sitter parsing is CPU-intensive — smaller batches prevent micro-freezes.
-    const BATCH_SIZE = 5;
+    // Process ONE file at a time — yield after every file via requestIdleCallback.
+    // Tree-sitter WASM parse of a single large file can block the main thread for
+    // 50-100ms. Batching 5 files caused "Not Responding" on projects with large TS files.
+    const BATCH_SIZE = 1;
     for (let i = 0; i < tsFiles.length; i += BATCH_SIZE) {
       const batch = tsFiles.slice(i, i + BATCH_SIZE);
 
@@ -328,13 +329,18 @@ export async function enhanceSymbolIndexWithTreeSitter(): Promise<{
         }
       }
 
-      // Yield to main thread between batches — use requestIdleCallback for
-      // true idle-time scheduling so this never competes with user interactions
+      // Yield after every single file — deadline-aware so we don't starve on busy frames
       await new Promise<void>((resolve) => {
         if (typeof requestIdleCallback === "function") {
-          requestIdleCallback(() => resolve());
+          requestIdleCallback((deadline) => {
+            if (deadline.timeRemaining() > 10 || deadline.didTimeout) {
+              resolve();
+            } else {
+              requestIdleCallback(() => resolve(), { timeout: 50 });
+            }
+          }, { timeout: 50 });
         } else {
-          setTimeout(resolve, 4);
+          setTimeout(resolve, 8);
         }
       });
     }

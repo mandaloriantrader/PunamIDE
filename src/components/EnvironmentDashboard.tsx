@@ -108,12 +108,12 @@ export default function EnvironmentDashboard() {
     }
   }, []);
 
-  const handleScan = useCallback(async () => {
+  const handleScan = useCallback(async (force = false) => {
     setLoading(true);
     setError(null);
     try {
       const orchestrator = getToolOrchestrator();
-      const result = await orchestrator.scanEnvironment();
+      const result = await orchestrator.scanEnvironment(force);
       setScan(result);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Scan failed");
@@ -225,7 +225,7 @@ export default function EnvironmentDashboard() {
       {/* Action bar */}
       <div style={{ padding: "8px 16px", display: "flex", gap: "8px", borderBottom: "1px solid var(--border-color, #2a2a4a)", flexShrink: 0 }}>
         <button
-          onClick={handleScan}
+          onClick={() => handleScan()}
           disabled={loading}
           style={{
             padding: "6px 14px",

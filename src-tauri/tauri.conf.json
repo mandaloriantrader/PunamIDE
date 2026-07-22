@@ -1,7 +1,7 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
-  "productName": "PunamIDE v2.0",
-  "version": "2.1.3",
+  "productName": "PunamIDE",
+"version": "2.1.4",
   "identifier": "com.punamide.app",
   "build": {
     "frontendDist": "../dist",
@@ -12,7 +12,7 @@
   "app": {
     "windows": [
       {
-        "title": "PunamIDE v2.0",
+        "title": "PunamIDE",
         "width": 1400,
         "height": 900,
         "minWidth": 800,

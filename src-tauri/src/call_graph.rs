@@ -340,12 +340,14 @@ pub fn callgraph_callees(
 
 /// Rebuild the call graph from scratch.
 #[tauri::command]
-pub fn callgraph_build(
-    state: tauri::State<crate::ProjectRoot>,
-    graph_state: tauri::State<CallGraphState>,
+pub async fn callgraph_build(
+    state: tauri::State<'_, crate::ProjectRoot>,
+    graph_state: tauri::State<'_, CallGraphState>,
 ) -> Result<usize, String> {
     let root = crate::get_project_root(&state)?;
-    let graph = build_call_graph(&root)?;
+    let graph = tauri::async_runtime::spawn_blocking(move || build_call_graph(&root))
+        .await
+        .map_err(|e| format!("Call graph build panicked: {}", e))??;
     let total = graph.total_edges;
 
     let mut stored = graph_state.0.write().map_err(|_| "Lock error".to_string())?;

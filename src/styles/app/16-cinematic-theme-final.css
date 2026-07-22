@@ -412,7 +412,7 @@
 
 /* ===== Final cinematic refinements ===== */
 .splash-screen {
-  background: #050607;
+  background: #000000;
   animation: splashBlackIn 360ms ease-out both;
 }
 
@@ -780,10 +780,14 @@
 }
 
 .editor-empty,
-.code-editor,
-.monaco-editor,
-.monaco-editor .margin,
-.monaco-editor-background {
+.code-editor {
+  background: transparent !important;
+}
+
+.code-editor .monaco-editor,
+.code-editor .monaco-editor .overflow-guard,
+.code-editor .monaco-editor .monaco-editor-background,
+.code-editor .monaco-editor .margin {
   background: var(--bg-primary) !important;
 }
 

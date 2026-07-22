@@ -4,12 +4,11 @@
  * generates edits across those files, user reviews and applies as batch.
  */
 
-import { useState, useCallback, useEffect } from "react";
+import { useState, useCallback } from "react";
 import { Layers, Play, X, FileCode, Check, RotateCcw, Loader2, Sparkles, Search } from "lucide-react";
 import { sendToProvider } from "../utils/providers";
 import type { AIProviderConfig } from "../utils/providers";
 import { searchCodebase, isIndexed } from "../utils/codebaseIndex";
-import { getProjectIndex } from "../utils/tauri";
 
 interface FileChange {
   path: string;
@@ -33,6 +32,18 @@ interface Props {
   aiProviders: AIProviderConfig[];
   config: { provider: string; api_key: string; model: string };
   onApplyChanges: (changes: any) => Promise<void>;
+}
+
+function flattenFiles(entries: any[]): string[] {
+  const result: string[] = [];
+  for (const entry of entries) {
+    if (entry.is_dir && entry.children) {
+      result.push(...flattenFiles(entry.children));
+    } else if (!entry.is_dir) {
+      result.push(entry.path);
+    }
+  }
+  return result;
 }
 
 /** Truncate a file tree to just relative paths, max 120 entries */
@@ -61,23 +72,8 @@ export default function ComposerPanel({ projectPath, files, aiProviders, config,
     status: "idle",
   });
   const [showAllFiles, setShowAllFiles] = useState(false);
-  const [allFiles, setAllFiles] = useState<string[]>([]);
 
-  // Load flat file list from Rust project index on mount
-  useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      try {
-        const entries = await getProjectIndex();
-        if (cancelled) return;
-        const paths = entries.map((e) => e.path);
-        setAllFiles(paths);
-      } catch {
-        setAllFiles([]);
-      }
-    })();
-    return () => { cancelled = true; };
-  }, [projectPath]);
+  const allFiles = flattenFiles(files);
 
   /** Find a usable provider + model from available providers */
   const getProvider = useCallback(() => {

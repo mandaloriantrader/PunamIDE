@@ -1,21 +1,16 @@
 /**
- * TechnicalDebtDashboard.tsx — Polish Pass
+ * TechnicalDebtDashboard.tsx — Phase 4
  *
- * UX refinements (per tda-polishness-plan.md):
- *  - Sections reordered by importance (Health → Major Refactors → Quick Stats → Dead Code → Findings → Graph → Trend → Modules → remaining refactor categories)
- *  - Inline styles extracted to TechnicalDebtDashboard.module.css
- *  - Severity colors normalized to var(--red/orange/yellow/green/blue)
- *  - Major Refactor cards show WHAT/WHY/EFFORT/ACTION structure with prominent Fix-with-AI CTA
- *  - Section headers now include descriptive summaries
- *  - Empty states provide friendly, informative messaging
- *  - Metric chips (CC, Depth, God Functions) are compact and consistent
- *  - Micro-interactions: hover, active, collapse animations
- *  - Existing PunamIDE theme respected — no color redesign
- *
- * All existing functionality preserved:
- *  - File discovery, analysis, graph building, dead code, unified findings, AI fix pipeline
- *  - All modal/panel states (PlanApprovalModal, AiFixPipelinePanel, AiFixPreviewModal)
- *  - All layer toggles, collapsible sections, export handlers
+ * Phase 4 additions:
+ *  - handleAnalyze runs DependencyGraphEngine + CircularDepDetector +
+ *    CouplingAnalyzer after file analysis, then calls applyGraphData()
+ *  - Architectural Issues section shows real cycle paths and hub file
+ *    fan-in/fan-out/coupling scores (not stub data)
+ *  - GraphSummaryPanel: cycle count + severity, hub file count,
+ *    average coupling, unresolved imports
+ *  - CycleDetailPanel: expandable list of files in each cycle
+ *  - Refactor Queue architectural items now carry real graph numbers
+ *  - Two-phase loading: "Analyzing files…" then "Building graph…"
  */
 
 import { useState, useEffect, useCallback } from "react";
@@ -39,6 +34,7 @@ import {
   ArrowRightLeft,
   Download,
   Sparkles,
+  Loader2,
 } from "lucide-react";
 import { getDebtAnalyzer }    from "../services/technicalDebt/DebtAnalyzer";
 import { getDebtScorer }      from "../services/technicalDebt/DebtScorer";
@@ -74,28 +70,49 @@ import type { FixPlanContext } from "./PlanApprovalModal";
 import { runAiFix, saveSnapshot, restoreSnapshot, extractFixScope } from "../services/refactor/AiFixHandler";
 import type { AiFixResult, FixLlmProvider, FixProgressCallback, FixScopeResult } from "../services/refactor/AiFixHandler";
 
-// ── Styles ────────────────────────────────────────────────────────────────────
-
-import styles from "./TechnicalDebtDashboard.module.css";
-
 // ── Constants ─────────────────────────────────────────────────────────────────
 
 const MAX_FILES_DEFAULT = 2000;
 
 const CATEGORY_COLOR: Record<string, string> = {
-  excellent: "var(--green, #a6e3a1)",
-  good:      "var(--accent, #89b4fa)",
-  fair:      "var(--yellow, #f9e2af)",
-  poor:      "var(--orange, #fab387)",
-  critical:  "var(--red, #f38ba8)",
+  excellent: "#34d399",
+  good:      "#60a5fa",
+  fair:      "#fbbf24",
+  poor:      "#f87171",
+  critical:  "#ef4444",
 };
 
 const CATEGORY_BG: Record<string, string> = {
-  excellent: "rgba(166,227,161,0.10)",
-  good:      "rgba(137,180,250,0.10)",
-  fair:      "rgba(249,226,175,0.10)",
-  poor:      "rgba(250,179,135,0.12)",
-  critical:  "rgba(243,139,168,0.14)",
+  excellent: "#065f4620",
+  good:      "#1e3a5f20",
+  fair:      "#92400e20",
+  poor:      "#991b1b20",
+  critical:  "#7f1d1d30",
+};
+
+const EFFORT_COLOR: Record<string, string> = {
+  low:    "#34d399",
+  medium: "#fbbf24",
+  high:   "#f87171",
+};
+
+const RISK_COLOR: Record<string, string> = {
+  low:    "#34d399",
+  medium: "#fbbf24",
+  high:   "#ef4444",
+};
+
+const COMPLEXITY_COLOR: Record<string, string> = {
+  good:     "#34d399",
+  moderate: "#fbbf24",
+  high:     "#f87171",
+  critical: "#ef4444",
+};
+
+const NESTING_COLOR: Record<string, string> = {
+  good:    "#34d399",
+  warning: "#fbbf24",
+  refactor: "#f87171",
 };
 
 const CATEGORY_ICONS: Record<string, React.ReactNode> = {
@@ -112,70 +129,27 @@ const CATEGORY_LABEL: Record<string, string> = {
   architectural:  "Architectural",
 };
 
-// ── Severity → badge variant mapping ──────────────────────────────────────
+// ── Styles ────────────────────────────────────────────────────────────────────
 
-function severityBadgeClass(severity: string): string {
-  switch (severity) {
-    case "critical": return styles.badgeCritical;
-    case "high":     return styles.badgeHigh;
-    case "medium":   return styles.badgeMedium;
-    case "low":      return styles.badgeLow;
-    default:         return styles.badgeInfo;
-  }
-}
+import styles from "./TechnicalDebtDashboard.module.css";
 
-function effortBorderClass(effort: string): string {
-  switch (effort) {
-    case "low":    return styles.planItemCardEffortLow;
-    case "medium": return styles.planItemCardEffortMedium;
-    case "high":   return styles.planItemCardEffortHigh;
-    default:       return "";
-  }
-}
+// Legacy style objects retained for sub-components with dynamic styling.
+// Structural layout styles now use CSS Modules (styles.panel, styles.header, etc.)
 
-function riskBorderClass(risk: string): string {
-  switch (risk) {
-    case "high": return styles.planItemCardRiskCritical;
-    default:     return "";
-  }
-}
+const SECTION_BTN: React.CSSProperties = {
+  display: "flex", alignItems: "center", gap: "6px",
+  background: "none", border: "none",
+  color: "var(--text-secondary, #a0a0b0)",
+  fontSize: "12px", fontWeight: 600,
+  cursor: "pointer", fontFamily: "inherit", padding: 0,
+};
 
-function effortBadgeVariant(effort: string): string {
-  switch (effort) {
-    case "low":    return styles.badgeGood;
-    case "medium": return styles.badgeMedium;
-    case "high":   return styles.badgeHigh;
-    default:       return styles.badgeInfo;
-  }
-}
-
-function riskBadgeVariant(risk: string): string {
-  switch (risk) {
-    case "low":    return styles.badgeGood;
-    case "medium": return styles.badgeMedium;
-    case "high":   return styles.badgeCritical;
-    default:       return styles.badgeInfo;
-  }
-}
-
-function complexityChipClass(band: string): string {
-  switch (band) {
-    case "critical": return styles.metricChipCritical;
-    case "high":     return styles.metricChipHigh;
-    case "moderate": return styles.metricChipModerate;
-    case "good":     return styles.metricChipGood;
-    default:         return styles.metricChipModerate;
-  }
-}
-
-function nestingChipClass(band: string): string {
-  switch (band) {
-    case "refactor": return styles.metricChipCritical;
-    case "warning":  return styles.metricChipModerate;
-    case "good":     return styles.metricChipGood;
-    default:         return styles.metricChipModerate;
-  }
-}
+const ROW: React.CSSProperties = {
+  display: "flex", alignItems: "center", gap: "8px",
+  padding: "6px 10px",
+  background: "var(--bg-input, #1a1a2e)",
+  borderRadius: "4px", marginBottom: "4px", fontSize: "11px",
+};
 
 // ── File discovery ─────────────────────────────────────────────────────────────
 
@@ -238,7 +212,7 @@ async function scanWorkspace(
   };
 }
 
-// ── Import map builder ─────────────────────────────────────────────────────────
+// ── Import map builder (Phase 4) ──────────────────────────────────────────────
 
 async function buildImportMaps(
   filePaths: string[],
@@ -273,29 +247,13 @@ async function buildImportMaps(
   return maps;
 }
 
-// ── Number formatting ─────────────────────────────────────────────────────
-
-function fmtNum(n: number): string {
-  if (n >= 1000) return n.toLocaleString("en-US");
-  return String(n);
-}
-
-// ── Severity color helpers (CSS variable based) ───────────────────────────
-
-const SEVERITY_VAR: Record<string, string> = {
-  critical: "var(--red, #f38ba8)",
-  high:     "var(--orange, #fab387)",
-  medium:   "var(--yellow, #f9e2af)",
-  low:      "var(--accent, #89b4fa)",
-  info:     "var(--text-secondary, #a6adc8)",
-};
-
 // ── Component ─────────────────────────────────────────────────────────────────
 
 interface Props {
   projectPath?: string;
   maxFiles?: number;
   files?: FileEntry[];
+  /** LLM provider for "Fix with AI" — when absent, the button is hidden. */
   fixWithAiProvider?: FixLlmProvider;
 }
 
@@ -321,30 +279,32 @@ export default function TechnicalDebtDashboard({
 
   const [showModules,     setShowModules]     = useState(false);
   const [showTrend,       setShowTrend]       = useState(false);
+  const [showDiscovery,   setShowDiscovery]   = useState(false);
   const [showGraph,       setShowGraph]       = useState(true);
   const [showDiff,        setShowDiff]        = useState(true);
   const [showDeadCode,    setShowDeadCode]    = useState(false);
   const [deadCodeReport, setDeadCodeReport]   = useState<DeadCodeReport | null>(null);
   const [scanDiff, setScanDiff]               = useState<ScanDiff | null>(null);
-  const [showQuickWins,   setShowQuickWins]   = useState(false);
+  const [showQuickWins,   setShowQuickWins]   = useState(true);
   const [unifiedResult, setUnifiedResult]     = useState<AnalysisResult | null>(null);
-  const [showFindings, setShowFindings]       = useState(false);
+  const [showFindings, setShowFindings]       = useState(true);
 
-  // Layer toggles
+  // ── Layer toggles (P2/P5/P7 experimental controls) ───────────────
   const [enableTaint, setEnableTaint]           = useState(false);
   const [enableGitSignals, setEnableGitSignals] = useState(false);
   const [enableMultiLang, setEnableMultiLang]   = useState(false);
-  const [showMajor,       setShowMajor]       = useState(true);
+  const [showMajor,       setShowMajor]       = useState(false);
   const [showMaintenance, setShowMaintenance] = useState(false);
-  const [showArch,        setShowArch]        = useState(false);
+  const [showArch,        setShowArch]        = useState(true);
 
-  // "Fix with AI" state
+  // ── "Fix with AI" state ───────────────────────────────────────
   const [aiFixResult, setAiFixResult] = useState<AiFixResult | null>(null);
   const [aiFixApplying, setAiFixApplying] = useState(false);
   const [aiFixAccepted, setAiFixAccepted] = useState(false);
   const [aiFixSnapshot, setAiFixSnapshot] = useState<string | null>(null);
   const [aiFixingItem, setAiFixingItem] = useState<RefactorPlanItem | null>(null);
   const [planApprovalContext, setPlanApprovalContext] = useState<FixPlanContext | null>(null);
+  // Pipeline progress panel state
   const [pipelineSteps, setPipelineSteps] = useState<PipelineStep[]>([]);
   const [streamingCode, setStreamingCode] = useState("");
   const [pipelineScope, setPipelineScope] = useState<FixScopeResult | null>(null);
@@ -372,6 +332,7 @@ export default function TechnicalDebtDashboard({
     const scanStartedAt = performance.now();
 
     try {
+      // ── Phase 1: file analysis ──────────────────────────────────────────
       const analyzer = getDebtAnalyzer();
       let analysis   = await analyzer.analyzeProject(filePaths, { maxFiles });
       setDiscovery(analysis.discovery);
@@ -382,6 +343,7 @@ export default function TechnicalDebtDashboard({
       setScore(scorer.score(analysis));
       setLoading(false);
 
+      // ── Phase 2: dependency graph build ─────────────────────────────────
       setGraphBuilding(true);
       try {
         const importMaps = await buildImportMaps(filePaths, analysis);
@@ -404,11 +366,14 @@ export default function TechnicalDebtDashboard({
         };
 
         analysis = analyzer.applyGraphData(analysis, bundle);
+
         setScore(scorer.score(analysis));
 
+        // ── Differential analysis ───────────────────────────────────────────
         const diffEngine = getDiffEngine();
         setScanDiff(diffEngine.computeDiff(analysis.files, analysis.overallScore));
 
+        // ── Phase 3: Dead Code Analysis ─────────────────────────────────────
         try {
           const { readFile } = await import("../utils/tauri");
           const fileContents: Record<string, string> = {};
@@ -424,12 +389,15 @@ export default function TechnicalDebtDashboard({
           const report = await deadCodeAnalyzer.analyze(graph, fileContents);
           setDeadCodeReport(report);
         } catch {
-          setDeadCodeReport(null);
+          setDeadCodeReport(null); // Non-blocking — analysis continues without dead code
         }
 
         const planner = getRefactorPlanner();
         setPlan(planner.generatePlan(analysis));
 
+        // ── Phase 4: Unified findings (P1 — debt adapter + registered layers) ──
+        // Non-blocking: fires after graph is ready so debt findings carry
+        // coupling/cycle data from applyGraphData above.
         try {
           const engine = getUnifiedAnalysisEngine();
           const result = await engine.analyze(filePaths, {
@@ -443,7 +411,7 @@ export default function TechnicalDebtDashboard({
           });
           setUnifiedResult(result);
         } catch {
-          // Non-fatal
+          // Non-fatal — dashboard still shows all TDA data without unified findings
         }
 
       } finally {
@@ -454,69 +422,91 @@ export default function TechnicalDebtDashboard({
       setLoading(false);
       setGraphBuilding(false);
     }
-  }, [filePaths, maxFiles, enableTaint, enableGitSignals, enableMultiLang]);
+  }, [filePaths, maxFiles]);
+
+  // ── Graph export handler ─────────────────────────────────────────────────────
 
   const handleExportGraph = useCallback(async (format: 'dot' | 'json' | 'mermaid') => {
-    if (!cycleResult || !couplingResult) return;
+    if (!cycleResult || !couplingResult) return
 
-    const exporter = getGraphExporter();
-    const incrementalEngine = getIncrementalGraphEngine();
+    const exporter = getGraphExporter()
+    const incrementalEngine = getIncrementalGraphEngine()
     const graph = incrementalEngine.hasBaseline
       ? incrementalEngine.buildIncremental([], filePaths).graph
-      : null;
+      : null
 
-    if (!graph) return;
+    if (!graph) return
 
-    let content: string;
-    let defaultName: string;
-    let filterName: string;
-    let filterExt: string;
+    let content: string
+    let defaultName: string
+    let filterName: string
+    let filterExt: string
 
     switch (format) {
       case 'dot':
         content = exporter.toDOT(graph, {
           highlightCycles: cycleResult.filesInCycles,
           highlightHubs: new Set(couplingResult.hubFiles),
-        });
-        defaultName = 'dependency-graph.dot';
-        filterName = 'Graphviz DOT';
-        filterExt = 'dot';
-        break;
+        })
+        defaultName = 'dependency-graph.dot'
+        filterName = 'Graphviz DOT'
+        filterExt = 'dot'
+        break
       case 'json':
-        content = JSON.stringify(exporter.toJSON(graph, couplingResult), null, 2);
-        defaultName = 'dependency-graph.json';
-        filterName = 'JSON';
-        filterExt = 'json';
-        break;
+        content = JSON.stringify(exporter.toJSON(graph, couplingResult), null, 2)
+        defaultName = 'dependency-graph.json'
+        filterName = 'JSON'
+        filterExt = 'json'
+        break
       case 'mermaid':
-        content = exporter.toMermaid(graph, { highlightCycles: cycleResult.filesInCycles });
-        defaultName = 'dependency-graph.mmd';
-        filterName = 'Mermaid';
-        filterExt = 'mmd';
-        break;
+        content = exporter.toMermaid(graph, { highlightCycles: cycleResult.filesInCycles })
+        defaultName = 'dependency-graph.mmd'
+        filterName = 'Mermaid'
+        filterExt = 'mmd'
+        break
     }
 
     try {
-      const { save } = await import("@tauri-apps/plugin-dialog");
-      const { writeTextFile } = await import("@tauri-apps/plugin-fs");
+      const { save } = await import("@tauri-apps/plugin-dialog")
+      const { writeTextFile } = await import("@tauri-apps/plugin-fs")
       const savePath = await save({
         defaultPath: defaultName,
         filters: [{ name: filterName, extensions: [filterExt] }],
-      });
+      })
       if (savePath) {
-        await writeTextFile(savePath, content);
+        await writeTextFile(savePath, content)
       }
     } catch {
+      // Fallback: copy to clipboard
       try {
-        await navigator.clipboard.writeText(content);
+        await navigator.clipboard.writeText(content)
       } catch { /* silent */ }
     }
-  }, [cycleResult, couplingResult, filePaths]);
+  }, [cycleResult, couplingResult, filePaths])
 
+  // ── Unified Analysis Handler ───────────────────────────────────────────────────
+
+  const handleUnifiedAnalysis = useCallback(async () => {
+    if (!filePaths.length) return;
+    try {
+      const engine = getUnifiedAnalysisEngine();
+      const result = await engine.analyze(filePaths, {
+        enabledLayers: ['debt', 'security', 'type', 'architecture'],
+        maxFindingsPerFile: 100,
+        diffMode: false,
+      });
+      setUnifiedResult(result);
+    } catch (err) {
+      console.error('Unified analysis failed:', err);
+    }
+  }, [filePaths]);
+
+  // ── "Fix with AI" → Phase 1: Show deterministic approval modal ───
   const handleFixWithAiClick = useCallback(async (item: RefactorPlanItem) => {
     if (!item.filePath) return;
     setAiFixingItem(item);
 
+    // Compute fix scope from file content (same extraction runAiFix uses)
     let scope: FixPlanContext["scope"] = null;
     try {
       const { readFile } = await import("../utils/tauri");
@@ -528,12 +518,13 @@ export default function TechnicalDebtDashboard({
         scopeType: fixScope.scope,
       };
     } catch {
-      // scope stays null
+      // If file can't be read, show modal with scope=null (still useful)
     }
 
     setPlanApprovalContext({ item, scope });
   }, []);
 
+  // ── "Fix with AI" → Phase 2: User approved → run LLM pipeline ──
   const handlePlanApproved = useCallback(async () => {
     const item = aiFixingItem;
     if (!item || !item.filePath) return;
@@ -541,6 +532,7 @@ export default function TechnicalDebtDashboard({
     setPlanApprovalContext(null);
     setAiFixApplying(true);
 
+    // Initialize pipeline steps
     const allStepIds = ["scope_extract", "prompt_build", "debt_analyze", "llm_call", "validate_output", "security_scan", "apply_patch", "score_calc"];
     setPipelineSteps(allStepIds.map((id) => ({ id, label: "", completed: false, active: false })));
     setStreamingCode("");
@@ -552,9 +544,11 @@ export default function TechnicalDebtDashboard({
       const fileContent = await readFile(item.filePath);
       setPipelineOriginalCode(extractFixScope(item, fileContent).block);
 
+      // Save snapshot for rollback
       const snap = await saveSnapshot(item.filePath);
       setAiFixSnapshot(snap);
 
+      // Progress callback — updates pipeline panel in real-time
       const onProgress: FixProgressCallback = (update) => {
         setPipelineSteps((prev) =>
           prev.map((s) =>
@@ -563,6 +557,7 @@ export default function TechnicalDebtDashboard({
               : { ...s, active: s.id === update.step ? !update.completed : s.active }
           )
         );
+        // Live code streaming
         if (update.step === "llm_call" && update.details) {
           setStreamingCode(update.details);
         }
@@ -583,7 +578,9 @@ export default function TechnicalDebtDashboard({
         } catch { /* non-blocking */ }
       }
 
+      // Mark all steps complete
       setPipelineSteps((prev) => prev.map((s) => ({ ...s, completed: true, active: false })));
+
       setAiFixResult(result);
       setAiFixAccepted(result.status === "success");
     } catch (err) {
@@ -622,6 +619,7 @@ export default function TechnicalDebtDashboard({
     try {
       await restoreSnapshot(aiFixResult.filePath, aiFixSnapshot);
 
+      // Re-scan to revert scores
       const analyzer = getDebtAnalyzer();
       const analysis = await analyzer.analyzeProject(filePaths, { maxFiles: 2000 });
       const scorer = getDebtScorer();
@@ -638,32 +636,30 @@ export default function TechnicalDebtDashboard({
     }
   }, [aiFixResult, aiFixSnapshot, filePaths]);
 
-  // ── Render helpers ───────────────────────────────────────────────────────
+  // ── Render helpers ───────────────────────────────────────────────────────────
 
-  const renderRefactorSection = (
+  const renderPlanSection = (
     items: RefactorPlanItem[],
     show: boolean,
     toggle: () => void,
     label: string,
     icon: React.ReactNode,
     accentColor: string,
-    summary?: string,
     onFixWithAi?: (item: RefactorPlanItem) => void,
   ) => {
     if (!items.length) return null;
     return (
-      <div className={styles.sectionWrapper}>
-        <button onClick={toggle} className={styles.sectionHeader}>
+      <div style={{ margin: "6px 16px" }}>
+        <button onClick={toggle} style={SECTION_BTN}>
           {show ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
-          <div className={styles.sectionHeaderMain}>
-            {icon}
-            <span className={styles.sectionHeaderTitle} style={{ color: accentColor }}>{label}</span>
-            <span className={styles.sectionHeaderBadge}>({items.length})</span>
-          </div>
+          {icon}
+          <span style={{ color: accentColor }}>{label}</span>
+          <span style={{ color: "var(--text-secondary, #a0a0b0)", fontWeight: 400 }}>
+            ({items.length})
+          </span>
         </button>
-        {summary && <div className={styles.sectionHeaderSummary}>{summary}</div>}
         {show && (
-          <div className={styles.collapseContent}>
+          <div style={{ marginTop: "6px" }}>
             {items.map((item, i) => (
               <PlanItemCard key={`${item.filePath}-${i}`} item={item} onFixWithAi={onFixWithAi} />
             ))}
@@ -673,44 +669,7 @@ export default function TechnicalDebtDashboard({
     );
   };
 
-  // ── Derived summaries ────────────────────────────────────────────────────
-
-  const majorItems = plan?.majorRefactors ?? [];
-  const quickWinItems = plan?.quickWins ?? [];
-  const archItems = plan?.architecturalIssues ?? [];
-  const maintenanceItems = plan?.maintenance ?? [];
-
-  const deadCodeTotal = deadCodeReport
-    ? deadCodeReport.unusedExports.length + deadCodeReport.unusedImports.length + deadCodeReport.unusedDeclarations.length
-    : 0;
-
-  const findingsTotal = unifiedResult
-    ? Array.from(unifiedResult.values()).reduce((sum, p) => sum + p.findings.length, 0)
-    : 0;
-
-  const criticalCount = findingsTotal > 0 && unifiedResult
-    ? Array.from(unifiedResult.values()).reduce((sum, p) => sum + p.findings.filter((f: Finding) => f.severity === "critical").length, 0)
-    : 0;
-
-  const cycleCount = cycleResult?.cycleCount ?? 0;
-
-  // ── Grouped refactor cards (deduplicate by file) ────────────────────────
-
-  function groupItemsByFile(items: RefactorPlanItem[]): RefactorPlanItem[][] {
-    const map = new Map<string, RefactorPlanItem[]>();
-    for (const item of items) {
-      const key = item.filePath;
-      const existing = map.get(key);
-      if (existing) {
-        existing.push(item);
-      } else {
-        map.set(key, [item]);
-      }
-    }
-    return Array.from(map.values());
-  }
-
-  // ── Main render ──────────────────────────────────────────────────────────
+  // ── Main render ───────────────────────────────────────────────────────────────
 
   return (
     <div className={styles.panel}>
@@ -719,11 +678,12 @@ export default function TechnicalDebtDashboard({
       <div className={styles.header}>
         <BarChart3 size={16} />
         Technical Debt Intelligence
-        <span style={{ fontSize: "10px", color: "var(--text-secondary, #a6adc8)", marginLeft: "auto", display: "flex", alignItems: "center", gap: "6px" }}>
+        <span style={{ fontSize: "10px", color: "var(--text-secondary, #a0a0b0)", marginLeft: "auto", display: "flex", alignItems: "center", gap: "6px" }}>
           <ASTStatusBadge
             status={astStatus}
             onClick={() => astStatus && setShowASTDetails(true)}
           />
+          Phase 4
         </span>
       </div>
 
@@ -733,16 +693,24 @@ export default function TechnicalDebtDashboard({
           <button
             onClick={handleAnalyze}
             disabled={loading || scanning || graphBuilding || filePaths.length === 0}
-            className={styles.analyzeBtn}
-          >
+            style={{
+              padding: "6px 14px",
+              background: "var(--accent-color, #3b82f6)",
+              border: "none", borderRadius: "6px",
+              color: "#fff", fontSize: "11px", fontWeight: 600,
+              cursor: (loading || scanning || graphBuilding || !filePaths.length) ? "not-allowed" : "pointer",
+              display: "flex", alignItems: "center", gap: "6px",
+              fontFamily: "inherit",
+              opacity: (loading || scanning || graphBuilding || !filePaths.length) ? 0.5 : 1,
+            }}>
             <RefreshCw
               size={12}
-              className={(loading || graphBuilding) ? styles.spinning : ""}
+              style={{ animation: (loading || graphBuilding) ? "spin 1s linear infinite" : "none" }}
             />
             {loading ? "Analyzing files…" : graphBuilding ? "Building graph…" : "Analyze Debt"}
           </button>
 
-          <span className={styles.fileCount}>
+          <span style={{ fontSize: "10px", color: "var(--text-secondary, #a0a0b0)" }}>
             {scanning
               ? "Scanning…"
               : filePaths.length > 0
@@ -752,50 +720,16 @@ export default function TechnicalDebtDashboard({
               : "No project open"}
           </span>
           {astStatus && (
-            <span style={{ fontSize: "9px", color: "var(--text-secondary, #a6adc8)" }}>
+            <span style={{ fontSize: "9px", color: "var(--text-secondary, #a0a0b0)" }}>
               Coverage: {astStatus.supportedFiles > 0
                 ? Math.round((astStatus.astFiles / astStatus.supportedFiles) * 100)
                 : 0}% ({astStatus.astFiles}/{astStatus.supportedFiles})
               {astStatus.fallbackFiles > 0 ? ` · Fallback: ${astStatus.fallbackFiles}` : ""}
               {astStatus.unsupportedFiles > 0 ? ` · Unsupported: ${astStatus.unsupportedFiles}` : ""}
-            </span>
+          </span>
           )}
         </div>
       </div>
-
-      {/* ── At-a-glance summary bar ────────────────────────────────────── */}
-      {score && (
-        <div className={styles.summaryBar}>
-          <div className={styles.summaryBarItem}>
-            <span className={styles.summaryBarValue}>{fmtNum(filePaths.length)}</span> files
-          </div>
-          {discovery && (
-            <div className={styles.summaryBarItem}>
-              <span className={styles.summaryBarValue}>{fmtNum(discovery.analyzed)}</span> analyzed
-            </div>
-          )}
-          {criticalCount > 0 && (
-            <div className={styles.summaryBarItem}>
-              <span className={styles.summaryBarValueWarn}>{fmtNum(criticalCount)}</span> critical
-            </div>
-          )}
-          {cycleCount > 0 && (
-            <div className={styles.summaryBarItem}>
-              <span className={styles.summaryBarValueWarn}>{fmtNum(cycleCount)}</span> cycles
-            </div>
-          )}
-          {plan && plan.totalEstimatedHours > 0 && (
-            <div className={styles.summaryBarItem}>
-              <span className={styles.summaryBarValue}>{fmtNum(plan.totalEstimatedHours)}h</span> estimated
-            </div>
-          )}
-          {discovery && discovery.fromCache > 0 && (
-            <div className={styles.summaryBarItem}>
-              <span className={styles.summaryBarValueGood}>{fmtNum(discovery.fromCache)}</span> cached
-            </div>
-          )}
-        </div>
-      )}
 
       {showASTDetails && astStatus && (
         <ASTDetailsPanel
@@ -806,347 +740,218 @@ export default function TechnicalDebtDashboard({
         />
       )}
 
-      {/* ── Graph building skeleton ────────────────────────────────────── */}
-      {graphBuilding && (
-        <div className={styles.graphBuildingPlaceholder}>
-          <div className={styles.graphBuildingRow} />
-          <div className={styles.graphBuildingRow} />
-          <div className={styles.graphBuildingRow} />
-        </div>
-      )}
-
-      {/* Empty state: no analysis yet */}
-      {!score && !loading && (
-        <div className={styles.emptyState}>
-          <BarChart3 size={28} className={styles.emptyStateIcon} />
-          <div className={styles.emptyStateTitle}>No analysis yet</div>
-          <div className={styles.emptyStateDesc}>
-            Click "Analyze Debt" to scan your project for technical debt, architectural risks, and code quality issues.
-          </div>
-          {filePaths.length > 0 && (
-            <div style={{ marginTop: "6px", fontSize: "10px", color: "var(--text-secondary, #a6adc8)" }}>
-              {filePaths.length} source files ready
-            </div>
-          )}
-        </div>
-      )}
-
       {score && (
         <>
-          {/* ── 1. Overall Health Score ──────────────────────────────────── */}
-          <div className={styles.overallScoreCard}>
-            <div className={styles.scoreHeader}>
-              <div
-                className={styles.scoreCircle}
-                style={{
-                  background: CATEGORY_BG[score.category] ?? "rgba(137,180,250,0.10)",
-                  border: `3px solid ${CATEGORY_COLOR[score.category] ?? "var(--accent, #89b4fa)"}`,
-                  color: CATEGORY_COLOR[score.category] ?? "var(--accent, #89b4fa)",
-                }}
-              >
+          {/* ── Overall score card ─────────────────────────────────────────── */}
+          <div className={styles.card}>
+            <div style={{ display: "flex", alignItems: "center", gap: "16px", marginBottom: "10px" }}>
+              <div style={{
+                width: 52, height: 52, borderRadius: "50%",
+                background: CATEGORY_BG[score.category] ?? "#1e3a5f20",
+                border: `3px solid ${CATEGORY_COLOR[score.category] ?? "#60a5fa"}`,
+                display: "flex", alignItems: "center", justifyContent: "center",
+                fontWeight: 700, fontSize: 18,
+                color: CATEGORY_COLOR[score.category] ?? "#60a5fa",
+              }}>
                 {score.overall}
               </div>
-              <div className={styles.scoreInfo}>
-                <div className={styles.scoreCategory}>
+              <div>
+                <div style={{ fontSize: "16px", fontWeight: 700, textTransform: "capitalize" }}>
                   {score.category}
                 </div>
-                <div className={styles.scoreTrend}>
+                <div style={{ fontSize: "11px", color: "var(--text-secondary, #a0a0b0)" }}>
                   {score.trend === "improving" ? (
-                    <span style={{ color: "var(--green, #a6e3a1)" }}>
+                    <span style={{ color: "#34d399" }}>
                       <TrendingDown size={12} style={{ verticalAlign: "middle" }} /> Improving
                     </span>
                   ) : score.trend === "declining" ? (
-                    <span style={{ color: "var(--orange, #fab387)" }}>
+                    <span style={{ color: "#f87171" }}>
                       <TrendingUp size={12} style={{ verticalAlign: "middle" }} /> Declining
                     </span>
                   ) : (
-                    <span style={{ color: "var(--text-secondary, #a6adc8)" }}>Stable</span>
+                    <span>Stable</span>
                   )}
                 </div>
               </div>
             </div>
-            <div className={styles.scoreSummary}>
+            <div style={{ fontSize: "11px", color: "var(--text-secondary, #a0a0b0)", lineHeight: 1.6 }}>
               {score.modules.length} modules · {score.overall}/100
-              {plan && plan.totalEstimatedHours > 0 && (
-                <> · ~{plan.totalEstimatedHours}h estimated to resolve all issues</>
-              )}
             </div>
           </div>
 
-          {/* ── 2. Quick Stats (Discovery + Scan Diff summary) ──────────── */}
-          <div className={styles.sectionWrapper}>
-            <div className={styles.sectionHeader} style={{ cursor: "inherit" }}>
-              <Database size={13} />
-              <span className={styles.sectionHeaderTitle}>Quick Stats</span>
-            </div>
-            <div className={styles.quickStatsGrid}>
-              {discovery && (
-                <>
-                  <div className={styles.quickStatCard}>
-                    <div className={styles.quickStatValue} style={{ color: "var(--accent, #89b4fa)" }}>{totalDiscovered}</div>
-                    <div className={styles.quickStatLabel}>Discovered</div>
-                  </div>
-                  <div className={styles.quickStatCard}>
-                    <div className={styles.quickStatValue} style={{ color: "var(--green, #a6e3a1)" }}>{discovery.analyzed}</div>
-                    <div className={styles.quickStatLabel}>Analyzed</div>
-                  </div>
-                  <div className={styles.quickStatCard}>
-                    <div className={styles.quickStatValue} style={{ color: "var(--purple, #cba6f7)" }}>{discovery.fromCache}</div>
-                    <div className={styles.quickStatLabel}>From Cache</div>
-                  </div>
-                </>
-              )}
-              {discovery && (
-                <div className={styles.quickStatCard}>
-                  <div className={styles.quickStatValue} style={{ color: "var(--yellow, #f9e2af)" }}>{discovery.skipped}</div>
-                  <div className={styles.quickStatLabel}>Skipped</div>
-                </div>
-              )}
-              {discovery && (
-                <div className={styles.quickStatCard}>
-                  <div className={styles.quickStatValue} style={{ color: "var(--orange, #fab387)" }}>{discovery.failed}</div>
-                  <div className={styles.quickStatLabel}>Failed</div>
-                </div>
-              )}
-              {scanDiff && scanDiff.hasPrevious && (
-                <div className={styles.quickStatCard}>
-                  <div
-                    className={styles.quickStatValue}
-                    style={{ color: scanDiff.overallDelta >= 0 ? "var(--green, #a6e3a1)" : "var(--orange, #fab387)" }}
-                  >
-                    {scanDiff.overallDelta >= 0 ? "+" : ""}{scanDiff.overallDelta}
-                  </div>
-                  <div className={styles.quickStatLabel}>Score Delta</div>
-                </div>
-              )}
-            </div>
-          </div>
-
-          {/* ── Scan Diff details ────────────────────────────────────────── */}
-          {scanDiff && scanDiff.hasPrevious && (scanDiff.improved.length > 0 || scanDiff.regressed.length > 0 || scanDiff.newFiles.length > 0) && (
-            <div className={styles.sectionWrapper}>
-              <button onClick={() => setShowDiff(!showDiff)} className={styles.sectionHeader}>
-                {showDiff ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
-                <div className={styles.sectionHeaderMain}>
-                  <TrendingUp size={13} />
-                  <span className={styles.sectionHeaderTitle}>Changes Since Last Scan</span>
-                  <span className={styles.sectionHeaderBadge} style={{ color: scanDiff.overallDelta >= 0 ? "var(--green, #a6e3a1)" : "var(--orange, #fab387)" }}>
-                    {scanDiff.overallDelta >= 0 ? "+" : ""}{scanDiff.overallDelta} pts
-                  </span>
-                </div>
+          {/* ── Discovery metrics ──────────────────────────────────────────── */}
+          {discovery && (
+            <div style={{ margin: "6px 16px" }}>
+              <button onClick={() => setShowDiscovery(!showDiscovery)} style={SECTION_BTN}>
+                {showDiscovery ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+                <Database size={13} />
+                Discovery Metrics
               </button>
-              {showDiff && (
-                <div className={styles.diffPanel}>
-                  {scanDiff.improved.length > 0 && (
-                    <div className={styles.diffSection}>
-                      <div className={`${styles.diffSectionTitle} ${styles.diffSectionTitleImproved}`}>
-                        ↑ Improved ({scanDiff.improved.length})
-                      </div>
-                      {scanDiff.improved.slice(0, 5).map((d) => (
-                        <div key={d.filePath} className={`${styles.diffRow} ${styles.diffRowImproved}`}>
-                          <span className={styles.diffRowPath}>
-                            {d.filePath.replace(/\\/g, "/").split("/").slice(-2).join("/")}
-                          </span>
-                          <span className={`${styles.diffRowDelta} ${styles.diffRowDeltaPositive}`}>+{d.delta}</span>
-                          {d.resolvedIssues.length > 0 && (
-                            <span className={styles.diffRowIssue}>✓ {d.resolvedIssues[0]}</span>
-                          )}
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                  {scanDiff.regressed.length > 0 && (
-                    <div className={styles.diffSection}>
-                      <div className={`${styles.diffSectionTitle} ${styles.diffSectionTitleRegressed}`}>
-                        ↓ Regressed ({scanDiff.regressed.length})
-                      </div>
-                      {scanDiff.regressed.slice(0, 5).map((d) => (
-                        <div key={d.filePath} className={`${styles.diffRow} ${styles.diffRowRegressed}`}>
-                          <span className={styles.diffRowPath}>
-                            {d.filePath.replace(/\\/g, "/").split("/").slice(-2).join("/")}
-                          </span>
-                          <span className={`${styles.diffRowDelta} ${styles.diffRowDeltaNegative}`}>{d.delta}</span>
-                          {d.newIssues.length > 0 && (
-                            <span className={styles.diffRowIssue}>⚠ {d.newIssues[0]}</span>
-                          )}
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                  {(scanDiff.newFiles.length > 0 || scanDiff.removedFiles.length > 0) && (
-                    <div className={styles.diffSummary}>
-                      {scanDiff.newFiles.length > 0 && (
-                        <span>+ {scanDiff.newFiles.length} new file{scanDiff.newFiles.length > 1 ? "s" : ""}</span>
-                      )}
-                      {scanDiff.removedFiles.length > 0 && (
-                        <span style={{ marginLeft: "8px" }}>− {scanDiff.removedFiles.length} removed</span>
-                      )}
-                    </div>
-                  )}
-                </div>
-              )}
-            </div>
-          )}
-
-          {/* ── 4. Dead Code Analysis ───────────────────────────────────── */}
-          {deadCodeReport && (
-            <div className={styles.sectionWrapper}>
-              <button onClick={() => setShowDeadCode(!showDeadCode)} className={styles.sectionHeader}>
-                {showDeadCode ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
-                <div className={styles.sectionHeaderMain}>
-                  <FileCode size={13} />
-                  <span className={styles.sectionHeaderTitle}>Dead Code Analysis</span>
-                  <span className={styles.sectionHeaderBadge} style={{ color: deadCodeTotal > 0 ? "var(--orange, #fab387)" : "var(--green, #a6e3a1)" }}>
-                    {deadCodeTotal} findings
-                  </span>
-                </div>
-              </button>
-              <div className={styles.sectionHeaderSummary}>
-                {deadCodeTotal > 0
-                  ? `${deadCodeReport.unusedExports.length} unused exports, ${deadCodeReport.unusedImports.length} unused imports, ${deadCodeReport.unusedDeclarations.length} unused declarations`
-                  : "No dead code detected in scanned files"}
-              </div>
-              {showDeadCode && (
-                <div className={styles.collapseContent}>
-                  <DeadCodePanel report={deadCodeReport} />
-                </div>
-              )}
-            </div>
-          )}
-          {!deadCodeReport && score && (
-            <div className={styles.sectionWrapper}>
-              <div className={styles.emptyStateGood}>
-                <CheckCircle2 size={14} />
-                No dead code detected
-              </div>
-            </div>
-          )}
-
-          {/* ── 5. All Findings (Unified) ───────────────────────────────── */}
-          {unifiedResult && unifiedResult.size > 0 && (
-            <div className={styles.sectionWrapper}>
-              <button onClick={() => setShowFindings(!showFindings)} className={styles.sectionHeader}>
-                {showFindings ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
-                <div className={styles.sectionHeaderMain}>
-                  <AlertCircle size={13} />
-                  <span className={styles.sectionHeaderTitle}>All Findings</span>
-                  <span className={styles.sectionHeaderBadge}>({findingsTotal})</span>
-                </div>
-              </button>
-              <div className={styles.sectionHeaderSummary}>
-                Cross-layer analysis: debt, security, type safety, and architecture
-              </div>
-              {showFindings && (
-                <div className={styles.collapseContent}>
-                  <UnifiedFindingsPanel result={unifiedResult} />
-                </div>
-              )}
-            </div>
-          )}
-
-          {/* ── 6. Dependency Graph ─────────────────────────────────────── */}
-          {(cycleResult || couplingResult) && (
-            <div className={styles.sectionWrapper}>
-              <button onClick={() => setShowGraph(!showGraph)} className={styles.sectionHeader}>
-                {showGraph ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
-                <div className={styles.sectionHeaderMain}>
-                  <Link size={13} />
-                  <span className={styles.sectionHeaderTitle}>Dependency Graph</span>
-                  {cycleResult && cycleResult.cycleCount > 0 && (
-                    <span style={{ color: "var(--orange, #fab387)", fontSize: "10px", marginLeft: "4px" }}>
-                      ⚠ {cycleResult.cycleCount} cycle{cycleResult.cycleCount > 1 ? "s" : ""}
-                    </span>
-                  )}
-                </div>
-              </button>
-              {couplingResult && (
-                <div className={styles.sectionHeaderSummary}>
-                  {cycleResult && cycleResult.cycleCount > 0
-                    ? `${cycleResult.cycleCount} circular dependencies detected`
-                    : "No circular dependencies detected"}
-                  {couplingResult.hubFiles.length > 0
-                    ? ` · ${couplingResult.hubFiles.length} hub files · avg coupling ${couplingResult.averageCoupling}`
-                    : ` · avg coupling ${couplingResult.averageCoupling}`}
-                </div>
-              )}
-              {showGraph && cycleResult && couplingResult && (
-                <div className={styles.collapseContent}>
-                  <GraphSummaryPanel cycles={cycleResult} coupling={couplingResult} />
-                  <div className={styles.graphExportBtns}>
-                    <button onClick={() => handleExportGraph('dot')} className={styles.graphExportBtn}>
-                      <Download size={9} /> DOT
-                    </button>
-                    <button onClick={() => handleExportGraph('json')} className={styles.graphExportBtn}>
-                      <Download size={9} /> JSON
-                    </button>
-                    <button onClick={() => handleExportGraph('mermaid')} className={styles.graphExportBtn}>
-                      <Download size={9} /> Mermaid
-                    </button>
-                  </div>
-                </div>
-              )}
-            </div>
-          )}
-          {!cycleResult && !couplingResult && score && (
-            <div className={styles.sectionWrapper}>
-              <div className={styles.emptyStateGood}>
-                <CheckCircle2 size={14} />
-                No dependency graph data yet. Run analysis to detect cycles and coupling.
-              </div>
-            </div>
-          )}
-
-          {/* ── 7. Trend History ────────────────────────────────────────── */}
-          {score.trendHistory.length > 1 && (
-            <div className={styles.sectionWrapper}>
-              <button onClick={() => setShowTrend(!showTrend)} className={styles.sectionHeader}>
-                {showTrend ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
-                <div className={styles.sectionHeaderMain}>
-                  <TrendingUp size={13} />
-                  <span className={styles.sectionHeaderTitle}>Trend History</span>
-                  <span className={styles.sectionHeaderBadge}>({score.trendHistory.length} scans)</span>
-                </div>
-              </button>
-              <div className={styles.sectionHeaderSummary}>
-                Track your debt score over time across multiple scans
-              </div>
-              {showTrend && (
-                <div className={styles.collapseContent}>
-                  {[...score.trendHistory].reverse().map((entry, i) => (
-                    <div key={i} className={styles.trendRow}>
-                      <span className={styles.trendRowScore} style={{ color: CATEGORY_COLOR[score.category] }}>
-                        {entry.score}
-                      </span>
-                      <span className={styles.trendRowDate}>
-                        {new Date(entry.date).toLocaleString()}
-                      </span>
+              {showDiscovery && (
+                <div style={{ marginTop: "6px", display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: "6px" }}>
+                  {[
+                    { label: "Discovered", value: totalDiscovered, color: "#60a5fa" },
+                    { label: "Analyzed",   value: discovery.analyzed, color: "#34d399" },
+                    { label: "From Cache", value: discovery.fromCache, color: "#a78bfa" },
+                    { label: "Skipped",    value: discovery.skipped,  color: "#fbbf24" },
+                    { label: "Failed",     value: discovery.failed,   color: "#f87171" },
+                  ].map(({ label, value, color }) => (
+                    <div key={label} style={{
+                      padding: "6px 8px", background: "var(--bg-input, #1a1a2e)",
+                      borderRadius: "4px", textAlign: "center",
+                    }}>
+                      <div style={{ fontSize: "16px", fontWeight: 700, color }}>{value}</div>
+                      <div style={{ fontSize: "9px", color: "var(--text-secondary, #a0a0b0)" }}>{label}</div>
                     </div>
                   ))}
                 </div>
               )}
             </div>
           )}
-          {score.trendHistory.length <= 1 && (
-            <div className={styles.sectionWrapper}>
-              <div className={styles.emptyStateGood}>
-                <TrendingUp size={14} />
-                Run multiple scans over time to see trend history
-              </div>
+
+          {/* ── Graph summary (Phase 4) ──────────────────────────────────── */}
+          {(cycleResult || couplingResult) && (
+            <div style={{ margin: "6px 16px" }}>
+              <button onClick={() => setShowGraph(!showGraph)} style={SECTION_BTN}>
+                {showGraph ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+                <Link size={13} />
+                Dependency Graph
+                {cycleResult && cycleResult.cycleCount > 0 && (
+                  <span style={{ color: "#f87171", fontSize: "10px", marginLeft: "4px" }}>
+                    ⚠ {cycleResult.cycleCount} cycle{cycleResult.cycleCount > 1 ? "s" : ""}
+                  </span>
+                )}
+              </button>
+              {showGraph && cycleResult && couplingResult && (
+                <>
+                  <GraphSummaryPanel cycles={cycleResult} coupling={couplingResult} />
+                  <div style={{ display: "flex", gap: "6px", marginTop: "8px" }}>
+                    <button onClick={() => handleExportGraph('dot')} style={{
+                      padding: "3px 8px", fontSize: "9px", fontWeight: 600,
+                      background: "var(--bg-input, #1a1a2e)", border: "1px solid var(--border-color, #2a2a4a)",
+                      borderRadius: "4px", color: "var(--text-secondary, #a0a0b0)",
+                      cursor: "pointer", fontFamily: "inherit", display: "flex", alignItems: "center", gap: "3px",
+                    }}>
+                      <Download size={9} /> DOT
+                    </button>
+                    <button onClick={() => handleExportGraph('json')} style={{
+                      padding: "3px 8px", fontSize: "9px", fontWeight: 600,
+                      background: "var(--bg-input, #1a1a2e)", border: "1px solid var(--border-color, #2a2a4a)",
+                      borderRadius: "4px", color: "var(--text-secondary, #a0a0b0)",
+                      cursor: "pointer", fontFamily: "inherit", display: "flex", alignItems: "center", gap: "3px",
+                    }}>
+                      <Download size={9} /> JSON
+                    </button>
+                    <button onClick={() => handleExportGraph('mermaid')} style={{
+                      padding: "3px 8px", fontSize: "9px", fontWeight: 600,
+                      background: "var(--bg-input, #1a1a2e)", border: "1px solid var(--border-color, #2a2a4a)",
+                      borderRadius: "4px", color: "var(--text-secondary, #a0a0b0)",
+                      cursor: "pointer", fontFamily: "inherit", display: "flex", alignItems: "center", gap: "3px",
+                    }}>
+                      <Download size={9} /> Mermaid
+                    </button>
+                  </div>
+                </>
+              )}
             </div>
           )}
 
-          {/* ── 7. Module Breakdown ─────────────────────────────────────── */}
-          {score.modules.length > 0 && (
-            <div className={styles.sectionWrapper}>
-              <button onClick={() => setShowModules(!showModules)} className={styles.sectionHeader}>
-                {showModules ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
-                <div className={styles.sectionHeaderMain}>
-                  <span className={styles.sectionHeaderTitle}>Module Breakdown</span>
-                  <span className={styles.sectionHeaderBadge}>({score.modules.length})</span>
+          {/* ── Changes since last scan (Fix #10) ────────────────────────── */}
+          {scanDiff && scanDiff.hasPrevious && (scanDiff.improved.length > 0 || scanDiff.regressed.length > 0 || scanDiff.newFiles.length > 0) && (
+            <div style={{ margin: "6px 16px" }}>
+              <button onClick={() => setShowDiff(!showDiff)} style={SECTION_BTN}>
+                {showDiff ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+                <TrendingUp size={13} />
+                Changes Since Last Scan
+                <span style={{
+                  color: scanDiff.overallDelta >= 0 ? "#34d399" : "#f87171",
+                  fontSize: "10px", marginLeft: "4px",
+                }}>
+                  {scanDiff.overallDelta >= 0 ? "+" : ""}{scanDiff.overallDelta} pts
+                </span>
+              </button>
+              {showDiff && (
+                <div style={{ marginTop: "6px" }}>
+                  {scanDiff.improved.length > 0 && (
+                    <div style={{ marginBottom: "6px" }}>
+                      <div style={{ fontSize: "10px", color: "#34d399", fontWeight: 600, marginBottom: "3px" }}>
+                        ↑ Improved ({scanDiff.improved.length})
+                      </div>
+                      {scanDiff.improved.slice(0, 5).map((d) => (
+                        <div key={d.filePath} style={{ ...ROW, borderLeft: "2px solid #34d399" }}>
+                          <span style={{ flex: 1, fontSize: "10px" }}>
+                            {d.filePath.replace(/\\/g, "/").split("/").slice(-2).join("/")}
+                          </span>
+                          <span style={{ color: "#34d399", fontWeight: 600, fontSize: "10px" }}>+{d.delta}</span>
+                          {d.resolvedIssues.length > 0 && (
+                            <span style={{ fontSize: "9px", color: "#a0a0b0" }}>✓ {d.resolvedIssues[0]}</span>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                  {scanDiff.regressed.length > 0 && (
+                    <div style={{ marginBottom: "6px" }}>
+                      <div style={{ fontSize: "10px", color: "#f87171", fontWeight: 600, marginBottom: "3px" }}>
+                        ↓ Regressed ({scanDiff.regressed.length})
+                      </div>
+                      {scanDiff.regressed.slice(0, 5).map((d) => (
+                        <div key={d.filePath} style={{ ...ROW, borderLeft: "2px solid #f87171" }}>
+                          <span style={{ flex: 1, fontSize: "10px" }}>
+                            {d.filePath.replace(/\\/g, "/").split("/").slice(-2).join("/")}
+                          </span>
+                          <span style={{ color: "#f87171", fontWeight: 600, fontSize: "10px" }}>{d.delta}</span>
+                          {d.newIssues.length > 0 && (
+                            <span style={{ fontSize: "9px", color: "#a0a0b0" }}>⚠ {d.newIssues[0]}</span>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                  {scanDiff.newFiles.length > 0 && (
+                    <div style={{ fontSize: "9px", color: "#a0a0b0", marginTop: "4px" }}>
+                      + {scanDiff.newFiles.length} new file{scanDiff.newFiles.length > 1 ? "s" : ""}
+                    </div>
+                  )}
+                  {scanDiff.removedFiles.length > 0 && (
+                    <div style={{ fontSize: "9px", color: "#a0a0b0" }}>
+                      − {scanDiff.removedFiles.length} removed
+                    </div>
+                  )}
                 </div>
+              )}
+            </div>
+          )}
+
+          {/* ── Dead Code Report ──────────────────────────────────────────── */}
+          {deadCodeReport && (
+            <div style={{ margin: "6px 16px" }}>
+              <button onClick={() => setShowDeadCode(!showDeadCode)} style={SECTION_BTN}>
+                {showDeadCode ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+                <FileCode size={13} />
+                Dead Code Analysis
+                <span style={{
+                  color: deadCodeReport.unusedExports.length + deadCodeReport.unusedImports.length + deadCodeReport.unusedDeclarations.length > 0 ? "#f87171" : "#34d399",
+                  fontSize: "10px", marginLeft: "4px",
+                }}>
+                  {deadCodeReport.unusedExports.length + deadCodeReport.unusedImports.length + deadCodeReport.unusedDeclarations.length} findings
+                </span>
+              </button>
+              {showDeadCode && (
+                <DeadCodePanel report={deadCodeReport} />
+              )}
+            </div>
+          )}
+
+          {/* ── Module breakdown ───────────────────────────────────────────── */}
+          {score.modules.length > 0 && (
+            <div style={{ margin: "6px 16px" }}>
+              <button onClick={() => setShowModules(!showModules)} style={SECTION_BTN}>
+                {showModules ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+                Module Breakdown ({score.modules.length})
               </button>
               {showModules && (
-                <div className={styles.collapseContent}>
+                <div style={{ marginTop: "6px" }}>
                   {score.modules.map((mod) => (
                     <ModuleRow key={mod.module} mod={mod} />
                   ))}
@@ -1155,48 +960,76 @@ export default function TechnicalDebtDashboard({
             </div>
           )}
 
-          {/* ── Section Separator ────────────────────────────────────────── */}
-          {plan && plan.items.length > 0 && (
-            <div className={styles.sectionSeparator}>Refactor Recommendations</div>
-          )}
-
-          {/* ── 8. Major Refactors ──────────────────────────────────────── */}
-          {plan && majorItems.length > 0 && (
-            renderRefactorSection(
-              majorItems, showMajor, () => setShowMajor(!showMajor),
-              "Major Refactors", <Layers size={13} />, "var(--red, #f38ba8)",
-              `${majorItems.length} files requiring significant restructuring — ~${plan.totalEstimatedHours}h estimated total`,
-              fixWithAiProvider ? handleFixWithAiClick : undefined,
-            )
-          )}
-          {plan && majorItems.length === 0 && (
-            <div className={styles.sectionWrapper}>
-              <div className={styles.emptyStateGood}>
-                <CheckCircle2 size={14} />
-                No major refactors needed
-              </div>
+          {/* ── Trend history ──────────────────────────────────────────────── */}
+          {score.trendHistory.length > 1 && (
+            <div style={{ margin: "6px 16px" }}>
+              <button onClick={() => setShowTrend(!showTrend)} style={SECTION_BTN}>
+                {showTrend ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+                Trend History ({score.trendHistory.length} scans)
+              </button>
+              {showTrend && (
+                <div style={{ marginTop: "6px", maxHeight: "160px", overflowY: "auto" }}>
+                  {[...score.trendHistory].reverse().map((entry, i) => (
+                    <div key={i} style={{ ...ROW, fontSize: "10px" }}>
+                      <span style={{ color: CATEGORY_COLOR[score.category], fontWeight: 600 }}>
+                        {entry.score}
+                      </span>
+                      <span style={{ flex: 1, color: "var(--text-secondary, #a0a0b0)" }}>
+                        {new Date(entry.date).toLocaleString()}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
           )}
 
-          {/* ── 9. Remaining Refactor Queue ─────────────────────────────── */}
-          {plan && renderRefactorSection(
-            quickWinItems, showQuickWins, () => setShowQuickWins(!showQuickWins),
-            "Quick Wins", <Zap size={12} />, "var(--green, #a6e3a1)",
-            quickWinItems.length > 0 ? "Low effort, high impact fixes" : undefined,
-            fixWithAiProvider ? handleFixWithAiClick : undefined,
+          {/* ── Unified Findings Panel ─────────────────────────────────────── */}
+          {unifiedResult && unifiedResult.size > 0 && (
+            <div style={{ margin: "6px 16px" }}>
+              <button onClick={() => setShowFindings(!showFindings)} style={SECTION_BTN}>
+                {showFindings ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+                <AlertCircle size={13} />
+                All Findings ({Array.from(unifiedResult.values()).reduce((sum, p) => sum + p.findings.length, 0)})
+              </button>
+              {showFindings && (
+                <UnifiedFindingsPanel result={unifiedResult} />
+              )}
+            </div>
           )}
 
-          {plan && renderRefactorSection(
-            archItems, showArch, () => setShowArch(!showArch),
-            "Architectural Issues", <GitBranch size={12} />, "var(--purple, #cba6f7)",
-            archItems.length > 0 ? "Structural concerns requiring design-level changes" : undefined,
-          )}
+          {/* ── Refactor queue ─────────────────────────────────────────────── */}
+          {plan && plan.items.length > 0 && (
+            <>
+              <div style={{
+                margin: "12px 16px 4px", fontSize: "11px", fontWeight: 600,
+                color: "var(--text-secondary, #a0a0b0)",
+                display: "flex", alignItems: "center", gap: "6px",
+              }}>
+                <Target size={13} />
+                Refactor Queue — {plan.items.length} items · ~{plan.totalEstimatedHours}h total
+              </div>
 
-          {plan && renderRefactorSection(
-            maintenanceItems, showMaintenance, () => setShowMaintenance(!showMaintenance),
-            "Maintenance", <Wrench size={12} />, "var(--yellow, #f9e2af)",
-            maintenanceItems.length > 0 ? "Routine cleanup and code hygiene tasks" : undefined,
-            fixWithAiProvider ? handleFixWithAiClick : undefined,
+              {renderPlanSection(
+                plan.quickWins, showQuickWins, () => setShowQuickWins(!showQuickWins),
+                "Quick Wins", <Zap size={12} />, "#34d399",
+                fixWithAiProvider ? handleFixWithAiClick : undefined,
+              )}
+              {renderPlanSection(
+                plan.majorRefactors, showMajor, () => setShowMajor(!showMajor),
+                "Major Refactors", <Layers size={12} />, "#f87171",
+                fixWithAiProvider ? handleFixWithAiClick : undefined,
+              )}
+              {renderPlanSection(
+                plan.architecturalIssues, showArch, () => setShowArch(!showArch),
+                "Architectural Issues", <GitBranch size={12} />, "#a78bfa",
+              )}
+              {renderPlanSection(
+                plan.maintenance, showMaintenance, () => setShowMaintenance(!showMaintenance),
+                "Maintenance", <Wrench size={12} />, "#fbbf24",
+                fixWithAiProvider ? handleFixWithAiClick : undefined,
+              )}
+            </>
           )}
         </>
       )}
@@ -1233,6 +1066,19 @@ export default function TechnicalDebtDashboard({
         />
       )}
 
+      {/* Empty state */}
+      {!score && !loading && (
+        <div className={styles.emptyState}>
+          <BarChart3 size={24} style={{ marginBottom: "8px", opacity: 0.5 }} />
+          <div>Run analysis to calculate project technical debt</div>
+          {filePaths.length > 0 && (
+            <div style={{ marginTop: "6px", fontSize: "10px" }}>
+              {filePaths.length} source files ready
+            </div>
+          )}
+        </div>
+      )}
+
       {/* Footer */}
       <div className={styles.footer}>
         Scored on: file size · function length · comment ratio · dependency coupling · TODO density · duplication
@@ -1244,154 +1090,213 @@ export default function TechnicalDebtDashboard({
 // ── Sub-components ─────────────────────────────────────────────────────────────
 
 function ModuleRow({ mod }: { mod: ModuleDebtScore }) {
-  const color = mod.score >= 70 ? "var(--green, #a6e3a1)" : mod.score >= 50 ? "var(--yellow, #f9e2af)" : "var(--orange, #fab387)";
+  const color = mod.score >= 70 ? "#34d399" : mod.score >= 50 ? "#fbbf24" : "#f87171";
   return (
-    <div className={styles.moduleRow}>
-      <span className={styles.moduleRowDot} style={{ color }}>●</span>
-      <span className={styles.moduleRowName}>{mod.module}</span>
-      <span className={styles.moduleRowScore} style={{ color }}>{mod.score}</span>
-      <span className={styles.moduleRowFileCount}>{mod.fileCount}f</span>
+    <div style={{ ...ROW }}>
+      <span style={{ color, fontWeight: 700, fontSize: "13px" }}>●</span>
+      <span style={{ flex: 1, fontSize: "11px" }}>{mod.module}</span>
+      <span style={{ color, fontWeight: 600 }}>{mod.score}</span>
+      <span style={{ color: "var(--text-secondary, #a0a0b0)", fontSize: "10px" }}>
+        {mod.fileCount}f
+      </span>
     </div>
   );
 }
 
 function PlanItemCard({ item, onFixWithAi }: { item: RefactorPlanItem; onFixWithAi?: (item: RefactorPlanItem) => void }) {
+  const [expanded, setExpanded] = useState(false);
+  const effortColor = EFFORT_COLOR[item.estimatedEffort] ?? "#fbbf24";
+  const riskColor   = RISK_COLOR[item.estimatedRisk]     ?? "#fbbf24";
+
   const displayPath = item.filePath
     .replace(/\\/g, "/")
     .split("/")
     .slice(-3)
     .join("/");
 
-  const borderClass = riskBorderClass(item.estimatedRisk) || effortBorderClass(item.estimatedEffort);
-
   return (
-    <div className={`${styles.planItemCard} ${borderClass}`}>
-      {/* ── FILE ───────────────────────────────────────────────────── */}
-      <div className={styles.planItemHeader}>
-        <span className={styles.planItemPath}>
+    <div style={{
+      padding: "7px 10px",
+      background: "var(--bg-input, #1a1a2e)",
+      borderRadius: "4px", marginBottom: "4px",
+      borderLeft: `3px solid ${effortColor}`,
+      cursor: "pointer",
+    }}
+      onClick={() => setExpanded(!expanded)}
+    >
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "3px" }}>
+        <span style={{ fontSize: "10px", fontWeight: 600, display: "flex", alignItems: "center", gap: "4px" }}>
           <FileCode size={10} />
-          <span className={styles.planItemPathMono}>{displayPath}</span>
+          {displayPath}
         </span>
-        <div className={styles.planItemBadges}>
-          <span className={`${styles.badge} ${effortBadgeVariant(item.estimatedEffort)}`}>
-            {item.effortLabel}
-          </span>
-          <span className={`${styles.badge} ${riskBadgeVariant(item.estimatedRisk)}`}>
-            {item.estimatedRisk} risk
-          </span>
-          <span className={`${styles.badge} ${effortBadgeVariant(item.estimatedImpact)}`}>
-            {item.estimatedImpact} impact
-          </span>
-          {item.category && (
-            <span className={`${styles.badge} ${styles.badgeInfo}`}>
-              {CATEGORY_ICONS[item.category]} {CATEGORY_LABEL[item.category]}
+        <div style={{ display: "flex", gap: "4px" }}>
+          <Badge color={effortColor}>{item.effortLabel}</Badge>
+          <Badge color={EFFORT_COLOR[item.estimatedImpact]}>{item.estimatedImpact} impact</Badge>
+          <Badge color={riskColor}>{item.estimatedRisk} risk</Badge>
+        </div>
+      </div>
+
+      <div style={{ fontSize: "10px", color: "var(--text-secondary, #a0a0b0)", display: "flex", alignItems: "center", gap: "5px" }}>
+        {CATEGORY_ICONS[item.category]}
+        <span style={{ color: "#a0a0b0" }}>{CATEGORY_LABEL[item.category]}</span>
+        <span>·</span>
+        <span>{item.recommendation}</span>
+      </div>
+
+      {expanded && (
+        <div style={{ marginTop: "6px", borderTop: "1px solid var(--border-color, #2a2a4a)", paddingTop: "6px" }}>
+          <div style={{ fontSize: "10px", marginBottom: "4px" }}>
+            <span style={{ color: "#f87171", fontWeight: 600 }}>
+              <AlertCircle size={9} style={{ verticalAlign: "middle", marginRight: "3px" }} />
+              Why flagged:
             </span>
+            <span style={{ color: "var(--text-secondary, #a0a0b0)", marginLeft: "4px" }}>
+              {item.whyFlagged}
+            </span>
+          </div>
+          <div style={{ fontSize: "10px", marginBottom: "6px" }}>
+            <span style={{ color: "#34d399", fontWeight: 600 }}>
+              <CheckCircle2 size={9} style={{ verticalAlign: "middle", marginRight: "3px" }} />
+              Expected payoff:
+            </span>
+            <span style={{ color: "var(--text-secondary, #a0a0b0)", marginLeft: "4px" }}>
+              {item.expectedPayoff}
+            </span>
+          </div>
+
+          {item.astDetail && <ASTDetailPanel detail={item.astDetail} />}
+
+          {item.dependencies.length > 0 && (
+            <div style={{ fontSize: "9px", color: "var(--text-secondary, #a0a0b0)", marginTop: "4px" }}>
+              Fix first: {item.dependencies.join(", ")}
+            </div>
+          )}
+
+          {/* ── "Fix with AI" button ── */}
+          {item.category !== "architectural" && (
+            onFixWithAi ? (
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onFixWithAi(item);
+                }}
+                style={{
+                  marginTop: "8px",
+                  padding: "4px 12px",
+                  fontSize: "10px",
+                  fontWeight: 600,
+                  background: "var(--accent-color, #3b82f6)",
+                  color: "#fff",
+                  border: "none",
+                  borderRadius: "4px",
+                  cursor: "pointer",
+                  fontFamily: "inherit",
+                  display: "flex",
+                  alignItems: "center",
+                  gap: "4px",
+                }}
+                title="Send this refactor task to AI for an automated fix"
+              >
+                <Sparkles size={10} />
+                Fix with AI
+              </button>
+            ) : (
+              <button
+                disabled
+                style={{
+                  marginTop: "8px",
+                  padding: "4px 12px",
+                  fontSize: "10px",
+                  fontWeight: 600,
+                  background: "#1a1a2e",
+                  color: "#a0a0b0",
+                  border: "1px solid #2a2a4a",
+                  borderRadius: "4px",
+                  cursor: "not-allowed",
+                  fontFamily: "inherit",
+                  display: "flex",
+                  alignItems: "center",
+                  gap: "4px",
+                  opacity: 0.6,
+                }}
+                title="Fix with AI requires an LLM provider. Pass fixWithAiProvider prop to TechnicalDebtDashboard."
+              >
+                <Sparkles size={10} />
+                Fix with AI (no provider)
+              </button>
+            )
           )}
         </div>
-      </div>
-
-      {/* ── MAIN RECOMMENDATION ──────────────────────────────────────── */}
-      <div className={styles.planItemMeta}>
-        {item.recommendation}
-      </div>
-
-      {/* ── WHY ──────────────────────────────────────────────────────── */}
-      <div className={styles.planItemWhy}>
-        <span className={styles.planItemWhyIcon}><AlertCircle size={10} /></span>
-        <span className={styles.planItemWhyLabel} style={{ color: "var(--orange, #fab387)" }}>Why flagged:</span>
-        <span className={styles.planItemWhyText}>{item.whyFlagged}</span>
-      </div>
-
-      {/* ── PAYOFF ──────────────────────────────────────────────────── */}
-      <div className={styles.planItemPayoff}>
-        <span className={styles.planItemPayoffIcon}><CheckCircle2 size={10} /></span>
-        <span className={styles.planItemPayoffLabel} style={{ color: "var(--green, #a6e3a1)" }}>Expected payoff:</span>
-        <span className={styles.planItemPayoffText}>{item.expectedPayoff}</span>
-      </div>
-
-      {/* ── STATIC ANALYSIS METRICS ─────────────────────────────────── */}
-      {item.astDetail && <ASTDetailPanel detail={item.astDetail} />}
-
-      {/* ── DEPENDENCIES ────────────────────────────────────────────── */}
-      {item.dependencies.length > 0 && (
-        <div className={styles.planItemDeps}>
-          Fix first: {item.dependencies.join(", ")}
-        </div>
-      )}
-
-      {/* ── FIX WITH AI — prominent CTA ────────────────────────────── */}
-      {item.category !== "architectural" && (
-        onFixWithAi ? (
-          <button
-            onClick={(e) => {
-              e.stopPropagation();
-              onFixWithAi(item);
-            }}
-            className={styles.fixWithAiBtn}
-            title="Send this refactor task to AI for an automated fix"
-          >
-            <Sparkles size={11} />
-            Fix with AI
-          </button>
-        ) : (
-          <button
-            disabled
-            className={styles.fixWithAiBtnDisabled}
-            title="Fix with AI requires an LLM provider"
-          >
-            <Sparkles size={11} />
-            Fix with AI (no provider)
-          </button>
-        )
       )}
     </div>
   );
 }
 
-// ── AST Detail Panel ──────────────────────────────────────────────────────────
+// ── Phase 3: AST Detail Panel ─────────────────────────────────────────────────
 
 function ASTDetailPanel({ detail }: { detail: HotspotASTDetail }) {
-  return (
-    <div className={styles.astDetailPanel}>
-      <div className={styles.astDetailHeader}>Static Analysis</div>
+  const ccColor     = COMPLEXITY_COLOR[detail.complexityBand] ?? "#fbbf24";
+  const nestColor   = NESTING_COLOR[detail.nestingBand]       ?? "#fbbf24";
 
-      <div className={styles.metricChipGrid}>
-        <MetricChip
-          label="CC"
-          value={`${detail.cyclomaticComplexity}`}
-          chipClass={complexityChipClass(detail.complexityBand)}
+  return (
+    <div style={{
+      padding: "6px 8px",
+      background: "var(--bg-primary, #1a1a2e)",
+      borderRadius: "4px",
+      marginBottom: "4px",
+      fontSize: "10px",
+    }}>
+      <div style={{
+        fontSize: "9px", fontWeight: 600, letterSpacing: "0.05em",
+        color: "var(--text-secondary, #a0a0b0)",
+        marginBottom: "5px", textTransform: "uppercase",
+      }}>
+        Static Analysis
+      </div>
+
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "4px" }}>
+        <ASTMetricRow
+          label="Complexity"
+          value={`CC=${detail.cyclomaticComplexity}`}
+          band={detail.complexityBand}
+          color={ccColor}
         />
-        <MetricChip
-          label="Depth"
-          value={String(detail.maxNestingDepth)}
-          chipClass={nestingChipClass(detail.nestingBand)}
+        <ASTMetricRow
+          label="Nesting"
+          value={`depth ${detail.maxNestingDepth}`}
+          band={detail.nestingBand}
+          color={nestColor}
         />
         {detail.godFunctionCount > 0 && (
-          <MetricChip
-            label="God Functions"
+          <ASTMetricRow
+            label="God functions"
             value={String(detail.godFunctionCount)}
-            chipClass={styles.metricChipCritical}
+            band="critical"
+            color={COMPLEXITY_COLOR.critical}
           />
         )}
         {detail.longFunctionCount > 0 && detail.godFunctionCount === 0 && (
-          <MetricChip
-            label="Long Functions"
+          <ASTMetricRow
+            label="Long functions"
             value={String(detail.longFunctionCount)}
-            chipClass={styles.metricChipModerate}
+            band="moderate"
+            color={COMPLEXITY_COLOR.moderate}
           />
         )}
         {detail.godClassCount > 0 && (
-          <MetricChip
-            label="God Classes"
+          <ASTMetricRow
+            label="God classes"
             value={String(detail.godClassCount)}
-            chipClass={styles.metricChipCritical}
+            band="critical"
+            color={COMPLEXITY_COLOR.critical}
           />
         )}
         {detail.maxParameterCount > 5 && (
-          <MetricChip
-            label="Max Params"
+          <ASTMetricRow
+            label="Max params"
             value={String(detail.maxParameterCount)}
-            chipClass={styles.metricChipModerate}
+            band="moderate"
+            color={COMPLEXITY_COLOR.moderate}
           />
         )}
       </div>
@@ -1399,20 +1304,36 @@ function ASTDetailPanel({ detail }: { detail: HotspotASTDetail }) {
   );
 }
 
-function MetricChip({
-  label, value, chipClass,
+function ASTMetricRow({
+  label, value, band, color,
 }: {
-  label: string; value: string; chipClass: string;
+  label: string;
+  value: string;
+  band: string;
+  color: string;
 }) {
   return (
-    <div className={`${styles.metricChip} ${chipClass}`}>
-      <span className={styles.metricChipLabel}>{label}</span>
-      <span className={styles.metricChipValue}>{value}</span>
+    <div style={{
+      display: "flex", justifyContent: "space-between", alignItems: "center",
+      padding: "2px 6px",
+      background: `${color}11`,
+      borderRadius: "3px",
+      borderLeft: `2px solid ${color}`,
+    }}>
+      <span style={{ color: "var(--text-secondary, #a0a0b0)" }}>{label}</span>
+      <span style={{ color, fontWeight: 600 }}>{value} <span style={{ fontWeight: 400, opacity: 0.7 }}>({band})</span></span>
     </div>
   );
 }
 
-// ── Graph Summary Panel ───────────────────────────────────────────────────────
+// ── Phase 4: Graph Summary Panel ─────────────────────────────────────────────
+
+const SEVERITY_COLOR: Record<string, string> = {
+  none:     "#34d399",
+  minor:    "#fbbf24",
+  moderate: "#f87171",
+  severe:   "#ef4444",
+};
 
 function GraphSummaryPanel({
   cycles,
@@ -1422,35 +1343,38 @@ function GraphSummaryPanel({
   coupling: CouplingAnalysis;
 }) {
   const [showCycles, setShowCycles] = useState(false);
-  const sevColor = cycles.severity === "severe" || cycles.severity === "moderate" ? "var(--orange, #fab387)" : "var(--yellow, #f9e2af)";
+  const sevColor = SEVERITY_COLOR[cycles.severity] ?? "#fbbf24";
 
   return (
-    <div className={styles.graphSummary}>
-      <div className={styles.graphStatGrid}>
-        <div className={styles.graphStatCard}>
-          <div className={styles.graphStatValue} style={{ color: sevColor }}>{cycles.cycleCount}</div>
-          <div className={styles.graphStatLabel}>Cycles</div>
-          <div className={styles.graphStatSub} style={{ color: sevColor }}>{cycles.severity}</div>
-        </div>
-        <div className={styles.graphStatCard}>
-          <div className={styles.graphStatValue} style={{ color: coupling.hubFiles.length > 0 ? "var(--orange, #fab387)" : "var(--green, #a6e3a1)" }}>{coupling.hubFiles.length}</div>
-          <div className={styles.graphStatLabel}>Hub Files</div>
-          <div className={styles.graphStatSub} style={{ color: coupling.hubFiles.length > 0 ? "var(--orange, #fab387)" : "var(--green, #a6e3a1)" }}>
-            {coupling.hubFiles.length > 0 ? "bottlenecks" : "none found"}
-          </div>
-        </div>
-        <div className={styles.graphStatCard}>
-          <div className={styles.graphStatValue} style={{ color: coupling.averageCoupling > 60 ? "var(--orange, #fab387)" : coupling.averageCoupling > 30 ? "var(--yellow, #f9e2af)" : "var(--green, #a6e3a1)" }}>{coupling.averageCoupling}</div>
-          <div className={styles.graphStatLabel}>Avg Coupling</div>
-          <div className={styles.graphStatSub} style={{ color: coupling.averageCoupling > 60 ? "var(--orange, #fab387)" : coupling.averageCoupling > 30 ? "var(--yellow, #f9e2af)" : "var(--green, #a6e3a1)" }}>
-            {coupling.averageCoupling > 60 ? "high" : coupling.averageCoupling > 30 ? "moderate" : "good"}
-          </div>
-        </div>
+    <div style={{ marginTop: "6px" }}>
+
+      <div style={{
+        display: "grid", gridTemplateColumns: "1fr 1fr 1fr",
+        gap: "6px", marginBottom: "6px",
+      }}>
+        <GraphStatCard
+          label="Cycles"
+          value={String(cycles.cycleCount)}
+          sub={cycles.severity}
+          color={sevColor}
+        />
+        <GraphStatCard
+          label="Hub Files"
+          value={String(coupling.hubFiles.length)}
+          sub={coupling.hubFiles.length > 0 ? "bottlenecks" : "none found"}
+          color={coupling.hubFiles.length > 0 ? "#f87171" : "#34d399"}
+        />
+        <GraphStatCard
+          label="Avg Coupling"
+          value={String(coupling.averageCoupling)}
+          sub={coupling.averageCoupling > 60 ? "high" : coupling.averageCoupling > 30 ? "moderate" : "good"}
+          color={coupling.averageCoupling > 60 ? "#f87171" : coupling.averageCoupling > 30 ? "#fbbf24" : "#34d399"}
+        />
       </div>
 
       {cycles.cycleCount > 0 && (
         <div style={{ marginTop: "4px" }}>
-          <button onClick={() => setShowCycles(!showCycles)} className={styles.cycleToggle}>
+          <button onClick={() => setShowCycles(!showCycles)} style={{ ...SECTION_BTN, fontSize: "10px" }}>
             {showCycles ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
             <ArrowRightLeft size={11} />
             Cycles ({cycles.cycleCount})
@@ -1458,17 +1382,23 @@ function GraphSummaryPanel({
           {showCycles && (
             <div style={{ marginTop: "4px" }}>
               {cycles.cycles.slice(0, 8).map((cycle, i) => (
-                <div key={i} className={styles.cycleDetail}>
-                  <div className={styles.cycleDetailHeader} style={{ color: sevColor }}>
+                <div key={i} style={{
+                  padding: "5px 8px",
+                  background: "var(--bg-input, #1a1a2e)",
+                  borderRadius: "3px", marginBottom: "3px",
+                  borderLeft: `2px solid ${sevColor}`,
+                  fontSize: "9px",
+                }}>
+                  <div style={{ color: sevColor, fontWeight: 600, marginBottom: "2px" }}>
                     Cycle {i + 1} — {cycle.length} file{cycle.length > 1 ? "s" : ""}
                   </div>
-                  <div className={styles.cycleDetailPath}>
+                  <div style={{ color: "var(--text-secondary, #a0a0b0)", lineHeight: 1.6 }}>
                     {cycle.map((fp) => fp.replace(/\\/g, "/").split("/").slice(-2).join("/")).join(" → ")}
                   </div>
                 </div>
               ))}
               {cycles.cycleCount > 8 && (
-                <div style={{ fontSize: "9px", color: "var(--text-muted, #6c7086)", padding: "2px 8px" }}>
+                <div style={{ fontSize: "9px", color: "var(--text-secondary, #a0a0b0)", padding: "2px 8px" }}>
                   +{cycles.cycleCount - 8} more cycles
                 </div>
               )}
@@ -1478,18 +1408,23 @@ function GraphSummaryPanel({
       )}
 
       {coupling.hubFiles.length > 0 && (
-        <div style={{ marginTop: "6px" }}>
-          <div className={styles.hubFilesHeader}>Hub Files</div>
+        <div style={{ marginTop: "4px" }}>
+          <div style={{ fontSize: "10px", color: "var(--text-secondary, #a0a0b0)", marginBottom: "3px", fontWeight: 600 }}>
+            Hub Files
+          </div>
           {coupling.hubFiles.slice(0, 5).map((fp) => {
             const metrics = coupling.files.find((f) => f.filePath === fp);
             const displayPath = fp.replace(/\\/g, "/").split("/").slice(-3).join("/");
             return (
-              <div key={fp} className={styles.hubFileRow}>
-                <span className={styles.hubFileName}>{displayPath}</span>
-                <span className={styles.hubFileFan}>
+              <div key={fp} style={{
+                ...ROW, fontSize: "10px",
+                borderLeft: "2px solid #f87171",
+              }}>
+                <span style={{ flex: 1 }}>{displayPath}</span>
+                <span style={{ color: "#60a5fa", fontSize: "9px" }}>
                   ↑{metrics?.fanIn ?? 0} ↓{metrics?.fanOut ?? 0}
                 </span>
-                <span className={styles.hubFileCoupling}>
+                <span style={{ color: "#f87171", fontSize: "9px", marginLeft: "4px" }}>
                   {metrics?.couplingScore ?? 0}
                 </span>
               </div>
@@ -1501,7 +1436,38 @@ function GraphSummaryPanel({
   );
 }
 
-// ── Unified Findings Panel ────────────────────────────────────────────────────
+function GraphStatCard({
+  label, value, sub, color,
+}: {
+  label: string; value: string; sub: string; color: string;
+}) {
+  return (
+    <div style={{
+      padding: "6px 8px",
+      background: "var(--bg-input, #1a1a2e)",
+      borderRadius: "4px", textAlign: "center",
+    }}>
+      <div style={{ fontSize: "16px", fontWeight: 700, color }}>{value}</div>
+      <div style={{ fontSize: "9px", color: "var(--text-secondary, #a0a0b0)" }}>{label}</div>
+      <div style={{ fontSize: "8px", color, marginTop: "1px" }}>{sub}</div>
+    </div>
+  );
+}
+
+function Badge({ color, children }: { color: string; children: React.ReactNode }) {
+  return (
+    <span style={{
+      fontSize: "9px", padding: "1px 5px",
+      borderRadius: "3px", fontWeight: 600,
+      background: `${color}22`, color,
+      whiteSpace: "nowrap",
+    }}>
+      {children}
+    </span>
+  );
+}
+
+// ── Unified Findings Panel ───────────────────────────────────────────────────
 
 function UnifiedFindingsPanel({ result }: { result: AnalysisResult }) {
   const allFindings: Finding[] = [];
@@ -1509,49 +1475,55 @@ function UnifiedFindingsPanel({ result }: { result: AnalysisResult }) {
 
   if (allFindings.length === 0) {
     return (
-      <div className={styles.findingsEmpty}>
-        <CheckCircle2 size={12} />
-        No issues detected across all analysis layers
+      <div style={{ marginTop: "6px", padding: "8px 10px", fontSize: "11px", color: "#34d399" }}>
+        ✓ No findings detected
       </div>
     );
   }
 
+  const severityColors: Record<string, string> = {
+    critical: "#ef4444",
+    high: "#f87171",
+    medium: "#fbbf24",
+    low: "#60a5fa",
+    info: "#a0a0b0",
+  };
+
   return (
     <div style={{ marginTop: "6px" }}>
       {allFindings.slice(0, 20).map((finding, i) => (
-        <div
-          key={i}
-          className={styles.findingsRow}
-          style={{ borderLeft: `2px solid ${SEVERITY_VAR[finding.severity] ?? "var(--accent, #89b4fa)"}` }}
-        >
-          <span className={styles.findingsRowSource} style={{ color: SEVERITY_VAR[finding.severity] ?? "var(--accent, #89b4fa)" }}>
-            [{finding.source}]
+        <div key={i} style={{ ...ROW, borderLeft: `2px solid ${severityColors[finding.severity] ?? "#60a5fa"}`, fontSize: "10px" }}>
+          <span style={{ flex: 1 }}>
+            <span style={{ fontWeight: 600, color: severityColors[finding.severity] ?? "#60a5fa" }}>
+              [{finding.source}]
+            </span>
+            <span style={{ color: "var(--text-secondary, #a0a0b0)", marginLeft: "4px" }}>
+              {finding.file.replace(/\\/g, "/").split("/").slice(-2).join("/")}:{finding.line ?? '?'}
+            </span>
+            <span style={{ marginLeft: "4px" }}>{finding.title}</span>
           </span>
-          <span className={styles.findingsRowFile}>
-            {finding.file.replace(/\\/g, "/").split("/").slice(-2).join("/")}:{finding.line ?? '?'}
-          </span>
-          <span className={styles.findingsRowTitle}>{finding.title}</span>
-          <span className={`${styles.badge} ${severityBadgeClass(finding.severity)}`}>
+          <span style={{ fontSize: "9px", color: "var(--text-secondary, #a0a0b0)" }}>
             {finding.severity}
           </span>
         </div>
       ))}
       {allFindings.length > 20 && (
-        <div className={styles.findingsMore}>+{allFindings.length - 20} more findings</div>
+        <div style={{ fontSize: "9px", color: "var(--text-secondary, #a0a0b0)", padding: "2px 0" }}>
+          +{allFindings.length - 20} more findings
+        </div>
       )}
     </div>
   );
 }
 
-// ── Dead Code Panel ───────────────────────────────────────────────────────────
+// ── Dead Code Panel ─────────────────────────────────────────────────────────
 
 function DeadCodePanel({ report }: { report: DeadCodeReport }) {
   const total = report.unusedExports.length + report.unusedImports.length + report.unusedDeclarations.length;
   if (total === 0) {
     return (
-      <div className={styles.findingsEmpty}>
-        <CheckCircle2 size={12} />
-        No dead code detected in scanned files
+      <div style={{ marginTop: "6px", padding: "8px 10px", fontSize: "11px", color: "#34d399" }}>
+        ✓ No dead code detected in scanned files
       </div>
     );
   }
@@ -1560,35 +1532,38 @@ function DeadCodePanel({ report }: { report: DeadCodeReport }) {
     items: T[],
     title: string,
     color: string,
-    borderColor: string,
     getName: (item: T) => string,
   ) => {
     if (items.length === 0) return null;
     return (
-      <div className={styles.deadCodeSection}>
-        <div className={styles.deadCodeSectionTitle} style={{ color }}>
+      <div style={{ marginBottom: "8px" }}>
+        <div style={{ fontSize: "10px", color, fontWeight: 600, marginBottom: "3px" }}>
           {title} ({items.length})
         </div>
         {items.slice(0, 10).map((item, i) => (
-          <div key={i} className={styles.deadCodeItem} style={{ borderLeft: `2px solid ${borderColor}` }}>
-            <span className={styles.deadCodeItemName}>{getName(item)}</span>
-            <span className={styles.deadCodeItemLocation}>
-              {item.filePath.replace(/\\/g, "/").split("/").slice(-2).join("/")}:{item.line}
+          <div key={i} style={{ ...ROW, borderLeft: `2px solid ${color}`, fontSize: "10px" }}>
+            <span style={{ flex: 1 }}>
+              <span style={{ fontWeight: 600 }}>{getName(item)}</span>
+              <span style={{ color: "var(--text-secondary, #a0a0b0)", marginLeft: "4px" }}>
+                {item.filePath.replace(/\\/g, "/").split("/").slice(-2).join("/")}:{item.line}
+              </span>
             </span>
             {item.confidence && (
-              <span className={item.confidence === "high" ? styles.deadCodeItemConfidenceHigh : styles.deadCodeItemConfidenceMedium}>
+              <span style={{ fontSize: "9px", color: item.confidence === "high" ? "#f87171" : "#fbbf24" }}>
                 {item.confidence}
               </span>
             )}
             {item.reason && (
-              <span style={{ fontSize: "9px", color: "var(--text-muted, #6c7086)", marginLeft: "4px" }}>
+              <span style={{ fontSize: "9px", color: "var(--text-secondary, #a0a0b0)", marginLeft: "4px" }}>
                 {item.reason}
               </span>
             )}
           </div>
         ))}
         {items.length > 10 && (
-          <div className={styles.deadCodeMore}>+{items.length - 10} more</div>
+          <div style={{ fontSize: "9px", color: "var(--text-secondary, #a0a0b0)", padding: "2px 0" }}>
+            +{items.length - 10} more
+          </div>
         )}
       </div>
     );
@@ -1596,9 +1571,9 @@ function DeadCodePanel({ report }: { report: DeadCodeReport }) {
 
   return (
     <div style={{ marginTop: "6px" }}>
-      {renderFindings(report.unusedExports, "Unused Exports", "var(--orange, #fab387)", "var(--orange, #fab387)", (e) => e.exportName)}
-      {renderFindings(report.unusedImports, "Unused Imports", "var(--yellow, #f9e2af)", "var(--yellow, #f9e2af)", (i) => i.importedName)}
-      {renderFindings(report.unusedDeclarations, "Unused Declarations", "var(--purple, #cba6f7)", "var(--purple, #cba6f7)", (d) => d.name)}
+      {renderFindings(report.unusedExports, "Unused Exports", "#f87171", (e) => e.exportName)}
+      {renderFindings(report.unusedImports, "Unused Imports", "#fbbf24", (i) => i.importedName)}
+      {renderFindings(report.unusedDeclarations, "Unused Declarations", "#a78bfa", (d) => d.name)}
     </div>
   );
 }
@@ -1614,17 +1589,17 @@ function ASTStatusBadge({
 }) {
   if (!status) {
     return (
-      <span style={{ fontSize: "9px", color: "var(--text-secondary, #a6adc8)" }}>
+      <span style={{ fontSize: "9px", color: "var(--text-secondary, #a0a0b0)" }}>
         AST not checked
       </span>
     );
   }
 
   const presentation = {
-    active: { label: "AST Active", color: "var(--green, #a6e3a1)" },
-    partial: { label: "AST Partial", color: "var(--yellow, #f9e2af)" },
-    fallback: { label: "Regex Fallback", color: "var(--orange, #fab387)" },
-    "not-applicable": { label: "AST N/A", color: "var(--text-secondary, #a6adc8)" },
+    active: { label: "AST Active", color: "#34d399" },
+    partial: { label: "AST Partial", color: "#fbbf24" },
+    fallback: { label: "Regex Fallback", color: "#f87171" },
+    "not-applicable": { label: "AST N/A", color: "#a0a0b0" },
   }[status.mode];
 
   const title = [
@@ -1636,14 +1611,15 @@ function ASTStatusBadge({
   ].filter(Boolean).join("\n");
 
   return (
-    <button type="button" title={title} onClick={onClick}
-      className={styles.astStatusBadge}
-      style={{
-        background: `${presentation.color}22`,
-        color: presentation.color,
-        borderColor: `${presentation.color}44`,
-      }}
-    >
+    <button type="button" title={title} onClick={onClick} style={{
+      fontSize: "9px", padding: "1px 6px",
+      borderRadius: "3px", fontWeight: 600,
+      background: `${presentation.color}22`,
+      color: presentation.color,
+      border: `1px solid ${presentation.color}44`,
+      cursor: "pointer",
+      fontFamily: "inherit",
+    }}>
       {presentation.label}
     </button>
   );
@@ -1669,13 +1645,13 @@ function ASTDetailsPanel({
     : coverage >= 75 ? "Medium"
     : "Low";
   const confidenceColor =
-    confidence === "High" ? "var(--green, #a6e3a1)"
-    : confidence === "Medium" ? "var(--yellow, #f9e2af)"
-    : "var(--orange, #fab387)";
+    confidence === "High" ? "#34d399"
+    : confidence === "Medium" ? "#fbbf24"
+    : "#f87171";
   const coverageColor =
-    coverage === 100 ? "var(--green, #a6e3a1)"
-    : coverage >= 90 ? "var(--yellow, #f9e2af)"
-    : "var(--orange, #fab387)";
+    coverage === 100 ? "#34d399"
+    : coverage >= 90 ? "#fbbf24"
+    : "#f87171";
   const languageLabels: Record<string, string> = {
     typescript: "TypeScript",
     tsx: "TSX",
@@ -1684,15 +1660,25 @@ function ASTDetailsPanel({
   };
 
   return (
-    <div className={styles.astStatusPanel}>
-      <div className={styles.astStatusPanelHeader}>
-        <strong className={styles.astStatusPanelTitle}>Analysis Engine</strong>
-        <button type="button" onClick={onClose} className={styles.astStatusPanelClose}>
+    <div style={{
+      margin: "10px 16px 0",
+      padding: "12px",
+      borderRadius: "8px",
+      border: "1px solid var(--border-color, #2a2a4a)",
+      background: "var(--bg-input, #1a1a2e)",
+      fontSize: "10px",
+    }}>
+      <div style={{ display: "flex", alignItems: "center", marginBottom: "10px" }}>
+        <strong style={{ fontSize: "12px" }}>Analysis Engine</strong>
+        <button type="button" onClick={onClose} style={{
+          marginLeft: "auto", border: "none", background: "transparent",
+          color: "var(--text-secondary, #a0a0b0)", cursor: "pointer", fontFamily: "inherit",
+        }}>
           Close
         </button>
       </div>
-      <div className={styles.astStatusPanelGrid}>
-        <span className={healthy ? styles.astStatusPanelHealthy : styles.astStatusPanelDegraded}>
+      <div style={{ display: "grid", gap: "5px", color: "var(--text-secondary, #a0a0b0)" }}>
+        <span style={{ color: healthy ? "#34d399" : "#fbbf24", fontWeight: 600 }}>
           Parser Health: {healthy ? "Healthy" : "Degraded"}
         </span>
         <span style={{ color: confidenceColor, fontWeight: 600 }}>
@@ -1711,23 +1697,27 @@ function ASTDetailsPanel({
         <span>{status.unsupportedFiles} unsupported source files</span>
         {discovery && <span>{discovery.skipped} skipped files · {discovery.failed} unreadable/failed files</span>}
       </div>
-      <div className={styles.astStatusPanelLangSection}>
-        <strong style={{ color: "var(--text-primary, #cdd6f4)" }}>Languages:</strong>{" "}
+      <div style={{ marginTop: "10px", color: "var(--text-secondary, #a0a0b0)" }}>
+        <strong style={{ color: "var(--text-primary, #fff)" }}>Languages:</strong>{" "}
         {status.loadedLanguages.length > 0
           ? status.loadedLanguages.map((language) => languageLabels[language] ?? language).join(", ")
           : "None loaded"}
       </div>
       {status.lastError && (
-        <div style={{ marginTop: "8px", color: "var(--red, #f38ba8)", wordBreak: "break-word" }}>
+        <div style={{ marginTop: "8px", color: "#f87171", wordBreak: "break-word" }}>
           Last parser error: {status.lastError}
         </div>
       )}
       {status.fallbackFilePaths.length > 0 && (
-        <div className={styles.astStatusPanelFallbackFiles}>
-          <strong className={styles.astStatusPanelFallbackHeader}>
+        <div style={{ marginTop: "10px" }}>
+          <strong style={{ color: "#fbbf24" }}>
             Fallback Files ({status.fallbackFilePaths.length})
           </strong>
-          <div className={styles.astStatusPanelFallbackList}>
+          <div style={{
+            marginTop: "5px", display: "grid", gap: "3px",
+            color: "var(--text-secondary, #a0a0b0)",
+            maxHeight: "120px", overflowY: "auto",
+          }}>
             {status.fallbackFilePaths.map((filePath) => (
               <span key={filePath} title={filePath}>
                 {filePath.replace(/\\/g, "/").split("/").slice(-3).join("/")}

@@ -67,20 +67,32 @@ export interface DockerContainerInfo {
 
 export class ToolOrchestrator {
 
+  // Cache scan results for 60 seconds — prevents re-scanning every tab click
+  private _cache: EnvironmentScanResult | null = null;
+  private _cacheTime = 0;
+  private static readonly CACHE_TTL_MS = 60_000;
+
   // ── Environment Scanner ──────────────────────────────────────────────────
 
-  /** Scan the system for all installed development tools. */
-  async scanEnvironment(): Promise<EnvironmentScanResult> {
-    return invoke<EnvironmentScanResult>("scan_tools");
+  /** Scan the system for all installed development tools.
+   *  Results are cached for 60 seconds — pass force=true to bypass. */
+  async scanEnvironment(force = false): Promise<EnvironmentScanResult> {
+    if (!force && this._cache && Date.now() - this._cacheTime < ToolOrchestrator.CACHE_TTL_MS) {
+      return this._cache;
+    }
+    const result = await invoke<EnvironmentScanResult>("scan_tools");
+    this._cache = result;
+    this._cacheTime = Date.now();
+    return result;
   }
 
-  /** Get a single tool's status. */
+  /** Get a single tool's status — uses cached scan, no extra IPC call. */
   async getToolStatus(toolName: string): Promise<ToolInfo | null> {
     const result = await this.scanEnvironment();
     return result.tools.find((t) => t.name === toolName) || null;
   }
 
-  /** Check if a specific tool is installed. */
+  /** Check if a specific tool is installed — uses cached scan. */
   async isToolInstalled(toolName: string): Promise<boolean> {
     const tool = await this.getToolStatus(toolName);
     return tool?.installed ?? false;

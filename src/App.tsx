@@ -2837,7 +2837,6 @@ export default function App() {
     return (
       <div className={`app ${themeClass}`}>
         <div className="splash-screen" aria-label="PunamIDE v2.0 is starting">
-          {/* Ambient glow layers */}
           <div className="splash-glow splash-glow-1" />
           <div className="splash-glow splash-glow-2" />
           <div className="splash-content">
@@ -3231,6 +3230,8 @@ export default function App() {
               onEditorReady={inlineDiff.setEditorInstance}
               onOpenRefactorPanel={openRefactorPanel}
               onSelectionRangeChange={setRefactorSelection}
+              editorBgAnimation={config.editorBgAnimation !== false}
+              editorBgOpacity={config.editorBgOpacity ?? 0.12}
               onOpenTestGenPanel={(functionCode) => {
                 if (currentTab && functionCode.trim()) {
                   openTestGenPanel({ filePath: currentTab.path, functionCode });

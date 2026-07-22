@@ -291,11 +291,11 @@ export async function validateApply(
     );
     if (
       scanResult.blocked ||
-      scanResult.criticalFindings.length > 0 ||
+      scanResult.critical_findings.length > 0 ||
       highFindings.length > 0
     ) {
       result.allowed = false;
-      result.reason = highFindings.length > 0 && scanResult.criticalFindings.length === 0
+      result.reason = highFindings.length > 0 && scanResult.critical_findings.length === 0
         ? `Blocked: ${highFindings.length} high-severity security finding(s) detected in proposed content.`
         : scanResult.summary;
       return result;

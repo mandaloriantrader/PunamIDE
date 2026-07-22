@@ -96,3 +96,9 @@ media/screenshots/enhanced/
 media/screenshots/photos-final/
 media/screenshots/new-images-to-replace-where-see-fits/
 media/screenshots/README.md
+
+# ── Scaffold/planning docs ───────────────────────────────────
+PunamIDE_Scaffold_Complete_Implementation_Plan*.md
+
+# ── Dev launcher (local only) ────────────────────────────────
+autorun.bat

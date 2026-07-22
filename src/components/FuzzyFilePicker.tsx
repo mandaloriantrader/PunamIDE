@@ -1,18 +1,31 @@
 /**
  * FuzzyFilePicker — Cursor/VS Code style Ctrl+P quick file open.
- * Fuzzy-scores all project files (via getProjectIndex) and opens on Enter.
+ * Fuzzy-scores all project files and opens on Enter.
  */
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { FileText, Search, Loader2 } from "lucide-react";
-import { getProjectIndex } from "../utils/tauri";
-import type { FileIndexEntry } from "../utils/tauri";
+import { FileText, Search } from "lucide-react";
+import type { FileEntry } from "../utils/tauri";
 
 interface Props {
-  projectPath: string;
+  files: FileEntry[];
   recentPaths?: string[];
   onSelect: (relativePath: string) => void;
   onClose: () => void;
+}
+
+// ── Flatten the file tree into relative paths ─────────────────────────────────
+function flattenFiles(entries: FileEntry[], prefix = ""): string[] {
+  const result: string[] = [];
+  for (const entry of entries) {
+    const p = prefix ? `${prefix}/${entry.name}` : entry.name;
+    if (entry.is_dir) {
+      if (entry.children) result.push(...flattenFiles(entry.children, p));
+    } else {
+      result.push(p);
+    }
+  }
+  return result;
 }
 
 // ── Fuzzy score ───────────────────────────────────────────────────────────────
@@ -84,36 +97,13 @@ function fileColor(name: string): string {
   return "#7e8ba0";
 }
 
-export default function FuzzyFilePicker({ projectPath, recentPaths = [], onSelect, onClose }: Props) {
+export default function FuzzyFilePicker({ files, recentPaths = [], onSelect, onClose }: Props) {
   const [query, setQuery] = useState("");
   const [selectedIndex, setSelectedIndex] = useState(0);
-  const [allPaths, setAllPaths] = useState<string[]>([]);
-  const [loading, setLoading] = useState(true);
   const inputRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
 
-  // Load flat file list from Rust project index on mount
-  useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      try {
-        const entries = await getProjectIndex();
-        if (cancelled) return;
-        const prefix = projectPath.replace(/\\/g, "/").replace(/\/+$/, "") + "/";
-        const paths = entries.map((e) => {
-          const absPath = e.path.replace(/\\/g, "/");
-          if (absPath.startsWith(prefix)) return absPath.slice(prefix.length);
-          return absPath;
-        });
-        setAllPaths(paths);
-      } catch {
-        setAllPaths([]);
-      } finally {
-        if (!cancelled) setLoading(false);
-      }
-    })();
-    return () => { cancelled = true; };
-  }, [projectPath]);
+  const allPaths = useMemo(() => flattenFiles(files), [files]);
 
   const results = useMemo(() => {
     const scored = allPaths
@@ -180,50 +170,40 @@ export default function FuzzyFilePicker({ projectPath, recentPaths = [], onSelec
           <span className="fp-count">{results.length} of {allPaths.length}</span>
         </div>
 
-        {/* Loading */}
-        {loading && (
-          <div className="fp-list" style={{ display: "flex", alignItems: "center", justifyContent: "center", padding: "24px" }}>
-            <Loader2 size={20} style={{ animation: "spin 1s linear infinite", marginRight: "8px" }} />
-            <span style={{ color: "var(--text-secondary)", fontSize: "13px" }}>Indexing project files…</span>
-          </div>
-        )}
-
         {/* Results */}
-        {!loading && (
-          <div className="fp-list" ref={listRef} role="listbox">
-            {results.length === 0 && (
-              <div className="fp-empty">No files match "{query}"</div>
-            )}
-            {results.map((path, i) => {
-              const parts = path.split("/");
-              const filename = parts.pop() || path;
-              const dir = parts.join("/");
-              return (
-                <div
-                  key={path}
-                  role="option"
-                  aria-selected={i === selectedIndex}
-                  className={`fp-item ${i === selectedIndex ? "selected" : ""}`}
-                  onMouseEnter={() => setSelectedIndex(i)}
-                  onClick={() => onSelect(path)}
-                >
-                  <FileText size={13} style={{ color: fileColor(filename), flexShrink: 0 }} />
-                  <span className="fp-item-name">
-                    <HighlightMatch text={filename} query={query} />
+        <div className="fp-list" ref={listRef} role="listbox">
+          {results.length === 0 && (
+            <div className="fp-empty">No files match "{query}"</div>
+          )}
+          {results.map((path, i) => {
+            const parts = path.split("/");
+            const filename = parts.pop() || path;
+            const dir = parts.join("/");
+            return (
+              <div
+                key={path}
+                role="option"
+                aria-selected={i === selectedIndex}
+                className={`fp-item ${i === selectedIndex ? "selected" : ""}`}
+                onMouseEnter={() => setSelectedIndex(i)}
+                onClick={() => onSelect(path)}
+              >
+                <FileText size={13} style={{ color: fileColor(filename), flexShrink: 0 }} />
+                <span className="fp-item-name">
+                  <HighlightMatch text={filename} query={query} />
+                </span>
+                {dir && (
+                  <span className="fp-item-dir">
+                    <HighlightMatch text={dir} query={query} />
                   </span>
-                  {dir && (
-                    <span className="fp-item-dir">
-                      <HighlightMatch text={dir} query={query} />
-                    </span>
-                  )}
-                  {!query && recentPaths.includes(path) && (
-                    <span className="fp-recent-badge">recent</span>
-                  )}
-                </div>
-              );
-            })}
-          </div>
-        )}
+                )}
+                {!query && recentPaths.includes(path) && (
+                  <span className="fp-recent-badge">recent</span>
+                )}
+              </div>
+            );
+          })}
+        </div>
 
         <div className="fp-hint">
           <span><kbd>↑↓</kbd> navigate</span>
